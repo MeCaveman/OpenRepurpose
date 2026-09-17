@@ -16,6 +16,7 @@
     "@openrepurpose/core": "workspace:*",
     "@openrepurpose/media": "workspace:*",
     "@openrepurpose/local-secrets": "workspace:*",
+    "@openrepurpose/tiktok": "workspace:*",
     "@openrepurpose/youtube": "workspace:*",
     "commander": "14.0.2"
   },

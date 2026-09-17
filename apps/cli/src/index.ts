@@ -21,6 +21,7 @@ import { loadApplicationConfig } from '@openrepurpose/shared';
 import type { Environment } from '@openrepurpose/shared';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
 import { YouTubeOAuthService } from '@openrepurpose/youtube';
+import { TikTokOAuthService } from '@openrepurpose/tiktok';
 
 export interface DoctorCheck {
   readonly detail: string;
@@ -121,12 +122,41 @@ function accountContext(environment: Environment) {
   );
   return {
     database,
-    service: new YouTubeOAuthService(
+    youtube: new YouTubeOAuthService(
       new SqliteAccountRepository(database),
       new SqliteOAuthAuthorizationRequestRepository(database),
       secrets,
       config.appUrl,
     ),
+    tiktok: new TikTokOAuthService(
+      new SqliteAccountRepository(database),
+      new SqliteOAuthAuthorizationRequestRepository(database),
+      secrets,
+      config.appUrl,
+    ),
+  };
+}
+
+function publishContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  const secrets = new EncryptedFileSecretStore(
+    config.paths.secretVaultPath,
+    config.paths.secretKeyPath,
+  );
+  const accounts = new SqliteAccountRepository(database);
+  const tiktok = new TikTokOAuthService(
+    accounts,
+    new SqliteOAuthAuthorizationRequestRepository(database),
+    secrets,
+    config.appUrl,
+  );
+  return {
+    database,
+    media: new SqliteMediaRepository(database),
+    jobs: new JobService(new SqliteJobRepository(database)),
+    tiktok,
   };
 }
 
@@ -207,7 +237,7 @@ export function createCli(options: CreateCliOptions = {}): Command {
     .action(async (options: { json?: boolean }) => {
       const context = accountContext(environment);
       try {
-        const results = context.service.listAccounts();
+        const results = context.youtube.listAccounts();
         write(
           options.json
             ? `${JSON.stringify(results)}\n`
@@ -222,15 +252,14 @@ export function createCli(options: CreateCliOptions = {}): Command {
         context.database.close();
       }
     });
-  accounts
-    .command('add')
-    .description('Configure and connect an account')
+  const addAccount = accounts.command('add').description('Configure and connect an account');
+  addAccount
     .command('youtube')
     .requiredOption('--credentials <path>', 'Google OAuth desktop-client JSON file')
     .action(async (options: { credentials: string }) => {
       const context = accountContext(environment);
       try {
-        await context.service.configureCredentials(readGoogleCredentials(options.credentials));
+        await context.youtube.configureCredentials(readGoogleCredentials(options.credentials));
         const accountsUrl = new URL('/accounts', loadApplicationConfig(environment).appUrl);
         write(`Google OAuth credentials saved. Connect YouTube in ${accountsUrl.toString()}\n`);
       } finally {
@@ -240,13 +269,95 @@ export function createCli(options: CreateCliOptions = {}): Command {
   accounts.command('remove <id>').action(async (id: string) => {
     const context = accountContext(environment);
     try {
-      const removed = await context.service.removeAccount(id);
+      const removed =
+        (await context.youtube.removeAccount(id)) ?? (await context.tiktok.removeAccount(id));
       if (removed === undefined) throw new Error(`Account not found: ${id}`);
       write(`Removed ${removed.provider} account ${removed.displayName}.\n`);
     } finally {
       context.database.close();
     }
   });
+
+  addAccount
+    .command('tiktok')
+    .requiredOption('--client-key <key>', 'TikTok Login Kit client key')
+    .requiredOption('--client-secret <secret>', 'TikTok Login Kit client secret')
+    .action(async (options: { clientKey: string; clientSecret: string }) => {
+      const context = accountContext(environment);
+      try {
+        await context.tiktok.configureCredentials(options);
+        const accountsUrl = new URL('/accounts', loadApplicationConfig(environment).appUrl);
+        write(`TikTok credentials saved. Connect TikTok in ${accountsUrl.toString()}\n`);
+      } finally {
+        context.database.close();
+      }
+    });
+
+  const publish = program.command('publish').description('Queue destination publishes');
+  publish
+    .command('tiktok <media-id>')
+    .requiredOption('--account <account-id>', 'Connected TikTok account ID')
+    .option('--caption <caption>', 'TikTok caption')
+    .option('--privacy <privacy-level>', 'TikTok privacy level', 'SELF_ONLY')
+    .option('--disable-comment', 'Disable comments')
+    .option('--disable-duet', 'Disable duet')
+    .option('--disable-stitch', 'Disable stitch')
+    .option('--json', 'write JSON')
+    .action(
+      async (
+        mediaId: string,
+        options: {
+          account: string;
+          caption?: string;
+          privacy: string;
+          disableComment?: boolean;
+          disableDuet?: boolean;
+          disableStitch?: boolean;
+          json?: boolean;
+        },
+      ) => {
+        const context = publishContext(environment);
+        try {
+          if (context.media.list().every((asset) => asset.id !== mediaId))
+            throw new Error(`Media not found: ${mediaId}`);
+          const capabilities = await context.tiktok.getAccountCapabilities(options.account);
+          if (!capabilities.directPostAvailable)
+            throw new Error('TikTok Direct Post is not available for this account.');
+          if (
+            !capabilities.privacyLevelOptions.includes(
+              options.privacy as (typeof capabilities.privacyLevelOptions)[number],
+            )
+          )
+            throw new Error(`Privacy level is unavailable for this creator: ${options.privacy}`);
+          const result = context.jobs.create({
+            type: 'tiktok.direct-post',
+            idempotencyKey: `manual:tiktok:${mediaId}:${options.account}`,
+            input: {
+              mediaId,
+              accountId: options.account,
+              metadata: {
+                privacyLevel: options.privacy,
+                ...(options.caption === undefined ? {} : { caption: options.caption }),
+                ...(options.disableComment === undefined
+                  ? {}
+                  : { disableComment: options.disableComment }),
+                ...(options.disableDuet === undefined ? {} : { disableDuet: options.disableDuet }),
+                ...(options.disableStitch === undefined
+                  ? {}
+                  : { disableStitch: options.disableStitch }),
+              },
+            },
+          });
+          write(
+            options.json
+              ? `${JSON.stringify(result)}\n`
+              : `${result.job.id}\t${result.job.status}\ttiktok\n`,
+          );
+        } finally {
+          context.database.close();
+        }
+      },
+    );
 
   const workflows = program.command('workflows').description('Manage watched-folder workflows');
   workflows

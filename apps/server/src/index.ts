@@ -93,6 +93,7 @@ export async function startServer(): Promise<void> {
   const server = buildServer({
     config,
     jobService,
+    destinationJobRepository: new SqliteDestinationJobRepository(database),
     logger: true,
     sessionKey: loadOrCreateSessionKey(config.paths.sessionKeyPath),
     mediaRepository,

@@ -208,6 +208,9 @@ importers:
       '@openrepurpose/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@openrepurpose/tiktok':
+        specifier: workspace:*
+        version: link:../../integrations/tiktok
       '@openrepurpose/youtube':
         specifier: workspace:*
         version: link:../../integrations/youtube

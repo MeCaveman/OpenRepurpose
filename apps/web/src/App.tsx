@@ -63,6 +63,13 @@ type JobItem = {
   maxAttempts: number;
   status: string;
   type: string;
+  destination?: DestinationJobItem;
+};
+type DestinationJobItem = {
+  destinationId: string;
+  remoteStatus: string;
+  uploadedBytes: number;
+  remoteId?: string;
 };
 type JobAttemptItem = {
   attemptNumber: number;
@@ -150,6 +157,12 @@ export function App() {
   const [publishAccountId, setPublishAccountId] = useState('');
   const [publishTitle, setPublishTitle] = useState('');
   const [publishDescription, setPublishDescription] = useState('');
+  const [publishPlatform, setPublishPlatform] = useState<'youtube' | 'tiktok'>('youtube');
+  const [publishPrivacy, setPublishPrivacy] = useState('SELF_ONLY');
+  const [publishCaption, setPublishCaption] = useState('');
+  const [disableComment, setDisableComment] = useState(false);
+  const [disableDuet, setDisableDuet] = useState(false);
+  const [disableStitch, setDisableStitch] = useState(false);
   const loadMedia = async () => {
     const response = await fetch('/api/media');
     if (!response.ok) throw new Error('Media library is unavailable.');
@@ -207,7 +220,10 @@ export function App() {
   const showAttempts = async (jobId: string) => {
     const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
     if (!response.ok) throw new Error('Job attempt history is unavailable.');
-    const body = (await response.json()) as { attempts: readonly JobAttemptItem[] };
+    const body = (await response.json()) as {
+      attempts: readonly JobAttemptItem[];
+      destination?: DestinationJobItem;
+    };
     setSelectedJobId(jobId);
     setAttempts(body.attempts);
   };
@@ -292,6 +308,34 @@ export function App() {
       setError(
         failure instanceof Error ? failure.message : 'The YouTube upload could not be queued.',
       );
+    }
+  };
+  const queueTikTokPublish = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (publishMediaId === undefined) return;
+    setError(undefined);
+    try {
+      const response = await fetch('/api/publish/tiktok', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await csrfToken() },
+        body: JSON.stringify({
+          mediaId: publishMediaId,
+          accountId: publishAccountId,
+          metadata: {
+            caption: publishCaption,
+            privacyLevel: publishPrivacy,
+            disableComment,
+            disableDuet,
+            disableStitch,
+          },
+        }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? 'The TikTok post could not be queued.');
+      setPublishMediaId(undefined);
+      await loadJobs();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'The TikTok post could not be queued.');
     }
   };
   const csrfToken = async () => {
@@ -770,7 +814,9 @@ export function App() {
                               onClick={() => {
                                 const name = asset.path.split(/[\\/]/).pop() ?? 'Untitled video';
                                 setPublishMediaId(asset.id);
+                                setPublishPlatform('youtube');
                                 setPublishTitle(name.replace(/\.[^.]+$/, ''));
+                                setPublishCaption(name.replace(/\.[^.]+$/, ''));
                                 setPublishDescription('');
                                 setPublishAccountId(accounts[0]?.id ?? '');
                               }}
@@ -778,6 +824,30 @@ export function App() {
                             >
                               Publish to YouTube
                             </button>
+                            {accounts.some((account) => account.provider === 'tiktok') && (
+                              <button
+                                className="ml-2 rounded-lg border border-fuchsia-300/30 px-3 py-1.5 text-xs text-fuchsia-200"
+                                onClick={() => {
+                                  const name = asset.path.split(/[\\/]/).pop() ?? 'Untitled video';
+                                  setPublishMediaId(asset.id);
+                                  setPublishPlatform('tiktok');
+                                  setPublishCaption(name.replace(/\.[^.]+$/, ''));
+                                  setPublishAccountId(
+                                    accounts.find((account) => account.provider === 'tiktok')?.id ??
+                                      '',
+                                  );
+                                  const capability = Object.values(tiktokCapabilities).find(
+                                    (view) => view.capabilities !== undefined,
+                                  )?.capabilities;
+                                  setPublishPrivacy(
+                                    capability?.privacyLevelOptions[0] ?? 'SELF_ONLY',
+                                  );
+                                }}
+                                type="button"
+                              >
+                                Publish to TikTok
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -789,9 +859,13 @@ export function App() {
                   {publishMediaId !== undefined && (
                     <form
                       className="grid gap-3 rounded-xl border border-cyan-300/20 bg-slate-950 p-5"
-                      onSubmit={queueYouTubePublish}
+                      onSubmit={
+                        publishPlatform === 'youtube' ? queueYouTubePublish : queueTikTokPublish
+                      }
                     >
-                      <h2 className="font-semibold">Queue YouTube upload</h2>
+                      <h2 className="font-semibold">
+                        Queue {publishPlatform === 'youtube' ? 'YouTube upload' : 'TikTok post'}
+                      </h2>
                       <label className="grid gap-1 text-sm" htmlFor="publish-account">
                         <span className="text-slate-300">Connected account</span>
                         <select
@@ -801,33 +875,103 @@ export function App() {
                           required
                           value={publishAccountId}
                         >
-                          <option value="">Select a YouTube account</option>
-                          {accounts.map((account) => (
-                            <option key={account.id} value={account.id}>
-                              {account.displayName}
-                            </option>
-                          ))}
+                          <option value="">
+                            Select a {publishPlatform === 'youtube' ? 'YouTube' : 'TikTok'} account
+                          </option>
+                          {accounts
+                            .filter((account) => account.provider === publishPlatform)
+                            .map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {account.displayName}
+                              </option>
+                            ))}
                         </select>
                       </label>
-                      <label className="grid gap-1 text-sm" htmlFor="publish-title">
-                        <span className="text-slate-300">Title</span>
-                        <input
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="publish-title"
-                          onChange={(event) => setPublishTitle(event.target.value)}
-                          required
-                          value={publishTitle}
-                        />
-                      </label>
-                      <label className="grid gap-1 text-sm" htmlFor="publish-description">
-                        <span className="text-slate-300">Description</span>
-                        <textarea
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="publish-description"
-                          onChange={(event) => setPublishDescription(event.target.value)}
-                          value={publishDescription}
-                        />
-                      </label>
+                      {publishPlatform === 'youtube' ? (
+                        <label className="grid gap-1 text-sm" htmlFor="publish-title">
+                          <span className="text-slate-300">Title</span>
+                          <input
+                            className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                            id="publish-title"
+                            onChange={(event) => setPublishTitle(event.target.value)}
+                            required
+                            value={publishTitle}
+                          />
+                        </label>
+                      ) : (
+                        <>
+                          <label className="grid gap-1 text-sm" htmlFor="publish-caption">
+                            <span className="text-slate-300">Caption</span>
+                            <textarea
+                              className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                              id="publish-caption"
+                              maxLength={
+                                Object.values(tiktokCapabilities).find((view) => view.capabilities)
+                                  ?.capabilities?.media?.captionMaxUtf16CodeUnits
+                              }
+                              onChange={(event) => setPublishCaption(event.target.value)}
+                              required
+                              value={publishCaption}
+                            />
+                          </label>
+                          <label className="grid gap-1 text-sm" htmlFor="publish-privacy">
+                            <span className="text-slate-300">
+                              Privacy (offered by this creator)
+                            </span>
+                            <select
+                              className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                              id="publish-privacy"
+                              onChange={(event) => setPublishPrivacy(event.target.value)}
+                              required
+                              value={publishPrivacy}
+                            >
+                              {(
+                                tiktokCapabilities[publishAccountId]?.capabilities
+                                  ?.privacyLevelOptions ?? []
+                              ).map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="flex gap-2 text-sm">
+                            <input
+                              checked={disableComment}
+                              onChange={(event) => setDisableComment(event.target.checked)}
+                              type="checkbox"
+                            />{' '}
+                            Disable comments
+                          </label>
+                          <label className="flex gap-2 text-sm">
+                            <input
+                              checked={disableDuet}
+                              onChange={(event) => setDisableDuet(event.target.checked)}
+                              type="checkbox"
+                            />{' '}
+                            Disable duet
+                          </label>
+                          <label className="flex gap-2 text-sm">
+                            <input
+                              checked={disableStitch}
+                              onChange={(event) => setDisableStitch(event.target.checked)}
+                              type="checkbox"
+                            />{' '}
+                            Disable stitch
+                          </label>
+                        </>
+                      )}
+                      {publishPlatform === 'youtube' && (
+                        <label className="grid gap-1 text-sm" htmlFor="publish-description">
+                          <span className="text-slate-300">Description</span>
+                          <textarea
+                            className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                            id="publish-description"
+                            onChange={(event) => setPublishDescription(event.target.value)}
+                            value={publishDescription}
+                          />
+                        </label>
+                      )}
                       <div className="flex gap-3">
                         <button
                           className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
@@ -876,6 +1020,14 @@ export function App() {
                               {job.lastErrorMessage !== undefined && (
                                 <span className="mt-1 block text-xs text-rose-300">
                                   {job.lastErrorCode}: {job.lastErrorMessage}
+                                </span>
+                              )}
+                              {job.destination !== undefined && (
+                                <span className="mt-1 block text-xs text-fuchsia-200">
+                                  {job.destination.destinationId}: {job.destination.remoteStatus}
+                                  {job.destination.remoteId === undefined
+                                    ? ''
+                                    : ` · ${job.destination.remoteId}`}
                                 </span>
                               )}
                             </td>

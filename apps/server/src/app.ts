@@ -11,6 +11,7 @@ import type { TikTokOAuthService } from '@openrepurpose/tiktok';
 import type {
   JobService,
   JobStatus,
+  DestinationJobRepository,
   MediaImportService,
   MediaRepository,
   WorkflowInput,
@@ -33,6 +34,7 @@ export interface LoggerDestination {
 export interface BuildServerOptions {
   readonly config: ApplicationConfig;
   readonly jobService?: JobService;
+  readonly destinationJobRepository?: DestinationJobRepository;
   readonly logger?: boolean;
   readonly loggerDestination?: LoggerDestination;
   readonly mediaImportService?: MediaImportService;
@@ -399,13 +401,26 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       const status = request.query.status;
       if (status !== undefined && !jobStatuses.has(status as JobStatus))
         return reply.code(400).send({ error: 'Unknown job status.', code: 'INVALID_JOB_STATUS' });
-      return { jobs: options.jobService!.list(status as JobStatus | undefined) };
+      const jobs = options.jobService!.list(status as JobStatus | undefined);
+      return {
+        jobs: jobs.map((job) => ({
+          ...job,
+          ...(options.destinationJobRepository === undefined
+            ? {}
+            : { destination: options.destinationJobRepository.find(job.id) }),
+        })),
+      };
     });
     server.get<{ Params: { id: string } }>('/api/jobs/:id', async (request, reply) => {
       const details = options.jobService!.show(request.params.id);
       return details === undefined
         ? reply.code(404).send({ error: 'Job not found.', code: 'JOB_NOT_FOUND' })
-        : details;
+        : {
+            ...details,
+            ...(options.destinationJobRepository === undefined
+              ? {}
+              : { destination: options.destinationJobRepository.find(request.params.id) }),
+          };
     });
     server.post<{ Params: { id: string } }>('/api/jobs/:id/cancel', async (request, reply) => {
       const job = options.jobService!.cancel(request.params.id);
@@ -484,6 +499,83 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
           .send({ error: 'The publish request is invalid.', code: 'INVALID_PUBLISH' });
       }
     });
+    if (options.tiktokOAuthService !== undefined) {
+      const tiktok = options.tiktokOAuthService;
+      server.post<{ Body: unknown }>('/api/publish/tiktok', async (request, reply) => {
+        if (typeof request.body !== 'object' || request.body === null)
+          return reply
+            .code(400)
+            .send({ error: 'Invalid publish request.', code: 'INVALID_PUBLISH' });
+        const body = request.body as Record<string, unknown>;
+        const mediaId = body.mediaId;
+        const accountId = body.accountId;
+        const metadata = body.metadata;
+        const values =
+          typeof metadata === 'object' && metadata !== null
+            ? (metadata as Record<string, unknown>)
+            : {};
+        const privacyLevel = values.privacyLevel;
+        if (
+          typeof mediaId !== 'string' ||
+          typeof accountId !== 'string' ||
+          typeof privacyLevel !== 'string'
+        )
+          return reply.code(400).send({
+            error: 'Media, account, and privacy level are required.',
+            code: 'INVALID_PUBLISH',
+          });
+        if (options.mediaRepository!.list().every((asset) => asset.id !== mediaId))
+          return reply.code(404).send({ error: 'Media not found.', code: 'MEDIA_NOT_FOUND' });
+        try {
+          const capabilities = await tiktok.getAccountCapabilities(accountId);
+          if (!capabilities.directPostAvailable)
+            return reply.code(400).send({
+              error: 'TikTok Direct Post is not available for this account.',
+              code: 'TIKTOK_DIRECT_POST_NOT_AUTHORIZED',
+            });
+          if (
+            !capabilities.privacyLevelOptions.includes(
+              privacyLevel as (typeof capabilities.privacyLevelOptions)[number],
+            )
+          )
+            return reply.code(400).send({
+              error:
+                'The selected TikTok privacy level is not currently available for this creator.',
+              code: 'TIKTOK_PRIVACY_LEVEL_UNAVAILABLE',
+            });
+          const result = options.jobService!.create({
+            type: 'tiktok.direct-post',
+            idempotencyKey: `manual:tiktok:${mediaId}:${accountId}`,
+            input: {
+              mediaId,
+              accountId,
+              metadata: {
+                privacyLevel,
+                ...(typeof values.caption === 'string' ? { caption: values.caption } : {}),
+                ...(typeof values.disableComment === 'boolean'
+                  ? { disableComment: values.disableComment }
+                  : {}),
+                ...(typeof values.disableDuet === 'boolean'
+                  ? { disableDuet: values.disableDuet }
+                  : {}),
+                ...(typeof values.disableStitch === 'boolean'
+                  ? { disableStitch: values.disableStitch }
+                  : {}),
+              },
+            },
+          });
+          return reply.code(result.created ? 201 : 200).send(result);
+        } catch (error) {
+          if (isPlatformError(error))
+            return reply
+              .code(
+                error.category === 'configuration' || error.category === 'validation' ? 400 : 502,
+              )
+              .send({ error: error.publicMessage, code: error.code });
+          throw error;
+        }
+      });
+    }
   }
   if (options.workflowService !== undefined) {
     const workflows = options.workflowService;
@@ -493,14 +585,15 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       if (
         typeof value.name !== 'string' ||
         typeof value.sourceDirectory !== 'string' ||
-        typeof value.accountId !== 'string' ||
-        typeof value.titleTemplate !== 'string'
+        typeof value.titleTemplate !== 'string' ||
+        (typeof value.accountId !== 'string' && !Array.isArray(value.destinations))
       )
         return undefined;
       if (value.descriptionTemplate !== undefined && typeof value.descriptionTemplate !== 'string')
         return undefined;
       if (value.enabled !== undefined && typeof value.enabled !== 'boolean') return undefined;
       if (value.category !== undefined && typeof value.category !== 'string') return undefined;
+      if (value.destinations !== undefined && !Array.isArray(value.destinations)) return undefined;
       if (
         value.privacy !== undefined &&
         value.privacy !== 'private' &&
