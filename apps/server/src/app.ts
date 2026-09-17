@@ -343,6 +343,63 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       return reply.code(result.duplicate ? 200 : 201).send(result);
     });
   }
+  if (options.jobService !== undefined && options.mediaRepository !== undefined) {
+    server.post<{ Body: unknown }>('/api/publish/youtube', async (request, reply) => {
+      if (typeof request.body !== 'object' || request.body === null)
+        return reply.code(400).send({ error: 'Invalid publish request.', code: 'INVALID_PUBLISH' });
+      const body = request.body as Record<string, unknown>;
+      const mediaId = body.mediaId;
+      const accountId = body.accountId;
+      const metadata = body.metadata;
+      const titleCandidate =
+        typeof metadata === 'object' && metadata !== null
+          ? (metadata as Record<string, unknown>).title
+          : undefined;
+      if (
+        typeof mediaId !== 'string' ||
+        typeof accountId !== 'string' ||
+        typeof titleCandidate !== 'string' ||
+        titleCandidate.trim().length === 0
+      )
+        return reply
+          .code(400)
+          .send({ error: 'Media, account, and title are required.', code: 'INVALID_PUBLISH' });
+      const mediaRepository = options.mediaRepository;
+      const jobService = options.jobService;
+      if (mediaRepository === undefined || jobService === undefined)
+        return reply
+          .code(404)
+          .send({ error: 'Publishing is unavailable.', code: 'PUBLISH_UNAVAILABLE' });
+      if (mediaRepository.list().every((asset) => asset.id !== mediaId))
+        return reply.code(404).send({ error: 'Media not found.', code: 'MEDIA_NOT_FOUND' });
+      const publishMetadata = metadata as Record<string, unknown>;
+      const title = titleCandidate;
+      try {
+        const result = jobService.create({
+          type: 'youtube.upload',
+          idempotencyKey: `manual:youtube:${mediaId}:${accountId}`,
+          input: {
+            accountId,
+            mediaId,
+            metadata: {
+              title,
+              ...(typeof publishMetadata.description === 'string'
+                ? { description: publishMetadata.description }
+                : {}),
+              ...(typeof publishMetadata.privacy === 'string'
+                ? { privacy: publishMetadata.privacy }
+                : { privacy: 'private' }),
+            },
+          },
+        });
+        return reply.code(result.created ? 201 : 200).send(result);
+      } catch {
+        return reply
+          .code(400)
+          .send({ error: 'The publish request is invalid.', code: 'INVALID_PUBLISH' });
+      }
+    });
+  }
   if (options.workflowService !== undefined) {
     const workflows = options.workflowService;
     const workflowInput = (body: unknown): WorkflowInput | undefined => {

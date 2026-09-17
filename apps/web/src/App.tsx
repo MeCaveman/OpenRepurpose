@@ -110,6 +110,10 @@ export function App() {
   const [youtubeStatus, setYoutubeStatus] = useState<YouTubeCredentialStatus>();
   const [youtubeClientId, setYoutubeClientId] = useState('');
   const [youtubeClientSecret, setYoutubeClientSecret] = useState('');
+  const [publishMediaId, setPublishMediaId] = useState<string>();
+  const [publishAccountId, setPublishAccountId] = useState('');
+  const [publishTitle, setPublishTitle] = useState('');
+  const [publishDescription, setPublishDescription] = useState('');
   const loadMedia = async () => {
     const response = await fetch('/api/media');
     if (!response.ok) throw new Error('Media library is unavailable.');
@@ -147,7 +151,7 @@ export function App() {
   };
   useEffect(() => {
     if (pathname === '/media')
-      void loadMedia().catch((failure: unknown) =>
+      void Promise.all([loadMedia(), loadAccounts()]).catch((failure: unknown) =>
         setError(failure instanceof Error ? failure.message : 'Could not load media.'),
       );
     if (pathname === '/jobs')
@@ -202,6 +206,30 @@ export function App() {
       if (selectedJobId === jobId) await showAttempts(jobId);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Job cancellation failed.');
+    }
+  };
+  const queueYouTubePublish = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (publishMediaId === undefined) return;
+    setError(undefined);
+    try {
+      const response = await fetch('/api/publish/youtube', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await csrfToken() },
+        body: JSON.stringify({
+          mediaId: publishMediaId,
+          accountId: publishAccountId,
+          metadata: { title: publishTitle, description: publishDescription, privacy: 'private' },
+        }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? 'The YouTube upload could not be queued.');
+      setPublishMediaId(undefined);
+      await loadJobs();
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : 'The YouTube upload could not be queued.',
+      );
     }
   };
   const csrfToken = async () => {
@@ -479,6 +507,7 @@ export function App() {
                         <th>File</th>
                         <th>Details</th>
                         <th>State</th>
+                        <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -492,12 +521,86 @@ export function App() {
                             {asset.metadata.durationSeconds?.toFixed(1) ?? '—'}s
                           </td>
                           <td className="text-emerald-200">{asset.state}</td>
+                          <td>
+                            <button
+                              className="rounded-lg border border-cyan-300/30 px-3 py-1.5 text-xs text-cyan-200"
+                              onClick={() => {
+                                const name = asset.path.split(/[\\/]/).pop() ?? 'Untitled video';
+                                setPublishMediaId(asset.id);
+                                setPublishTitle(name.replace(/\.[^.]+$/, ''));
+                                setPublishDescription('');
+                                setPublishAccountId(accounts[0]?.id ?? '');
+                              }}
+                              type="button"
+                            >
+                              Publish to YouTube
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                   {media.length === 0 && (
                     <p className="text-sm text-slate-400">No local media has been imported yet.</p>
+                  )}
+                  {publishMediaId !== undefined && (
+                    <form
+                      className="grid gap-3 rounded-xl border border-cyan-300/20 bg-slate-950 p-5"
+                      onSubmit={queueYouTubePublish}
+                    >
+                      <h2 className="font-semibold">Queue YouTube upload</h2>
+                      <label className="grid gap-1 text-sm" htmlFor="publish-account">
+                        <span className="text-slate-300">Connected account</span>
+                        <select
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="publish-account"
+                          onChange={(event) => setPublishAccountId(event.target.value)}
+                          required
+                          value={publishAccountId}
+                        >
+                          <option value="">Select a YouTube account</option>
+                          {accounts.map((account) => (
+                            <option key={account.id} value={account.id}>
+                              {account.displayName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="grid gap-1 text-sm" htmlFor="publish-title">
+                        <span className="text-slate-300">Title</span>
+                        <input
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="publish-title"
+                          onChange={(event) => setPublishTitle(event.target.value)}
+                          required
+                          value={publishTitle}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm" htmlFor="publish-description">
+                        <span className="text-slate-300">Description</span>
+                        <textarea
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="publish-description"
+                          onChange={(event) => setPublishDescription(event.target.value)}
+                          value={publishDescription}
+                        />
+                      </label>
+                      <div className="flex gap-3">
+                        <button
+                          className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
+                          type="submit"
+                        >
+                          Queue upload
+                        </button>
+                        <button
+                          className="rounded-lg border border-white/15 px-4 py-2 text-sm"
+                          onClick={() => setPublishMediaId(undefined)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
                   )}
                 </div>
               ) : pathname === '/jobs' ? (

@@ -105,6 +105,9 @@ YouTube BYO OAuth credential setup is documented in
 tokens are encrypted in the local secret vault configured by `SECRET_VAULT_PATH` and
 `SECRET_KEY_PATH`.
 
+The v0.1 release checklist is in [`docs/release-v0.1.md`](docs/release-v0.1.md), with common setup,
+watched-folder, upload, and recovery fixes in [`docs/troubleshooting.md`](docs/troubleshooting.md).
+
 ## Branch convention
 
 `main` is the stable development branch. Future feature branches should use names such as `feature/v0.1-repository-tooling`, `feature/v0.1-database`, and `feature/v0.1-media`.
