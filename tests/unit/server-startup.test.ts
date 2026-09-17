@@ -11,6 +11,13 @@ function config(bindHost: string, appUrl = 'http://127.0.0.1:3000'): Application
   return {
     appUrl: new URL(appUrl),
     bindHost,
+    jobRunner: {
+      baseRetryDelayMs: 1_000,
+      concurrency: 2,
+      leaseDurationMs: 30_000,
+      maxRetryDelayMs: 60_000,
+      pollIntervalMs: 250,
+    },
     paths: {
       configDirectory: testDirectory,
       dataDirectory: resolve('test-results/data'),

@@ -17,7 +17,11 @@ describe('SQLite migrations and repositories', () => {
     expect(settings.get('library.mode')).toBe('managed');
     expect(
       temporaryDatabase.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toEqual([{ id: '0001_initial_settings' }, { id: '0002_media_assets' }]);
+    ).toEqual([
+      { id: '0001_initial_settings' },
+      { id: '0002_media_assets' },
+      { id: '0003_persistent_jobs' },
+    ]);
   });
   it('rejects a modified migration after it has been applied', () => {
     temporaryDatabase = createTemporaryDatabase();

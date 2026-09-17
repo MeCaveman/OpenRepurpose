@@ -33,3 +33,50 @@ test('React shell navigates between local tool sections', async ({ page }) => {
     'page',
   );
 });
+
+test('job history renders persisted status and attempt detail', async ({ page }) => {
+  await serveProductionAssets(page);
+  await page.route('http://openrepurpose.test/api/jobs**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/jobs') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jobs: [
+            {
+              id: 'job-1',
+              type: 'fake.publish',
+              status: 'retrying',
+              attemptCount: 1,
+              maxAttempts: 3,
+              lastErrorCode: 'FAKE_TRANSIENT',
+              lastErrorMessage: 'Temporary fake failure.',
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        job: { id: 'job-1', type: 'fake.publish', status: 'retrying' },
+        attempts: [
+          {
+            attemptNumber: 1,
+            status: 'failed',
+            errorCode: 'FAKE_TRANSIENT',
+            errorMessage: 'Temporary fake failure.',
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/jobs');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Jobs');
+  await expect(page.getByText('retrying')).toBeVisible();
+  await page.getByRole('button', { name: /fake\.publish/ }).click();
+  await expect(page.getByRole('heading', { name: 'Attempt history' })).toBeVisible();
+  await expect(page.getByText(/#1 · failed/)).toBeVisible();
+});

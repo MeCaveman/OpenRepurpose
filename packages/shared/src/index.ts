@@ -18,6 +18,13 @@ export interface ApplicationConfig {
   readonly appUrl: URL;
   readonly bindHost: string;
   readonly developmentServerUrl?: URL;
+  readonly jobRunner: {
+    readonly baseRetryDelayMs: number;
+    readonly concurrency: number;
+    readonly leaseDurationMs: number;
+    readonly maxRetryDelayMs: number;
+    readonly pollIntervalMs: number;
+  };
   readonly paths: ApplicationPaths;
   readonly port: number;
 }
@@ -95,6 +102,15 @@ export function loadApplicationConfig(
       PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
       APP_URL: httpUrlSchema().default('http://127.0.0.1:3000'),
       DEV_SERVER_URL: httpUrlSchema().optional(),
+      JOB_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
+      JOB_LEASE_MS: z.coerce.number().int().min(1_000).default(30_000),
+      JOB_POLL_INTERVAL_MS: z.coerce.number().int().min(25).default(250),
+      JOB_RETRY_BASE_MS: z.coerce.number().int().min(0).default(1_000),
+      JOB_RETRY_MAX_MS: z.coerce.number().int().min(0).default(60_000),
+    })
+    .refine((values) => values.JOB_RETRY_MAX_MS >= values.JOB_RETRY_BASE_MS, {
+      message: 'must be greater than or equal to JOB_RETRY_BASE_MS',
+      path: ['JOB_RETRY_MAX_MS'],
     })
     .parse(environment);
   const defaults = resolveApplicationPaths(environment, runtime);
@@ -105,6 +121,13 @@ export function loadApplicationConfig(
     ...(parsed.DEV_SERVER_URL === undefined
       ? {}
       : { developmentServerUrl: new URL(parsed.DEV_SERVER_URL) }),
+    jobRunner: {
+      baseRetryDelayMs: parsed.JOB_RETRY_BASE_MS,
+      concurrency: parsed.JOB_CONCURRENCY,
+      leaseDurationMs: parsed.JOB_LEASE_MS,
+      maxRetryDelayMs: parsed.JOB_RETRY_MAX_MS,
+      pollIntervalMs: parsed.JOB_POLL_INTERVAL_MS,
+    },
     paths: {
       configDirectory: parsed.APP_CONFIG_DIR ?? defaults.configDirectory,
       dataDirectory: parsed.APP_DATA_DIR ?? defaults.dataDirectory,

@@ -5,7 +5,12 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { LogController } from 'fastify';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ApplicationConfig } from '@openrepurpose/shared';
-import type { MediaImportService, MediaRepository } from '@openrepurpose/core';
+import type {
+  JobService,
+  JobStatus,
+  MediaImportService,
+  MediaRepository,
+} from '@openrepurpose/core';
 
 declare module '@fastify/secure-session' {
   interface SessionData {
@@ -18,6 +23,7 @@ const defaultStaticRoot = fileURLToPath(new URL('../../web/dist', import.meta.ur
 
 export interface BuildServerOptions {
   readonly config: ApplicationConfig;
+  readonly jobService?: JobService;
   readonly logger?: boolean;
   readonly mediaImportService?: MediaImportService;
   readonly mediaRepository?: MediaRepository;
@@ -161,6 +167,35 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     },
     async () => ({ service: 'openrepurpose', status: 'ok', version: '0.1.0' }),
   );
+
+  if (options.jobService !== undefined) {
+    const jobStatuses = new Set<JobStatus>([
+      'pending',
+      'running',
+      'retrying',
+      'succeeded',
+      'failed',
+      'cancelled',
+    ]);
+    server.get<{ Querystring: { status?: string } }>('/api/jobs', async (request, reply) => {
+      const status = request.query.status;
+      if (status !== undefined && !jobStatuses.has(status as JobStatus))
+        return reply.code(400).send({ error: 'Unknown job status.', code: 'INVALID_JOB_STATUS' });
+      return { jobs: options.jobService!.list(status as JobStatus | undefined) };
+    });
+    server.get<{ Params: { id: string } }>('/api/jobs/:id', async (request, reply) => {
+      const details = options.jobService!.show(request.params.id);
+      return details === undefined
+        ? reply.code(404).send({ error: 'Job not found.', code: 'JOB_NOT_FOUND' })
+        : details;
+    });
+    server.post<{ Params: { id: string } }>('/api/jobs/:id/cancel', async (request, reply) => {
+      const job = options.jobService!.cancel(request.params.id);
+      return job === undefined
+        ? reply.code(404).send({ error: 'Job not found.', code: 'JOB_NOT_FOUND' })
+        : { job };
+    });
+  }
 
   if (options.mediaRepository !== undefined) {
     server.get('/api/media', async () => ({ media: options.mediaRepository!.list() }));

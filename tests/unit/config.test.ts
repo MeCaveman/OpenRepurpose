@@ -65,6 +65,9 @@ describe('application configuration', () => {
     expect(() => loadApplicationConfig({ APP_URL: 'file:///tmp/app' }, linuxRuntime)).toThrow(
       'must use http or https',
     );
+    expect(() =>
+      loadApplicationConfig({ JOB_RETRY_BASE_MS: '1000', JOB_RETRY_MAX_MS: '999' }, linuxRuntime),
+    ).toThrow('must be greater than or equal to JOB_RETRY_BASE_MS');
   });
 
   it('rejects relative path overrides', () => {

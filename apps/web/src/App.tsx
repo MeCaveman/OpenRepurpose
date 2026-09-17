@@ -54,6 +54,22 @@ type MediaItem = {
   state: string;
   metadata: { durationSeconds?: number; width?: number; height?: number };
 };
+type JobItem = {
+  attemptCount: number;
+  cancellationRequestedAt?: string;
+  id: string;
+  lastErrorCode?: string;
+  lastErrorMessage?: string;
+  maxAttempts: number;
+  status: string;
+  type: string;
+};
+type JobAttemptItem = {
+  attemptNumber: number;
+  errorCode?: string;
+  errorMessage?: string;
+  status: string;
+};
 function usePathname(): string {
   const [pathname, setPathname] = useState(window.location.pathname);
   useEffect(() => {
@@ -72,6 +88,9 @@ export function App() {
     description: 'Choose a section from the navigation to continue.',
   };
   const [media, setMedia] = useState<readonly MediaItem[]>([]);
+  const [jobs, setJobs] = useState<readonly JobItem[]>([]);
+  const [attempts, setAttempts] = useState<readonly JobAttemptItem[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState<string>();
   const [error, setError] = useState<string>();
   const [importPath, setImportPath] = useState('');
   const loadMedia = async () => {
@@ -80,10 +99,27 @@ export function App() {
     const body = (await response.json()) as { media: readonly MediaItem[] };
     setMedia(body.media);
   };
+  const loadJobs = async () => {
+    const response = await fetch('/api/jobs');
+    if (!response.ok) throw new Error('Job history is unavailable.');
+    const body = (await response.json()) as { jobs: readonly JobItem[] };
+    setJobs(body.jobs);
+  };
+  const showAttempts = async (jobId: string) => {
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+    if (!response.ok) throw new Error('Job attempt history is unavailable.');
+    const body = (await response.json()) as { attempts: readonly JobAttemptItem[] };
+    setSelectedJobId(jobId);
+    setAttempts(body.attempts);
+  };
   useEffect(() => {
     if (pathname === '/media')
       void loadMedia().catch((failure: unknown) =>
         setError(failure instanceof Error ? failure.message : 'Could not load media.'),
+      );
+    if (pathname === '/jobs')
+      void loadJobs().catch((failure: unknown) =>
+        setError(failure instanceof Error ? failure.message : 'Could not load jobs.'),
       );
   }, [pathname]);
   const navigate = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
@@ -109,6 +145,22 @@ export function App() {
       await loadMedia();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Import failed.');
+    }
+  };
+  const cancelJob = async (jobId: string) => {
+    setError(undefined);
+    try {
+      const session = await fetch('/api/session');
+      const { csrfToken } = (await session.json()) as { csrfToken: string };
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken },
+      });
+      if (!response.ok) throw new Error('Job cancellation failed.');
+      await loadJobs();
+      if (selectedJobId === jobId) await showAttempts(jobId);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Job cancellation failed.');
     }
   };
   return (
@@ -204,6 +256,89 @@ export function App() {
                   </table>
                   {media.length === 0 && (
                     <p className="text-sm text-slate-400">No local media has been imported yet.</p>
+                  )}
+                </div>
+              ) : pathname === '/jobs' ? (
+                <div className="space-y-6">
+                  {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="text-slate-400">
+                        <tr>
+                          <th>Job</th>
+                          <th>Status</th>
+                          <th>Attempts</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {jobs.map((job) => (
+                          <tr className="border-t border-white/10" key={job.id}>
+                            <td className="py-3 pr-4">
+                              <button
+                                className="text-left text-cyan-200 hover:underline"
+                                onClick={() => void showAttempts(job.id)}
+                                type="button"
+                              >
+                                <span className="block font-medium">{job.type}</span>
+                                <span className="block font-mono text-xs text-slate-500">
+                                  {job.id}
+                                </span>
+                              </button>
+                              {job.lastErrorMessage !== undefined && (
+                                <span className="mt-1 block text-xs text-rose-300">
+                                  {job.lastErrorCode}: {job.lastErrorMessage}
+                                </span>
+                              )}
+                            </td>
+                            <td className="pr-4">{job.status}</td>
+                            <td className="pr-4">
+                              {job.attemptCount}/{job.maxAttempts}
+                            </td>
+                            <td>
+                              {(job.status === 'pending' ||
+                                job.status === 'retrying' ||
+                                job.status === 'running') && (
+                                <button
+                                  className="rounded-lg border border-rose-300/30 px-3 py-1.5 text-xs text-rose-200"
+                                  disabled={job.cancellationRequestedAt !== undefined}
+                                  onClick={() => void cancelJob(job.id)}
+                                  type="button"
+                                >
+                                  {job.cancellationRequestedAt === undefined
+                                    ? 'Cancel'
+                                    : 'Cancelling…'}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {jobs.length === 0 && (
+                    <p className="text-sm text-slate-400">No jobs have been queued yet.</p>
+                  )}
+                  {selectedJobId !== undefined && (
+                    <section className="rounded-xl border border-white/10 bg-slate-950 p-4">
+                      <h2 className="font-semibold">Attempt history</h2>
+                      <p className="mt-1 font-mono text-xs text-slate-500">{selectedJobId}</p>
+                      <ol className="mt-4 space-y-2 text-sm">
+                        {attempts.map((attempt) => (
+                          <li className="rounded-lg bg-white/5 p-3" key={attempt.attemptNumber}>
+                            #{attempt.attemptNumber} · {attempt.status}
+                            {attempt.errorCode !== undefined && (
+                              <span className="block text-xs text-rose-300">
+                                {attempt.errorCode}: {attempt.errorMessage}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ol>
+                      {attempts.length === 0 && (
+                        <p className="mt-3 text-sm text-slate-400">No attempts have started.</p>
+                      )}
+                    </section>
                   )}
                 </div>
               ) : (

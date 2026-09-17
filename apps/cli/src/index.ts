@@ -1,8 +1,14 @@
 import { accessSync, constants, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Command } from 'commander';
-import { MediaImportService } from '@openrepurpose/core';
-import { openDatabase, runMigrations, SqliteMediaRepository } from '@openrepurpose/db';
+import { JobService, MediaImportService } from '@openrepurpose/core';
+import type { JobStatus } from '@openrepurpose/core';
+import {
+  openDatabase,
+  runMigrations,
+  SqliteJobRepository,
+  SqliteMediaRepository,
+} from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
   FfprobeMediaProbe,
@@ -16,6 +22,7 @@ export interface DoctorCheck {
   readonly name: string;
   readonly ok: boolean;
 }
+
 function writableDirectoryCheck(name: string, directory: string): DoctorCheck {
   try {
     mkdirSync(directory, { recursive: true });
@@ -29,6 +36,7 @@ function writableDirectoryCheck(name: string, directory: string): DoctorCheck {
     };
   }
 }
+
 export function runDoctor(environment: Environment = process.env): readonly DoctorCheck[] {
   try {
     const config = loadApplicationConfig(environment);
@@ -63,8 +71,8 @@ export function runDoctor(environment: Environment = process.env): readonly Doct
   }
 }
 
-async function mediaContext() {
-  const config = loadApplicationConfig();
+async function mediaContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
   const database = openDatabase(config.paths.databasePath);
   runMigrations(database);
   const executables = await discoverMediaExecutables();
@@ -84,20 +92,35 @@ async function mediaContext() {
   };
 }
 
-export function createCli(): Command {
+function jobContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  return { database, service: new JobService(new SqliteJobRepository(database)) };
+}
+
+export interface CreateCliOptions {
+  readonly environment?: Environment;
+  readonly write?: (value: string) => void;
+}
+
+export function createCli(options: CreateCliOptions = {}): Command {
+  const environment = options.environment ?? process.env;
+  const write = options.write ?? ((value: string) => process.stdout.write(value));
   const program = new Command().name('openrepurpose').description('Local media automation');
   program.command('doctor').action(() => {
-    const checks = runDoctor();
+    const checks = runDoctor(environment);
     for (const check of checks)
-      process.stdout.write(`${check.ok ? 'OK' : 'FAIL'} ${check.name}: ${check.detail}\n`);
+      write(`${check.ok ? 'OK' : 'FAIL'} ${check.name}: ${check.detail}\n`);
     if (checks.some((check) => !check.ok)) process.exitCode = 1;
   });
+
   const media = program.command('media').description('Manage local media');
   media.command('import <path>').action(async (path: string) => {
-    const context = await mediaContext();
+    const context = await mediaContext(environment);
     try {
       const result = await context.service.import(path);
-      process.stdout.write(
+      write(
         `${result.duplicate ? 'Already imported' : 'Imported'} ${result.asset.id}: ${result.asset.path}\n`,
       );
     } finally {
@@ -108,15 +131,86 @@ export function createCli(): Command {
     .command('list')
     .option('--json', 'write JSON')
     .action(async (options: { json?: boolean }) => {
-      const context = await mediaContext();
+      const context = await mediaContext(environment);
       try {
         const assets = context.repository.list();
-        process.stdout.write(
+        write(
           options.json
             ? `${JSON.stringify(assets)}\n`
             : assets.map((asset) => `${asset.id}\t${asset.state}\t${asset.path}`).join('\n') +
                 (assets.length > 0 ? '\n' : ''),
         );
+      } finally {
+        context.database.close();
+      }
+    });
+
+  const jobs = program.command('jobs').description('Inspect and control persistent jobs');
+  jobs
+    .command('list')
+    .option('--status <status>', 'filter by job status')
+    .option('--json', 'write JSON')
+    .action((options: { json?: boolean; status?: string }) => {
+      const statuses = new Set<JobStatus>([
+        'pending',
+        'running',
+        'retrying',
+        'succeeded',
+        'failed',
+        'cancelled',
+      ]);
+      if (options.status !== undefined && !statuses.has(options.status as JobStatus))
+        throw new Error(`Unknown job status: ${options.status}`);
+      const context = jobContext(environment);
+      try {
+        const results = context.service.list(options.status as JobStatus | undefined);
+        write(
+          options.json
+            ? `${JSON.stringify(results)}\n`
+            : results
+                .map(
+                  (job) =>
+                    `${job.id}\t${job.status}\t${job.type}\t${job.attemptCount}/${job.maxAttempts}`,
+                )
+                .join('\n') + (results.length > 0 ? '\n' : ''),
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  jobs
+    .command('show <job-id>')
+    .option('--json', 'write JSON')
+    .action((id: string, options: { json?: boolean }) => {
+      const context = jobContext(environment);
+      try {
+        const details = context.service.show(id);
+        if (details === undefined) throw new Error(`Job not found: ${id}`);
+        write(
+          options.json
+            ? `${JSON.stringify(details)}\n`
+            : [
+                `${details.job.id}\t${details.job.status}\t${details.job.type}`,
+                `attempts: ${details.attempts.length}/${details.job.maxAttempts}`,
+                ...details.attempts.map(
+                  (attempt) =>
+                    `#${attempt.attemptNumber}\t${attempt.status}${attempt.errorCode === undefined ? '' : `\t${attempt.errorCode}`}`,
+                ),
+              ].join('\n') + '\n',
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  jobs
+    .command('cancel <job-id>')
+    .option('--json', 'write JSON')
+    .action((id: string, options: { json?: boolean }) => {
+      const context = jobContext(environment);
+      try {
+        const job = context.service.cancel(id);
+        if (job === undefined) throw new Error(`Job not found: ${id}`);
+        write(options.json ? `${JSON.stringify(job)}\n` : `${job.id}\t${job.status}\n`);
       } finally {
         context.database.close();
       }

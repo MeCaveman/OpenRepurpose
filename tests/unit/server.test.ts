@@ -7,6 +7,13 @@ import type { ApplicationConfig } from '@openrepurpose/shared';
 const config: ApplicationConfig = {
   appUrl: new URL('http://127.0.0.1:3000'),
   bindHost: '127.0.0.1',
+  jobRunner: {
+    baseRetryDelayMs: 1_000,
+    concurrency: 2,
+    leaseDurationMs: 30_000,
+    maxRetryDelayMs: 60_000,
+    pollIntervalMs: 250,
+  },
   paths: {
     configDirectory: resolve('test-results/config'),
     dataDirectory: resolve('test-results/data'),

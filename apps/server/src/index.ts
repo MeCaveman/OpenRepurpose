@@ -1,7 +1,12 @@
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { MediaImportService } from '@openrepurpose/core';
-import { openDatabase, runMigrations, SqliteMediaRepository } from '@openrepurpose/db';
+import { JobRunner, JobService, MediaImportService } from '@openrepurpose/core';
+import {
+  openDatabase,
+  runMigrations,
+  SqliteJobRepository,
+  SqliteMediaRepository,
+} from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
   FfprobeMediaProbe,
@@ -17,29 +22,45 @@ export async function startServer(): Promise<void> {
   const database = openDatabase(config.paths.databasePath);
   runMigrations(database);
   const executables = await discoverMediaExecutables();
-  const repository = new SqliteMediaRepository(database);
+  const mediaRepository = new SqliteMediaRepository(database);
+  const jobRepository = new SqliteJobRepository(database);
+  const jobService = new JobService(jobRepository);
+  const jobRunner = new JobRunner(jobRepository, [], config.jobRunner);
+  jobRunner.start();
   const mediaImportService =
     executables.ffprobe === undefined
       ? undefined
       : new MediaImportService(
           new LocalMediaFileInspector(),
           new FfprobeMediaProbe(executables.ffprobe),
-          repository,
+          mediaRepository,
         );
   const server = buildServer({
     config,
+    jobService,
     logger: true,
     sessionKey: loadOrCreateSessionKey(config.paths.sessionKeyPath),
-    mediaRepository: repository,
+    mediaRepository,
     ...(mediaImportService === undefined ? {} : { mediaImportService }),
   });
-  const close = async () => {
-    await server.close();
-    database.close();
+  let closing: Promise<void> | undefined;
+  const close = () => {
+    closing ??= (async () => {
+      await jobRunner.stop();
+      await server.close();
+      database.close();
+    })();
+    return closing;
   };
-  process.once('SIGINT', close);
-  process.once('SIGTERM', close);
-  await server.listen({ host: config.bindHost, port: config.port });
+  process.once('SIGINT', () => void close());
+  process.once('SIGTERM', () => void close());
+  try {
+    await server.listen({ host: config.bindHost, port: config.port });
+  } catch (error) {
+    await jobRunner.stop();
+    database.close();
+    throw error;
+  }
 }
 
 function isExecutedDirectly(): boolean {
