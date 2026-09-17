@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -188,7 +189,16 @@ def prompt_for(packet: Packet, agent: Agent, review: bool = False) -> str:
     """)
 
 
-def print_dry_run(packet: Packet, agent: Agent, manifest: dict) -> None:
+def codex_command(root: Path, packet: Packet, agent: Agent, review: bool = False) -> list[str]:
+    return [
+        "codex", "--ask-for-approval", "on-request", "exec", "--cd", str(root), "--model", agent.model,
+        "--config", f'model_reasoning_effort="{agent.reasoning}"',
+        "--sandbox", "read-only" if review else "workspace-write",
+        prompt_for(packet, agent, review),
+    ]
+
+
+def print_dry_run(root: Path, packet: Packet, agent: Agent, manifest: dict) -> None:
     print(f"Current version: {packet.version}")
     print(f"Next packet: {packet.number} — {packet.title}")
     print(f"Selected role: {agent.role}")
@@ -198,18 +208,14 @@ def print_dry_run(packet: Packet, agent: Agent, manifest: dict) -> None:
     print("Verification commands:")
     for command in manifest["verification"]:
         print(f"- {command}")
+    command = codex_command(root, packet, agent)
+    print("Generated Codex command:")
+    print(shlex.join([*command[:-1], "<packet prompt>"]))
     print("Expected prompt:\n" + prompt_for(packet, agent))
 
 
 def invoke_codex(root: Path, packet: Packet, agent: Agent, review: bool = False) -> str:
-    command = [
-        "codex", "exec", "--cd", str(root), "--model", agent.model,
-        "--config", f'model_reasoning_effort="{agent.reasoning}"',
-        "--sandbox", "read-only" if review else "workspace-write",
-    ]
-    if not review:
-        command.append("--approve-for-me")
-    command.append(prompt_for(packet, agent, review))
+    command = codex_command(root, packet, agent, review)
     result = run(command, root)
     output = result.stdout + result.stderr
     print(output, end="" if output.endswith("\n") else "\n")
@@ -249,7 +255,7 @@ def execute_one(root: Path, manifest: dict, args: argparse.Namespace) -> None:
     packet = next_packet(root, manifest, args.version, args.packet)
     agent = choose_agent(root, manifest, packet, args)
     if args.dry_run:
-        print_dry_run(packet, agent, manifest)
+        print_dry_run(root, packet, agent, manifest)
         return
     before = assert_clean_git(root)
     invoke_codex(root, packet, agent)
@@ -286,6 +292,10 @@ def self_test(root: Path) -> None:
         assert (packet.version, packet.number) == ("v0.2", 1), "resume did not select next version"
         agent = choose_agent(fake, load_manifest(fake), packet, argparse.Namespace(role=None, model=None, reasoning=None, escalation="normal"))
         assert agent.role == "architect" and agent.model == "gpt-5.6-sol", "OAuth routing failed"
+        command = codex_command(fake, packet, agent)
+        assert "--approve-for-me" not in command, "Conflicting auto-approval flag is present"
+        assert command[command.index("--sandbox") + 1] == "workspace-write", "Workspace sandbox is missing"
+        assert command[command.index("--ask-for-approval") + 1] == "on-request", "On-request approval is missing"
     print("Self-test passed: roadmap discovery, packet parsing, routing, and mocked resume.")
 
 

@@ -41,7 +41,7 @@ Run a specific next-valid packet:
 .\scripts\run-packet.ps1 -Version v0.1 -Packet 3
 ```
 
-The runner requires a clean working tree, records the starting commit, checks the progress-file completion marker, runs `pnpm typecheck`, `pnpm lint`, and `pnpm test`, then creates a checkpoint commit when Git author name and email are configured. It prints the diff before checkpointing. Rerun it after interruption; completed packets are detected from each progress file.
+The runner invokes Codex with the installed CLI's explicit safe combination: `--ask-for-approval on-request exec --sandbox workspace-write` for implementation, and `--ask-for-approval on-request exec --sandbox read-only` for review. It never combines either sandbox flag with `--approve-for-me`. It requires a clean working tree, records the starting commit, checks the progress-file completion marker, runs `pnpm typecheck`, `pnpm lint`, and `pnpm test`, then creates a checkpoint commit when Git author name and email are configured. It prints the diff before checkpointing. Rerun it after interruption; completed packets are detected from each progress file.
 
 ## Routing and overrides
 
