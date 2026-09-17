@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { JobRunner, JobService, MediaImportService } from '@openrepurpose/core';
+import { JobRunner, JobService, MediaImportService, WorkflowService } from '@openrepurpose/core';
 import {
   openDatabase,
   runMigrations,
@@ -9,11 +9,14 @@ import {
   SqliteJobRepository,
   SqliteMediaRepository,
   SqliteOAuthAuthorizationRequestRepository,
+  SqliteSourceCursorRepository,
+  SqliteWorkflowRepository,
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
   FfprobeMediaProbe,
   LocalMediaFileInspector,
+  WatchedFolderRunner,
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import { redactLogText } from '@openrepurpose/platform-sdk';
@@ -41,6 +44,7 @@ export async function startServer(): Promise<void> {
     config.appUrl,
   );
   const jobService = new JobService(jobRepository);
+  const workflowService = new WorkflowService(new SqliteWorkflowRepository(database), jobService);
   const jobRunner = new JobRunner(
     jobRepository,
     [
@@ -61,12 +65,23 @@ export async function startServer(): Promise<void> {
           new FfprobeMediaProbe(executables.ffprobe),
           mediaRepository,
         );
+  const watchedFolderRunner =
+    mediaImportService === undefined
+      ? undefined
+      : new WatchedFolderRunner(
+          workflowService,
+          new SqliteSourceCursorRepository(database),
+          mediaImportService,
+          config.watchedFolder,
+        );
+  watchedFolderRunner?.start();
   const server = buildServer({
     config,
     jobService,
     logger: true,
     sessionKey: loadOrCreateSessionKey(config.paths.sessionKeyPath),
     mediaRepository,
+    workflowService,
     youtubeOAuthService,
     ...(mediaImportService === undefined ? {} : { mediaImportService }),
   });
@@ -74,6 +89,7 @@ export async function startServer(): Promise<void> {
   const close = () => {
     closing ??= (async () => {
       await jobRunner.stop();
+      watchedFolderRunner?.stop();
       await server.close();
       database.close();
     })();
@@ -85,6 +101,7 @@ export async function startServer(): Promise<void> {
     await server.listen({ host: config.bindHost, port: config.port });
   } catch (error) {
     await jobRunner.stop();
+    watchedFolderRunner?.stop();
     database.close();
     throw error;
   }

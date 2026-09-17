@@ -487,3 +487,182 @@ export class JobRunner {
     }
   }
 }
+
+export type YouTubePrivacy = 'private' | 'public' | 'unlisted';
+
+/** The deliberately small v0.1 workflow shape. More triggers/destinations are additive later. */
+export interface Workflow {
+  readonly accountId: string;
+  readonly category?: string;
+  readonly createdAt: Date;
+  readonly descriptionTemplate: string;
+  readonly enabled: boolean;
+  readonly id: string;
+  readonly name: string;
+  readonly sourceDirectory: string;
+  readonly titleTemplate: string;
+  readonly updatedAt: Date;
+  readonly privacy: YouTubePrivacy;
+}
+
+export interface WorkflowInput {
+  readonly accountId: string;
+  readonly category?: string;
+  readonly descriptionTemplate?: string;
+  readonly enabled?: boolean;
+  readonly name: string;
+  readonly privacy?: YouTubePrivacy;
+  readonly sourceDirectory: string;
+  readonly titleTemplate: string;
+}
+
+export interface WorkflowRepository {
+  create(workflow: Workflow): Workflow;
+  delete(id: string): boolean;
+  findById(id: string): Workflow | undefined;
+  list(enabled?: boolean): readonly Workflow[];
+  update(workflow: Workflow): Workflow | undefined;
+}
+
+/** Per-workflow source state survives restarts and prevents duplicate folder imports. */
+export interface SourceCursor {
+  readonly mediaId?: string;
+  readonly modifiedAt: Date;
+  readonly observedAt: Date;
+  readonly path: string;
+  readonly sizeBytes: number;
+  readonly sourceKey: string;
+  readonly state: 'pending' | 'processed';
+  readonly workflowId: string;
+}
+
+export interface SourceCursorRepository {
+  find(workflowId: string, sourceKey: string): SourceCursor | undefined;
+  save(cursor: SourceCursor): SourceCursor;
+}
+
+const templateVariables = new Set(['file.name', 'file.stem', 'media.duration', 'workflow.name']);
+const templateToken = /{{\s*([^{}\s]+)\s*}}/g;
+
+export function validateTemplate(template: string): void {
+  if (template.length > 20_000) throw new Error('A template is too long.');
+  for (const match of template.matchAll(templateToken)) {
+    if (!templateVariables.has(match[1] ?? ''))
+      throw new Error(`Unknown template variable: ${match[1] ?? ''}`);
+  }
+  const hasToken = /{{\s*[^{}\s]+\s*}}/.test(template);
+  if (template.includes('{{') && !hasToken)
+    throw new Error('A template contains an invalid variable.');
+}
+
+export interface WorkflowTemplateContext {
+  readonly file: { readonly name: string; readonly stem: string };
+  readonly media: { readonly duration: string };
+  readonly workflow: { readonly name: string };
+}
+
+export function renderTemplate(template: string, context: WorkflowTemplateContext): string {
+  validateTemplate(template);
+  const values: Record<string, string> = {
+    'file.name': context.file.name,
+    'file.stem': context.file.stem,
+    'media.duration': context.media.duration,
+    'workflow.name': context.workflow.name,
+  };
+  return template.replace(templateToken, (_match, key: string) => values[key] ?? '');
+}
+
+/** Workflow application service: validates user input and snapshots rendered metadata into jobs. */
+export class WorkflowService {
+  public constructor(
+    private readonly workflows: WorkflowRepository,
+    private readonly jobs: JobService,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  public create(input: WorkflowInput): Workflow {
+    const workflow = this.validateAndBuild(input, randomUUID(), this.now(), this.now());
+    return this.workflows.create(workflow);
+  }
+
+  public delete(id: string): boolean {
+    return this.workflows.delete(id);
+  }
+  public get(id: string): Workflow | undefined {
+    return this.workflows.findById(id);
+  }
+  public list(enabled?: boolean): readonly Workflow[] {
+    return this.workflows.list(enabled);
+  }
+
+  public update(id: string, input: WorkflowInput): Workflow | undefined {
+    const existing = this.workflows.findById(id);
+    if (existing === undefined) return undefined;
+    return this.workflows.update(this.validateAndBuild(input, id, existing.createdAt, this.now()));
+  }
+
+  /** Uses rendered values, not a live workflow reference, so later edits cannot affect this job. */
+  public executeWatchedMedia(workflowId: string, media: MediaAsset): EnqueueJobResult | undefined {
+    const workflow = this.workflows.findById(workflowId);
+    if (workflow === undefined || !workflow.enabled) return undefined;
+    const name = media.path.replace(/^.*[\\/]/, '');
+    const stem = name.replace(/\.[^.]*$/, '');
+    const duration =
+      media.metadata.durationSeconds === undefined ? '' : String(media.metadata.durationSeconds);
+    const context: WorkflowTemplateContext = {
+      file: { name, stem },
+      media: { duration },
+      workflow,
+    };
+    const title = renderTemplate(workflow.titleTemplate, context).trim();
+    if (title.length === 0) throw new Error('A workflow title template must render a title.');
+    const description = renderTemplate(workflow.descriptionTemplate, context);
+    return this.jobs.create({
+      type: 'youtube.upload',
+      idempotencyKey: `workflow:${workflow.id}:media:${media.id}:youtube:${workflow.accountId}`,
+      input: {
+        accountId: workflow.accountId,
+        mediaId: media.id,
+        metadata: {
+          title,
+          description,
+          privacy: workflow.privacy,
+          ...(workflow.category === undefined ? {} : { category: workflow.category }),
+        },
+        workflow: { id: workflow.id, name: workflow.name },
+      },
+    });
+  }
+
+  private validateAndBuild(
+    input: WorkflowInput,
+    id: string,
+    createdAt: Date,
+    updatedAt: Date,
+  ): Workflow {
+    if (input.name.trim().length === 0) throw new Error('A workflow name is required.');
+    if (input.accountId.trim().length === 0) throw new Error('A YouTube account is required.');
+    if (input.sourceDirectory.trim().length === 0) throw new Error('A watched folder is required.');
+    if (input.titleTemplate.trim().length === 0) throw new Error('A title template is required.');
+    validateTemplate(input.titleTemplate);
+    validateTemplate(input.descriptionTemplate ?? '');
+    const privacy = input.privacy ?? 'private';
+    if (!(['private', 'public', 'unlisted'] as const).includes(privacy))
+      throw new Error('Invalid YouTube privacy.');
+    return {
+      id,
+      name: input.name.trim(),
+      enabled: input.enabled ?? true,
+      sourceDirectory: input.sourceDirectory.trim(),
+      accountId: input.accountId.trim(),
+      titleTemplate: input.titleTemplate,
+      descriptionTemplate: input.descriptionTemplate ?? '',
+      privacy,
+      ...(input.category?.trim() === undefined || input.category.trim() === ''
+        ? {}
+        : { category: input.category.trim() }),
+      createdAt,
+      updatedAt,
+    };
+  }
+}

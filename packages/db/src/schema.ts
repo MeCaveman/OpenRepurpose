@@ -125,3 +125,42 @@ export const destinationJobRecords = sqliteTable(
     index('destination_job_records_remote_id_idx').on(table.destinationId, table.remoteId),
   ],
 );
+
+export const workflows = sqliteTable(
+  'workflows',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    sourceDirectory: text('source_directory').notNull(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    titleTemplate: text('title_template').notNull(),
+    descriptionTemplate: text('description_template').notNull(),
+    privacy: text('privacy', { enum: ['private', 'public', 'unlisted'] }).notNull(),
+    category: text('category'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('workflows_enabled_idx').on(table.enabled)],
+);
+
+export const sourceCursors = sqliteTable(
+  'source_cursors',
+  {
+    workflowId: text('workflow_id')
+      .notNull()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    sourceKey: text('source_key').notNull(),
+    path: text('path').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    modifiedAt: integer('modified_at', { mode: 'timestamp_ms' }).notNull(),
+    observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+    state: text('state', { enum: ['pending', 'processed'] }).notNull(),
+    mediaId: text('media_id').references(() => mediaAssets.id),
+  },
+  (table) => [
+    uniqueIndex('source_cursors_workflow_source_idx').on(table.workflowId, table.sourceKey),
+  ],
+);

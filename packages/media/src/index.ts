@@ -1,10 +1,18 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access, lstat, realpath } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, isAbsolute, join, normalize, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import type { LocalFileInspector, MediaProbe, MediaProbeMetadata } from '@openrepurpose/core';
+import type {
+  LocalFileInspector,
+  MediaProbe,
+  MediaProbeMetadata,
+  SourceCursorRepository,
+  WorkflowService,
+} from '@openrepurpose/core';
+import type { MediaImportService } from '@openrepurpose/core';
 
 export interface ExecutableDiscoveryOptions {
   readonly environment?: NodeJS.ProcessEnv;
@@ -195,5 +203,126 @@ export class FfprobeMediaProbe implements MediaProbe {
       ...(height === undefined ? {} : { height }),
       ...(rate === undefined ? {} : { frameRate: rate }),
     };
+  }
+}
+
+const supportedWatchExtensions = new Set(['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']);
+function extension(path: string): string {
+  const index = path.lastIndexOf('.');
+  return index < 0 ? '' : path.slice(index).toLowerCase();
+}
+
+export interface WatchedFolderRunnerOptions {
+  readonly now?: () => Date;
+  readonly pollIntervalMs?: number;
+  readonly settleMs?: number;
+}
+
+/**
+ * Uses fs.watch only as an acceleration signal; periodic scans remain authoritative because
+ * Windows/Linux watchers can coalesce or miss events. Cursor rows make restarts idempotent.
+ */
+export class WatchedFolderRunner {
+  private readonly now: () => Date;
+  private readonly pollIntervalMs: number;
+  private readonly settleMs: number;
+  private timer: NodeJS.Timeout | undefined;
+  private running = false;
+  public constructor(
+    private readonly workflows: WorkflowService,
+    private readonly cursors: SourceCursorRepository,
+    private readonly media: MediaImportService,
+    options: WatchedFolderRunnerOptions = {},
+  ) {
+    this.now = options.now ?? (() => new Date());
+    this.pollIntervalMs = options.pollIntervalMs ?? 2_000;
+    this.settleMs = options.settleMs ?? 10_000;
+    if (this.pollIntervalMs < 100 || this.settleMs < 0)
+      throw new Error('Invalid folder watch timing.');
+  }
+  public start(): void {
+    if (this.timer !== undefined) return;
+    this.timer = setInterval(() => void this.scan(), this.pollIntervalMs);
+    void this.scan();
+  }
+  public stop(): void {
+    if (this.timer !== undefined) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+  /** Public deterministic scan hook for startup and tests. */
+  public async scan(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    try {
+      for (const workflow of this.workflows.list(true))
+        await this.scanWorkflow(workflow.id, workflow.sourceDirectory);
+    } finally {
+      this.running = false;
+    }
+  }
+  private async scanWorkflow(workflowId: string, directory: string): Promise<void> {
+    let files: string[];
+    try {
+      files = await this.listFiles(directory);
+    } catch {
+      return;
+    }
+    for (const path of files) {
+      let details: Awaited<ReturnType<typeof stat>>;
+      let canonical: string;
+      try {
+        details = await stat(path);
+        canonical = await realpath(path);
+      } catch {
+        continue;
+      }
+      const sourceKey = canonical;
+      const cursor = this.cursors.find(workflowId, sourceKey);
+      const signatureChanged =
+        cursor === undefined ||
+        cursor.sizeBytes !== details.size ||
+        cursor.modifiedAt.getTime() !== details.mtime.getTime();
+      const now = this.now();
+      if (signatureChanged) {
+        this.cursors.save({
+          workflowId,
+          sourceKey,
+          path: canonical,
+          sizeBytes: details.size,
+          modifiedAt: details.mtime,
+          observedAt: now,
+          state: 'pending',
+        });
+        continue;
+      }
+      if (
+        cursor.state === 'processed' ||
+        now.getTime() - cursor.observedAt.getTime() < this.settleMs
+      )
+        continue;
+      try {
+        const result = await this.media.import(canonical);
+        this.workflows.executeWatchedMedia(workflowId, result.asset);
+        this.cursors.save({
+          ...cursor,
+          path: canonical,
+          state: 'processed',
+          mediaId: result.asset.id,
+        });
+      } catch {
+        // Leave pending state: a still-locked or invalid render can be retried after the next scan.
+      }
+    }
+  }
+  private async listFiles(directory: string): Promise<string[]> {
+    const entries = await readdir(directory, { withFileTypes: true });
+    const output: string[] = [];
+    for (const entry of entries) {
+      const candidate = join(directory, entry.name);
+      if (entry.isDirectory()) output.push(...(await this.listFiles(candidate)));
+      else if (entry.isFile() && supportedWatchExtensions.has(extension(entry.name)))
+        output.push(candidate);
+    }
+    return output;
   }
 }

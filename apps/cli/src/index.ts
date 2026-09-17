@@ -1,7 +1,7 @@
 import { accessSync, constants, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Command } from 'commander';
-import { JobService, MediaImportService } from '@openrepurpose/core';
+import { JobService, MediaImportService, WorkflowService } from '@openrepurpose/core';
 import type { JobStatus } from '@openrepurpose/core';
 import {
   openDatabase,
@@ -10,6 +10,7 @@ import {
   SqliteJobRepository,
   SqliteMediaRepository,
   SqliteOAuthAuthorizationRequestRepository,
+  SqliteWorkflowRepository,
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
@@ -101,6 +102,13 @@ function jobContext(environment: Environment) {
   const database = openDatabase(config.paths.databasePath);
   runMigrations(database);
   return { database, service: new JobService(new SqliteJobRepository(database)) };
+}
+function workflowContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  const jobs = new JobService(new SqliteJobRepository(database));
+  return { database, service: new WorkflowService(new SqliteWorkflowRepository(database), jobs) };
 }
 
 function accountContext(environment: Environment) {
@@ -239,6 +247,29 @@ export function createCli(options: CreateCliOptions = {}): Command {
       context.database.close();
     }
   });
+
+  const workflows = program.command('workflows').description('Manage watched-folder workflows');
+  workflows
+    .command('list')
+    .option('--json', 'write JSON')
+    .action((options: { json?: boolean }) => {
+      const context = workflowContext(environment);
+      try {
+        const results = context.service.list();
+        write(
+          options.json
+            ? `${JSON.stringify(results)}\n`
+            : results
+                .map(
+                  (workflow) =>
+                    `${workflow.id}\t${workflow.enabled ? 'enabled' : 'disabled'}\t${workflow.name}\t${workflow.sourceDirectory}`,
+                )
+                .join('\n') + (results.length > 0 ? '\n' : ''),
+        );
+      } finally {
+        context.database.close();
+      }
+    });
 
   const jobs = program.command('jobs').description('Inspect and control persistent jobs');
   jobs

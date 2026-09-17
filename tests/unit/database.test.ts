@@ -23,6 +23,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0003_persistent_jobs' },
       { id: '0004_youtube_oauth' },
       { id: '0005_destination_job_records' },
+      { id: '0006_workflows' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {

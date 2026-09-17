@@ -12,6 +12,8 @@ import type {
   JobStatus,
   MediaImportService,
   MediaRepository,
+  WorkflowInput,
+  WorkflowService,
 } from '@openrepurpose/core';
 
 declare module '@fastify/secure-session' {
@@ -37,6 +39,7 @@ export interface BuildServerOptions {
   readonly sessionKey: Buffer;
   readonly staticRoot?: false | string;
   readonly youtubeOAuthService?: YouTubeOAuthService;
+  readonly workflowService?: WorkflowService;
 }
 
 function normalizeHostname(hostname: string): string {
@@ -339,6 +342,78 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       const result = await options.mediaImportService!.import(request.body.path);
       return reply.code(result.duplicate ? 200 : 201).send(result);
     });
+  }
+  if (options.workflowService !== undefined) {
+    const workflows = options.workflowService;
+    const workflowInput = (body: unknown): WorkflowInput | undefined => {
+      if (typeof body !== 'object' || body === null) return undefined;
+      const value = body as Record<string, unknown>;
+      if (
+        typeof value.name !== 'string' ||
+        typeof value.sourceDirectory !== 'string' ||
+        typeof value.accountId !== 'string' ||
+        typeof value.titleTemplate !== 'string'
+      )
+        return undefined;
+      if (value.descriptionTemplate !== undefined && typeof value.descriptionTemplate !== 'string')
+        return undefined;
+      if (value.enabled !== undefined && typeof value.enabled !== 'boolean') return undefined;
+      if (value.category !== undefined && typeof value.category !== 'string') return undefined;
+      if (
+        value.privacy !== undefined &&
+        value.privacy !== 'private' &&
+        value.privacy !== 'public' &&
+        value.privacy !== 'unlisted'
+      )
+        return undefined;
+      return value as unknown as WorkflowInput;
+    };
+    server.get('/api/workflows', async () => ({ workflows: workflows.list() }));
+    server.get<{ Params: { id: string } }>('/api/workflows/:id', async (request, reply) => {
+      const workflow = workflows.get(request.params.id);
+      return workflow === undefined
+        ? reply.code(404).send({ error: 'Workflow not found.', code: 'WORKFLOW_NOT_FOUND' })
+        : { workflow };
+    });
+    server.post<{ Body: unknown }>('/api/workflows', async (request, reply) => {
+      const input = workflowInput(request.body);
+      if (input === undefined)
+        return reply.code(400).send({ error: 'Invalid workflow input.', code: 'INVALID_WORKFLOW' });
+      try {
+        return reply.code(201).send({ workflow: workflows.create(input) });
+      } catch (error) {
+        return reply.code(400).send({
+          error: error instanceof Error ? error.message : 'Invalid workflow.',
+          code: 'INVALID_WORKFLOW',
+        });
+      }
+    });
+    server.put<{ Params: { id: string }; Body: unknown }>(
+      '/api/workflows/:id',
+      async (request, reply) => {
+        const input = workflowInput(request.body);
+        if (input === undefined)
+          return reply
+            .code(400)
+            .send({ error: 'Invalid workflow input.', code: 'INVALID_WORKFLOW' });
+        try {
+          const workflow = workflows.update(request.params.id, input);
+          return workflow === undefined
+            ? reply.code(404).send({ error: 'Workflow not found.', code: 'WORKFLOW_NOT_FOUND' })
+            : { workflow };
+        } catch (error) {
+          return reply.code(400).send({
+            error: error instanceof Error ? error.message : 'Invalid workflow.',
+            code: 'INVALID_WORKFLOW',
+          });
+        }
+      },
+    );
+    server.delete<{ Params: { id: string } }>('/api/workflows/:id', async (request, reply) =>
+      workflows.delete(request.params.id)
+        ? reply.code(204).send()
+        : reply.code(404).send({ error: 'Workflow not found.', code: 'WORKFLOW_NOT_FOUND' }),
+    );
   }
   server.get(
     '/api/session',

@@ -25,6 +25,10 @@ import type {
   OAuthAuthorizationRequest,
   OAuthAuthorizationRequestRepository,
   UpsertConnectedAccountInput,
+  SourceCursor,
+  SourceCursorRepository,
+  Workflow,
+  WorkflowRepository,
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
 import type { Migration } from './migrations/types.js';
@@ -40,6 +44,8 @@ export {
   mediaAssets,
   oauthAuthorizationRequests,
   settings,
+  sourceCursors,
+  workflows,
 } from './schema.js';
 
 export interface OpenDatabaseOptions {
@@ -177,6 +183,152 @@ export class SqliteMediaRepository implements MediaRepository {
         ...(row.frameRateMilli === null ? {} : { frameRate: row.frameRateMilli / 1000 }),
       },
     };
+  }
+}
+
+interface RawWorkflowRow {
+  readonly account_id: string;
+  readonly category: string | null;
+  readonly created_at: number;
+  readonly description_template: string;
+  readonly enabled: number;
+  readonly id: string;
+  readonly name: string;
+  readonly privacy: Workflow['privacy'];
+  readonly source_directory: string;
+  readonly title_template: string;
+  readonly updated_at: number;
+}
+function workflowFromRow(row: RawWorkflowRow): Workflow {
+  return {
+    id: row.id,
+    name: row.name,
+    enabled: row.enabled === 1,
+    sourceDirectory: row.source_directory,
+    accountId: row.account_id,
+    titleTemplate: row.title_template,
+    descriptionTemplate: row.description_template,
+    privacy: row.privacy,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    ...(row.category === null ? {} : { category: row.category }),
+  };
+}
+
+/** SQLite workflow definitions. Execution snapshots are placed in jobs by WorkflowService. */
+export class SqliteWorkflowRepository implements WorkflowRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+  public create(workflow: Workflow): Workflow {
+    this.write(workflow, false);
+    return workflow;
+  }
+  public delete(id: string): boolean {
+    return (
+      Number(this.database.client.prepare('DELETE FROM workflows WHERE id = ?').run(id).changes) ===
+      1
+    );
+  }
+  public findById(id: string): Workflow | undefined {
+    const row = this.database.client.prepare('SELECT * FROM workflows WHERE id = ?').get(id) as
+      RawWorkflowRow | undefined;
+    return row === undefined ? undefined : workflowFromRow(row);
+  }
+  public list(enabled?: boolean): readonly Workflow[] {
+    const statement =
+      enabled === undefined
+        ? this.database.client.prepare('SELECT * FROM workflows ORDER BY created_at DESC, id DESC')
+        : this.database.client.prepare(
+            'SELECT * FROM workflows WHERE enabled = ? ORDER BY created_at DESC, id DESC',
+          );
+    const rows = (enabled === undefined
+      ? statement.all()
+      : statement.all(enabled ? 1 : 0)) as unknown as RawWorkflowRow[];
+    return rows.map(workflowFromRow);
+  }
+  public update(workflow: Workflow): Workflow | undefined {
+    const result = this.write(workflow, true);
+    return result ? workflow : undefined;
+  }
+  private write(workflow: Workflow, update: boolean): boolean {
+    const values = [
+      workflow.name,
+      workflow.enabled ? 1 : 0,
+      workflow.sourceDirectory,
+      workflow.accountId,
+      workflow.titleTemplate,
+      workflow.descriptionTemplate,
+      workflow.privacy,
+      workflow.category ?? null,
+      workflow.createdAt.getTime(),
+      workflow.updatedAt.getTime(),
+      workflow.id,
+    ];
+    if (update)
+      return (
+        Number(
+          this.database.client
+            .prepare(
+              `UPDATE workflows SET name=?, enabled=?, source_directory=?, account_id=?, title_template=?, description_template=?, privacy=?, category=?, created_at=?, updated_at=? WHERE id=?`,
+            )
+            .run(...values).changes,
+        ) === 1
+      );
+    this.database.client
+      .prepare(
+        `INSERT INTO workflows (name, enabled, source_directory, account_id, title_template, description_template, privacy, category, created_at, updated_at, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(...values);
+    return true;
+  }
+}
+
+interface RawSourceCursorRow {
+  readonly workflow_id: string;
+  readonly source_key: string;
+  readonly path: string;
+  readonly size_bytes: number;
+  readonly modified_at: number;
+  readonly observed_at: number;
+  readonly state: SourceCursor['state'];
+  readonly media_id: string | null;
+}
+function cursorFromRow(row: RawSourceCursorRow): SourceCursor {
+  return {
+    workflowId: row.workflow_id,
+    sourceKey: row.source_key,
+    path: row.path,
+    sizeBytes: row.size_bytes,
+    modifiedAt: new Date(row.modified_at),
+    observedAt: new Date(row.observed_at),
+    state: row.state,
+    ...(row.media_id === null ? {} : { mediaId: row.media_id }),
+  };
+}
+/** Cursor rows retain observed signatures across a restart, enabling settling and dedupe. */
+export class SqliteSourceCursorRepository implements SourceCursorRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+  public find(workflowId: string, sourceKey: string): SourceCursor | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM source_cursors WHERE workflow_id = ? AND source_key = ?')
+      .get(workflowId, sourceKey) as RawSourceCursorRow | undefined;
+    return row === undefined ? undefined : cursorFromRow(row);
+  }
+  public save(cursor: SourceCursor): SourceCursor {
+    this.database.client
+      .prepare(
+        `INSERT INTO source_cursors (workflow_id, source_key, path, size_bytes, modified_at, observed_at, state, media_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workflow_id, source_key) DO UPDATE SET path=excluded.path, size_bytes=excluded.size_bytes, modified_at=excluded.modified_at, observed_at=excluded.observed_at, state=excluded.state, media_id=excluded.media_id`,
+      )
+      .run(
+        cursor.workflowId,
+        cursor.sourceKey,
+        cursor.path,
+        cursor.sizeBytes,
+        cursor.modifiedAt.getTime(),
+        cursor.observedAt.getTime(),
+        cursor.state,
+        cursor.mediaId ?? null,
+      );
+    return cursor;
   }
 }
 
