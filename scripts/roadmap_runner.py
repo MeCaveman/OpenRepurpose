@@ -111,7 +111,7 @@ def next_packet(root: Path, manifest: dict, version: str | None, number: int | N
 
 def choose_agent(root: Path, manifest: dict, packet: Packet, args: argparse.Namespace) -> Agent:
     text = f"{packet.title}\n{packet.body}".lower()
-    role = args.role
+    role = args.role or manifest.get("packetRoles", {}).get(packet.version, {}).get(str(packet.number))
     if not role:
         if any(keyword in text for keyword in manifest["architectKeywords"]):
             role = "architect"
