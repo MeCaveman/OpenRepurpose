@@ -74,3 +74,35 @@ export const jobAttempts = sqliteTable(
     index('job_attempts_job_id_idx').on(table.jobId),
   ],
 );
+
+export const accounts = sqliteTable(
+  'accounts',
+  {
+    id: text('id').primaryKey(),
+    provider: text('provider', { enum: ['youtube'] }).notNull(),
+    externalId: text('external_id').notNull(),
+    displayName: text('display_name').notNull(),
+    status: text('status', { enum: ['connected', 'reauthorization_required'] }).notNull(),
+    capabilitiesJson: text('capabilities_json').notNull(),
+    connectedAt: integer('connected_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('accounts_provider_external_id_idx').on(table.provider, table.externalId),
+    index('accounts_provider_status_idx').on(table.provider, table.status),
+  ],
+);
+
+export const oauthAuthorizationRequests = sqliteTable(
+  'oauth_authorization_requests',
+  {
+    id: text('id').primaryKey(),
+    provider: text('provider', { enum: ['youtube'] }).notNull(),
+    stateHash: text('state_hash').notNull().unique(),
+    bindingHash: text('binding_hash').notNull(),
+    redirectUri: text('redirect_uri').notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('oauth_authorization_requests_expires_at_idx').on(table.expiresAt)],
+);

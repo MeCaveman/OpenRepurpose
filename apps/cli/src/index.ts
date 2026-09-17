@@ -1,4 +1,4 @@
-import { accessSync, constants, mkdirSync } from 'node:fs';
+import { accessSync, constants, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Command } from 'commander';
 import { JobService, MediaImportService } from '@openrepurpose/core';
@@ -6,8 +6,10 @@ import type { JobStatus } from '@openrepurpose/core';
 import {
   openDatabase,
   runMigrations,
+  SqliteAccountRepository,
   SqliteJobRepository,
   SqliteMediaRepository,
+  SqliteOAuthAuthorizationRequestRepository,
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
@@ -16,6 +18,8 @@ import {
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import type { Environment } from '@openrepurpose/shared';
+import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
+import { YouTubeOAuthService } from '@openrepurpose/youtube';
 
 export interface DoctorCheck {
   readonly detail: string;
@@ -99,6 +103,49 @@ function jobContext(environment: Environment) {
   return { database, service: new JobService(new SqliteJobRepository(database)) };
 }
 
+function accountContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  const secrets = new EncryptedFileSecretStore(
+    config.paths.secretVaultPath,
+    config.paths.secretKeyPath,
+  );
+  return {
+    database,
+    service: new YouTubeOAuthService(
+      new SqliteAccountRepository(database),
+      new SqliteOAuthAuthorizationRequestRepository(database),
+      secrets,
+      config.appUrl,
+    ),
+  };
+}
+
+function readGoogleCredentials(path: string): { clientId: string; clientSecret?: string } {
+  const document = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  if (typeof document !== 'object' || document === null)
+    throw new Error('The Google OAuth credentials file is invalid.');
+  const container =
+    'installed' in document && typeof document.installed === 'object' && document.installed !== null
+      ? document.installed
+      : 'web' in document && typeof document.web === 'object' && document.web !== null
+        ? document.web
+        : undefined;
+  if (
+    container === undefined ||
+    !('client_id' in container) ||
+    typeof container.client_id !== 'string'
+  )
+    throw new Error('The Google OAuth credentials file does not contain a client ID.');
+  return {
+    clientId: container.client_id,
+    ...('client_secret' in container && typeof container.client_secret === 'string'
+      ? { clientSecret: container.client_secret }
+      : {}),
+  };
+}
+
 export interface CreateCliOptions {
   readonly environment?: Environment;
   readonly write?: (value: string) => void;
@@ -144,6 +191,54 @@ export function createCli(options: CreateCliOptions = {}): Command {
         context.database.close();
       }
     });
+
+  const accounts = program.command('accounts').description('Manage publishing accounts');
+  accounts
+    .command('list')
+    .option('--json', 'write JSON')
+    .action(async (options: { json?: boolean }) => {
+      const context = accountContext(environment);
+      try {
+        const results = context.service.listAccounts();
+        write(
+          options.json
+            ? `${JSON.stringify(results)}\n`
+            : results
+                .map(
+                  (account) =>
+                    `${account.id}\t${account.provider}\t${account.status}\t${account.displayName}`,
+                )
+                .join('\n') + (results.length > 0 ? '\n' : ''),
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  accounts
+    .command('add')
+    .description('Configure and connect an account')
+    .command('youtube')
+    .requiredOption('--credentials <path>', 'Google OAuth desktop-client JSON file')
+    .action(async (options: { credentials: string }) => {
+      const context = accountContext(environment);
+      try {
+        await context.service.configureCredentials(readGoogleCredentials(options.credentials));
+        const accountsUrl = new URL('/accounts', loadApplicationConfig(environment).appUrl);
+        write(`Google OAuth credentials saved. Connect YouTube in ${accountsUrl.toString()}\n`);
+      } finally {
+        context.database.close();
+      }
+    });
+  accounts.command('remove <id>').action(async (id: string) => {
+    const context = accountContext(environment);
+    try {
+      const removed = await context.service.removeAccount(id);
+      if (removed === undefined) throw new Error(`Account not found: ${id}`);
+      write(`Removed ${removed.provider} account ${removed.displayName}.\n`);
+    } finally {
+      context.database.close();
+    }
+  });
 
   const jobs = program.command('jobs').description('Inspect and control persistent jobs');
   jobs

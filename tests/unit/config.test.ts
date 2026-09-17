@@ -29,6 +29,12 @@ describe('application configuration', () => {
     expect(paths.sessionKeyPath).toBe(
       'C:\\Users\\Ada\\AppData\\Roaming\\OpenRepurpose\\session.key',
     );
+    expect(paths.secretKeyPath).toBe(
+      'C:\\Users\\Ada\\AppData\\Roaming\\OpenRepurpose\\secret-vault.key',
+    );
+    expect(paths.secretVaultPath).toBe(
+      'C:\\Users\\Ada\\AppData\\Local\\OpenRepurpose\\secrets.vault.json',
+    );
   });
 
   it('uses XDG paths on Linux and accepts absolute deployment overrides', () => {
@@ -50,6 +56,8 @@ describe('application configuration', () => {
         DEV_SERVER_URL: 'http://127.0.0.1:5173',
         PORT: '8080',
         SESSION_KEY_PATH: '/config/custom-session.key',
+        SECRET_KEY_PATH: '/config/custom-secret.key',
+        SECRET_VAULT_PATH: '/data/custom-secrets.json',
       },
       linuxRuntime,
     );
@@ -57,6 +65,8 @@ describe('application configuration', () => {
     expect(config.bindHost).toBe('0.0.0.0');
     expect(config.developmentServerUrl?.origin).toBe('http://127.0.0.1:5173');
     expect(config.paths.sessionKeyPath).toBe('/config/custom-session.key');
+    expect(config.paths.secretKeyPath).toBe('/config/custom-secret.key');
+    expect(config.paths.secretVaultPath).toBe('/data/custom-secrets.json');
     expect(config.port).toBe(8080);
   });
 
@@ -74,5 +84,14 @@ describe('application configuration', () => {
     expect(() => loadApplicationConfig({ APP_DATA_DIR: 'relative-data' }, linuxRuntime)).toThrow(
       'must be an absolute path',
     );
+  });
+
+  it('keeps session, vault, and vault-key files distinct', () => {
+    expect(() =>
+      loadApplicationConfig(
+        { SESSION_KEY_PATH: '/config/shared.key', SECRET_KEY_PATH: '/config/shared.key' },
+        linuxRuntime,
+      ),
+    ).toThrow('must be distinct');
   });
 });

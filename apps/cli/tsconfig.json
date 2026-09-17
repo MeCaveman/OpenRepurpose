@@ -11,6 +11,8 @@
     { "path": "../../packages/db" },
     { "path": "../../packages/shared" },
     { "path": "../../packages/core" },
-    { "path": "../../packages/media" }
+    { "path": "../../packages/media" },
+    { "path": "../../packages/local-secrets" },
+    { "path": "../../integrations/youtube" }
   ]
 }

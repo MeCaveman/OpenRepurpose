@@ -70,6 +70,19 @@ type JobAttemptItem = {
   errorMessage?: string;
   status: string;
 };
+type AccountItem = {
+  capabilities: readonly string[];
+  displayName: string;
+  externalId: string;
+  id: string;
+  provider: string;
+  status: string;
+};
+type YouTubeCredentialStatus = {
+  clientSecretConfigured: boolean;
+  configured: boolean;
+  redirectUri: string;
+};
 function usePathname(): string {
   const [pathname, setPathname] = useState(window.location.pathname);
   useEffect(() => {
@@ -93,6 +106,10 @@ export function App() {
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const [error, setError] = useState<string>();
   const [importPath, setImportPath] = useState('');
+  const [accounts, setAccounts] = useState<readonly AccountItem[]>([]);
+  const [youtubeStatus, setYoutubeStatus] = useState<YouTubeCredentialStatus>();
+  const [youtubeClientId, setYoutubeClientId] = useState('');
+  const [youtubeClientSecret, setYoutubeClientSecret] = useState('');
   const loadMedia = async () => {
     const response = await fetch('/api/media');
     if (!response.ok) throw new Error('Media library is unavailable.');
@@ -104,6 +121,22 @@ export function App() {
     if (!response.ok) throw new Error('Job history is unavailable.');
     const body = (await response.json()) as { jobs: readonly JobItem[] };
     setJobs(body.jobs);
+  };
+  const loadAccounts = async () => {
+    const response = await fetch('/api/accounts');
+    if (!response.ok) throw new Error('Account status is unavailable.');
+    const body = (await response.json()) as {
+      accounts: readonly AccountItem[];
+      youtube: YouTubeCredentialStatus;
+    };
+    setAccounts(body.accounts);
+    setYoutubeStatus(body.youtube);
+  };
+  const loadSetup = async () => {
+    const response = await fetch('/api/setup');
+    if (!response.ok) throw new Error('Setup status is unavailable.');
+    const body = (await response.json()) as { youtube: YouTubeCredentialStatus };
+    setYoutubeStatus(body.youtube);
   };
   const showAttempts = async (jobId: string) => {
     const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
@@ -120,6 +153,14 @@ export function App() {
     if (pathname === '/jobs')
       void loadJobs().catch((failure: unknown) =>
         setError(failure instanceof Error ? failure.message : 'Could not load jobs.'),
+      );
+    if (pathname === '/accounts')
+      void loadAccounts().catch((failure: unknown) =>
+        setError(failure instanceof Error ? failure.message : 'Could not load accounts.'),
+      );
+    if (pathname === '/setup')
+      void loadSetup().catch((failure: unknown) =>
+        setError(failure instanceof Error ? failure.message : 'Could not load setup status.'),
       );
   }, [pathname]);
   const navigate = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
@@ -161,6 +202,64 @@ export function App() {
       if (selectedJobId === jobId) await showAttempts(jobId);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Job cancellation failed.');
+    }
+  };
+  const csrfToken = async () => {
+    const response = await fetch('/api/session');
+    if (!response.ok) throw new Error('The local session could not be created.');
+    return ((await response.json()) as { csrfToken: string }).csrfToken;
+  };
+  const saveYouTubeCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError(undefined);
+    try {
+      const response = await fetch('/api/accounts/youtube/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await csrfToken() },
+        body: JSON.stringify({
+          clientId: youtubeClientId,
+          clientSecret: youtubeClientSecret,
+        }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? 'YouTube credentials could not be saved.');
+      setYoutubeClientId('');
+      setYoutubeClientSecret('');
+      await loadAccounts();
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : 'YouTube credentials could not be saved.',
+      );
+    }
+  };
+  const connectYouTube = async () => {
+    setError(undefined);
+    try {
+      const response = await fetch('/api/accounts/youtube/oauth/start', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': await csrfToken() },
+      });
+      const body = (await response.json()) as { authorizationUrl?: string; error?: string };
+      if (!response.ok || body.authorizationUrl === undefined)
+        throw new Error(body.error ?? 'YouTube authorization could not be started.');
+      window.location.assign(body.authorizationUrl);
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : 'YouTube authorization could not be started.',
+      );
+    }
+  };
+  const removeAccount = async (accountId: string) => {
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/accounts/${encodeURIComponent(accountId)}`, {
+        method: 'DELETE',
+        headers: { 'X-CSRF-Token': await csrfToken() },
+      });
+      if (!response.ok) throw new Error('The account could not be removed.');
+      await loadAccounts();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'The account could not be removed.');
     }
   };
   return (
@@ -209,7 +308,150 @@ export function App() {
               </p>
             </div>
             <div className="p-7 sm:p-10">
-              {pathname === '/media' ? (
+              {pathname === '/accounts' ? (
+                <div className="space-y-8">
+                  {new URLSearchParams(window.location.search).get('youtube') === 'connected' && (
+                    <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-200">
+                      YouTube connected successfully.
+                    </p>
+                  )}
+                  {new URLSearchParams(window.location.search).get('youtube') === 'error' && (
+                    <p className="rounded-lg border border-rose-300/20 bg-rose-300/10 p-3 text-sm text-rose-200">
+                      YouTube connection failed. Check the credential setup and try again.
+                    </p>
+                  )}
+                  {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
+                  <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
+                    <h2 className="font-semibold">Google OAuth credentials</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-400">
+                      Use your own Google Cloud desktop OAuth client. Values are encrypted locally
+                      and are never returned to this page.
+                    </p>
+                    <form className="mt-5 grid gap-3" onSubmit={saveYouTubeCredentials}>
+                      <label className="grid gap-1 text-sm" htmlFor="youtube-client-id">
+                        <span className="text-slate-300">Client ID</span>
+                        <input
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="youtube-client-id"
+                          onChange={(event) => setYoutubeClientId(event.target.value)}
+                          placeholder="…apps.googleusercontent.com"
+                          required
+                          value={youtubeClientId}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm" htmlFor="youtube-client-secret">
+                        <span className="text-slate-300">Client secret (optional)</span>
+                        <input
+                          autoComplete="new-password"
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="youtube-client-secret"
+                          onChange={(event) => setYoutubeClientSecret(event.target.value)}
+                          type="password"
+                          value={youtubeClientSecret}
+                        />
+                      </label>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
+                          type="submit"
+                        >
+                          Save credentials
+                        </button>
+                        <button
+                          className="rounded-lg border border-cyan-300/30 px-4 py-2 text-sm text-cyan-200 disabled:opacity-40"
+                          disabled={youtubeStatus?.configured !== true}
+                          onClick={() => void connectYouTube()}
+                          type="button"
+                        >
+                          Connect YouTube
+                        </button>
+                      </div>
+                    </form>
+                    <p className="mt-4 break-all text-xs text-slate-500">
+                      Callback: {youtubeStatus?.redirectUri ?? 'Loading…'}
+                    </p>
+                  </section>
+                  <section>
+                    <h2 className="font-semibold">Connected accounts</h2>
+                    <div className="mt-3 grid gap-3">
+                      {accounts.map((account) => (
+                        <article
+                          className="rounded-xl border border-white/10 bg-slate-950 p-5"
+                          key={account.id}
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <h3 className="font-medium">{account.displayName}</h3>
+                              <p className="mt-1 font-mono text-xs text-slate-500">
+                                {account.externalId}
+                              </p>
+                            </div>
+                            <span
+                              className={
+                                account.status === 'connected'
+                                  ? 'text-emerald-200'
+                                  : 'text-amber-200'
+                              }
+                            >
+                              {account.status === 'connected' ? 'Connected' : 'Reconnect required'}
+                            </span>
+                          </div>
+                          <p className="mt-4 text-sm text-slate-300">
+                            Upload:{' '}
+                            {account.capabilities.includes('youtube.video.upload')
+                              ? 'allowed'
+                              : 'not granted'}{' '}
+                            · Identity:{' '}
+                            {account.capabilities.includes('youtube.identity.read')
+                              ? 'available'
+                              : 'not granted'}
+                          </p>
+                          <button
+                            className="mt-4 text-sm text-rose-200 hover:underline"
+                            onClick={() => void removeAccount(account.id)}
+                            type="button"
+                          >
+                            Remove local connection
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                    {accounts.length === 0 && (
+                      <p className="mt-3 text-sm text-slate-400">
+                        No YouTube account is connected.
+                      </p>
+                    )}
+                  </section>
+                  <p className="text-sm leading-6 text-amber-200/80">
+                    Google may limit uploads from unverified API projects. OpenRepurpose shows
+                    granted capabilities but cannot override Google audit or visibility rules.
+                  </p>
+                </div>
+              ) : pathname === '/setup' ? (
+                <div className="space-y-4">
+                  {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
+                  <div className="rounded-xl border border-white/10 bg-slate-950 p-5">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <h2 className="font-semibold">YouTube credentials</h2>
+                        <p className="mt-1 text-sm text-slate-400">
+                          BYO Google OAuth desktop client
+                        </p>
+                      </div>
+                      <span
+                        className={
+                          youtubeStatus?.configured === true ? 'text-emerald-200' : 'text-amber-200'
+                        }
+                      >
+                        {youtubeStatus?.configured === true ? 'Configured' : 'Action required'}
+                      </span>
+                    </div>
+                    <p className="mt-3 break-all text-xs text-slate-500">
+                      {youtubeStatus?.redirectUri}
+                    </p>
+                  </div>
+                </div>
+              ) : pathname === '/media' ? (
                 <div className="space-y-6">
                   <form className="flex flex-col gap-3 sm:flex-row" onSubmit={importMedia}>
                     <label className="sr-only" htmlFor="media-path">

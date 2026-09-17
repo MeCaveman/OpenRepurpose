@@ -22,6 +22,8 @@ function config(bindHost: string, appUrl = 'http://127.0.0.1:3000'): Application
       configDirectory: testDirectory,
       dataDirectory: resolve('test-results/data'),
       databasePath: resolve('test-results/data/openrepurpose.sqlite'),
+      secretKeyPath: resolve(testDirectory, 'secret-vault.key'),
+      secretVaultPath: resolve('test-results/data/secrets.vault.json'),
       sessionKeyPath: keyPath,
       temporaryDirectory: resolve('test-results/temp'),
     },

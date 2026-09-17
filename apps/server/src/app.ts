@@ -5,7 +5,8 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { LogController } from 'fastify';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ApplicationConfig } from '@openrepurpose/shared';
-import { REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
+import { isPlatformError, REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
+import type { YouTubeOAuthService } from '@openrepurpose/youtube';
 import type {
   JobService,
   JobStatus,
@@ -35,6 +36,7 @@ export interface BuildServerOptions {
   readonly mediaRepository?: MediaRepository;
   readonly sessionKey: Buffer;
   readonly staticRoot?: false | string;
+  readonly youtubeOAuthService?: YouTubeOAuthService;
 }
 
 function normalizeHostname(hostname: string): string {
@@ -145,7 +147,9 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       httpOnly: true,
       maxAge: 12 * 60 * 60,
       path: '/',
-      sameSite: 'strict',
+      // OAuth returns through a top-level cross-site GET; Lax carries this HTTP-only binding cookie.
+      // Origin validation plus the per-session CSRF token still protects every API mutation.
+      sameSite: 'lax',
       secure: options.config.appUrl.protocol === 'https:',
     },
   });
@@ -212,6 +216,87 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     },
     async () => ({ service: 'openrepurpose', status: 'ok', version: '0.1.0' }),
   );
+
+  if (options.youtubeOAuthService !== undefined) {
+    const youtube = options.youtubeOAuthService;
+    const safePlatformFailure = (error: unknown, reply: FastifyReply) => {
+      if (!isPlatformError(error)) throw error;
+      return reply
+        .code(error.category === 'configuration' || error.category === 'validation' ? 400 : 502)
+        .send({
+          error: error.publicMessage,
+          code: error.code,
+        });
+    };
+    server.get('/api/accounts', async () => ({
+      accounts: youtube.listAccounts(),
+      youtube: await youtube.credentialStatus(),
+    }));
+    server.get('/api/setup', async () => ({ youtube: await youtube.credentialStatus() }));
+    server.post<{
+      Body: { clientId?: unknown; clientSecret?: unknown };
+    }>('/api/accounts/youtube/credentials', async (request, reply) => {
+      if (
+        typeof request.body?.clientId !== 'string' ||
+        (request.body.clientSecret !== undefined && typeof request.body.clientSecret !== 'string')
+      ) {
+        return reply.code(400).send({
+          error: 'A client ID and optional client secret are required.',
+          code: 'INVALID_YOUTUBE_CREDENTIALS',
+        });
+      }
+      try {
+        await youtube.configureCredentials({
+          clientId: request.body.clientId,
+          ...(request.body.clientSecret === undefined
+            ? {}
+            : { clientSecret: request.body.clientSecret }),
+        });
+        return { youtube: await youtube.credentialStatus() };
+      } catch (error) {
+        return safePlatformFailure(error, reply);
+      }
+    });
+    server.post('/api/accounts/youtube/oauth/start', async (request, reply) => {
+      try {
+        const browserBinding = request.session.get('csrfToken');
+        if (typeof browserBinding !== 'string')
+          return reply.code(403).send({
+            error: 'A local browser session is required.',
+            code: 'YOUTUBE_OAUTH_SESSION_REQUIRED',
+          });
+        return await youtube.beginAuthorization(browserBinding);
+      } catch (error) {
+        return safePlatformFailure(error, reply);
+      }
+    });
+    server.get<{
+      Querystring: { code?: string; error?: string; state?: string };
+    }>('/api/accounts/youtube/oauth/callback', async (request, reply) => {
+      const destination = new URL('/accounts', options.config.appUrl);
+      try {
+        const browserBinding = request.session.get('csrfToken');
+        await youtube.completeAuthorization({
+          ...request.query,
+          ...(typeof browserBinding === 'string' ? { browserBinding } : {}),
+        });
+        destination.searchParams.set('youtube', 'connected');
+      } catch (error) {
+        destination.searchParams.set('youtube', 'error');
+        destination.searchParams.set(
+          'code',
+          isPlatformError(error) ? error.code : 'YOUTUBE_OAUTH_CALLBACK_FAILED',
+        );
+      }
+      return reply.redirect(destination.toString());
+    });
+    server.delete<{ Params: { id: string } }>('/api/accounts/:id', async (request, reply) => {
+      const account = await youtube.removeAccount(request.params.id);
+      return account === undefined
+        ? reply.code(404).send({ error: 'Account not found.', code: 'ACCOUNT_NOT_FOUND' })
+        : { account };
+    });
+  }
 
   if (options.jobService !== undefined) {
     const jobStatuses = new Set<JobStatus>([

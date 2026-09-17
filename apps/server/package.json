@@ -18,7 +18,9 @@
     "@openrepurpose/core": "workspace:*",
     "@openrepurpose/db": "workspace:*",
     "@openrepurpose/media": "workspace:*",
+    "@openrepurpose/local-secrets": "workspace:*",
     "@openrepurpose/platform-sdk": "workspace:*",
+    "@openrepurpose/youtube": "workspace:*",
     "fastify": "5.12.5"
   },
   "devDependencies": {

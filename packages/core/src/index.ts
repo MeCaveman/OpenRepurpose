@@ -44,6 +44,59 @@ export interface MediaRepository {
   list(): readonly MediaAsset[];
 }
 
+export type AccountProvider = 'youtube';
+export type AccountStatus = 'connected' | 'reauthorization_required';
+export type AccountCapability = 'youtube.identity.read' | 'youtube.video.upload';
+
+/** Browser-safe account metadata. OAuth credentials and tokens live only in SecretStore. */
+export interface ConnectedAccount {
+  readonly capabilities: readonly AccountCapability[];
+  readonly connectedAt: Date;
+  readonly displayName: string;
+  readonly externalId: string;
+  readonly id: string;
+  readonly provider: AccountProvider;
+  readonly status: AccountStatus;
+  readonly updatedAt: Date;
+}
+
+export interface UpsertConnectedAccountInput {
+  readonly capabilities: readonly AccountCapability[];
+  readonly connectedAt: Date;
+  readonly displayName: string;
+  readonly externalId: string;
+  readonly id: string;
+  readonly provider: AccountProvider;
+  readonly status: AccountStatus;
+  readonly updatedAt: Date;
+}
+
+export interface AccountRepository {
+  findById(id: string): ConnectedAccount | undefined;
+  list(): readonly ConnectedAccount[];
+  remove(id: string): ConnectedAccount | undefined;
+  setStatus(id: string, status: AccountStatus, updatedAt: Date): boolean;
+  setProviderStatus(provider: AccountProvider, status: AccountStatus, updatedAt: Date): number;
+  upsert(input: UpsertConnectedAccountInput): ConnectedAccount;
+}
+
+export interface OAuthAuthorizationRequest {
+  readonly bindingHash: string;
+  readonly createdAt: Date;
+  readonly expiresAt: Date;
+  readonly id: string;
+  readonly provider: AccountProvider;
+  readonly redirectUri: string;
+  readonly stateHash: string;
+}
+
+/** Persistent, one-time OAuth state boundary so callbacks do not rely on process memory. */
+export interface OAuthAuthorizationRequestRepository {
+  consumeByStateHash(stateHash: string, bindingHash: string): OAuthAuthorizationRequest | undefined;
+  create(request: OAuthAuthorizationRequest): void;
+  deleteExpired(now: Date): readonly OAuthAuthorizationRequest[];
+}
+
 export interface ImportMediaResult {
   readonly asset: MediaAsset;
   readonly duplicate: boolean;

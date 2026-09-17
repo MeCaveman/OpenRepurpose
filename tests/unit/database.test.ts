@@ -21,6 +21,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0001_initial_settings' },
       { id: '0002_media_assets' },
       { id: '0003_persistent_jobs' },
+      { id: '0004_youtube_oauth' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {

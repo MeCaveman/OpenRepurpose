@@ -6,11 +6,13 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 const expectedPackages = new Map([
+  ['integrations/youtube', '@openrepurpose/youtube'],
   ['apps/cli', '@openrepurpose/cli'],
   ['apps/server', '@openrepurpose/server'],
   ['apps/web', '@openrepurpose/web'],
   ['packages/core', '@openrepurpose/core'],
   ['packages/db', '@openrepurpose/db'],
+  ['packages/local-secrets', '@openrepurpose/local-secrets'],
   ['packages/media', '@openrepurpose/media'],
   ['packages/platform-sdk', '@openrepurpose/platform-sdk'],
   ['packages/shared', '@openrepurpose/shared'],

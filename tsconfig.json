@@ -2,11 +2,13 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "files": [],
   "references": [
+    { "path": "./integrations/youtube" },
     { "path": "./apps/cli" },
     { "path": "./apps/server" },
     { "path": "./apps/web" },
     { "path": "./packages/core" },
     { "path": "./packages/db" },
+    { "path": "./packages/local-secrets" },
     { "path": "./packages/media" },
     { "path": "./packages/platform-sdk" },
     { "path": "./packages/shared" },

@@ -100,6 +100,11 @@ LAN/VPS exposure remains disabled until its roadmap packet adds authentication a
 The first server start generates a persistent encrypted-session key at `SESSION_KEY_PATH` (or the
 host-native configuration directory by default).
 
+YouTube BYO OAuth credential setup is documented in
+[`docs/platform-setup/youtube.md`](docs/platform-setup/youtube.md). Client credentials and refresh
+tokens are encrypted in the local secret vault configured by `SECRET_VAULT_PATH` and
+`SECRET_KEY_PATH`.
+
 ## Branch convention
 
 `main` is the stable development branch. Future feature branches should use names such as `feature/v0.1-repository-tooling`, `feature/v0.1-database`, and `feature/v0.1-media`.

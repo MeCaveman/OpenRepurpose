@@ -15,7 +15,8 @@
     "@openrepurpose/shared": "workspace:*",
     "@openrepurpose/core": "workspace:*",
     "@openrepurpose/media": "workspace:*",
-    "commander": "14.0.2",
+    "@openrepurpose/local-secrets": "workspace:*",
+    "@openrepurpose/youtube": "workspace:*",
     "commander": "14.0.2"
   },
   "devDependencies": {

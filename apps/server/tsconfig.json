@@ -12,6 +12,8 @@
     { "path": "../../packages/core" },
     { "path": "../../packages/db" },
     { "path": "../../packages/media" },
-    { "path": "../../packages/platform-sdk" }
+    { "path": "../../packages/platform-sdk" },
+    { "path": "../../packages/local-secrets" },
+    { "path": "../../integrations/youtube" }
   ]
 }

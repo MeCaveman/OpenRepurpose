@@ -4,8 +4,10 @@ import { JobRunner, JobService, MediaImportService } from '@openrepurpose/core';
 import {
   openDatabase,
   runMigrations,
+  SqliteAccountRepository,
   SqliteJobRepository,
   SqliteMediaRepository,
+  SqliteOAuthAuthorizationRequestRepository,
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
@@ -14,6 +16,8 @@ import {
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import { redactLogText } from '@openrepurpose/platform-sdk';
+import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
+import { YouTubeOAuthService } from '@openrepurpose/youtube';
 import { assertLocalOnly, buildServer } from './app.js';
 import { loadOrCreateSessionKey } from './session-key.js';
 
@@ -25,6 +29,16 @@ export async function startServer(): Promise<void> {
   const executables = await discoverMediaExecutables();
   const mediaRepository = new SqliteMediaRepository(database);
   const jobRepository = new SqliteJobRepository(database);
+  const secretStore = new EncryptedFileSecretStore(
+    config.paths.secretVaultPath,
+    config.paths.secretKeyPath,
+  );
+  const youtubeOAuthService = new YouTubeOAuthService(
+    new SqliteAccountRepository(database),
+    new SqliteOAuthAuthorizationRequestRepository(database),
+    secretStore,
+    config.appUrl,
+  );
   const jobService = new JobService(jobRepository);
   const jobRunner = new JobRunner(jobRepository, [], config.jobRunner);
   jobRunner.start();
@@ -42,6 +56,7 @@ export async function startServer(): Promise<void> {
     logger: true,
     sessionKey: loadOrCreateSessionKey(config.paths.sessionKeyPath),
     mediaRepository,
+    youtubeOAuthService,
     ...(mediaImportService === undefined ? {} : { mediaImportService }),
   });
   let closing: Promise<void> | undefined;

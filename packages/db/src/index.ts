@@ -5,6 +5,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { desc, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-sqlite';
 import type {
+  AccountCapability,
+  AccountProvider,
+  AccountRepository,
+  AccountStatus,
+  ConnectedAccount,
   EnqueueJobInput,
   EnqueueJobResult,
   Job,
@@ -15,6 +20,9 @@ import type {
   JsonValue,
   MediaAsset,
   MediaRepository,
+  OAuthAuthorizationRequest,
+  OAuthAuthorizationRequestRepository,
+  UpsertConnectedAccountInput,
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
 import type { Migration } from './migrations/types.js';
@@ -22,7 +30,14 @@ import { mediaAssets, settings } from './schema.js';
 
 export { migrations } from './migrations/index.js';
 export type { Migration } from './migrations/index.js';
-export { jobAttempts, jobs, mediaAssets, settings } from './schema.js';
+export {
+  accounts,
+  jobAttempts,
+  jobs,
+  mediaAssets,
+  oauthAuthorizationRequests,
+  settings,
+} from './schema.js';
 
 export interface OpenDatabaseOptions {
   readonly createParentDirectory?: boolean;
@@ -159,6 +174,220 @@ export class SqliteMediaRepository implements MediaRepository {
         ...(row.frameRateMilli === null ? {} : { frameRate: row.frameRateMilli / 1000 }),
       },
     };
+  }
+}
+
+interface RawAccountRow {
+  readonly capabilities_json: string;
+  readonly connected_at: number;
+  readonly display_name: string;
+  readonly external_id: string;
+  readonly id: string;
+  readonly provider: AccountProvider;
+  readonly status: AccountStatus;
+  readonly updated_at: number;
+}
+
+function accountFromRow(row: RawAccountRow): ConnectedAccount {
+  return {
+    id: row.id,
+    provider: row.provider,
+    externalId: row.external_id,
+    displayName: row.display_name,
+    status: row.status,
+    capabilities: JSON.parse(row.capabilities_json) as AccountCapability[],
+    connectedAt: new Date(row.connected_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+/** SQLite account metadata repository. Secret values are deliberately stored elsewhere. */
+export class SqliteAccountRepository implements AccountRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public findById(id: string): ConnectedAccount | undefined {
+    const row = this.database.client.prepare('SELECT * FROM accounts WHERE id = ?').get(id) as
+      RawAccountRow | undefined;
+    return row === undefined ? undefined : accountFromRow(row);
+  }
+
+  public list(): readonly ConnectedAccount[] {
+    return (
+      this.database.client
+        .prepare('SELECT * FROM accounts ORDER BY connected_at DESC, id DESC')
+        .all() as unknown as RawAccountRow[]
+    ).map(accountFromRow);
+  }
+
+  public remove(id: string): ConnectedAccount | undefined {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const row = client.prepare('SELECT * FROM accounts WHERE id = ?').get(id) as
+        RawAccountRow | undefined;
+      if (row !== undefined) client.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+      client.exec('COMMIT;');
+      return row === undefined ? undefined : accountFromRow(row);
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  public setProviderStatus(
+    provider: AccountProvider,
+    status: AccountStatus,
+    updatedAt: Date,
+  ): number {
+    const result = this.database.client
+      .prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE provider = ?')
+      .run(status, updatedAt.getTime(), provider);
+    return Number(result.changes);
+  }
+
+  public setStatus(id: string, status: AccountStatus, updatedAt: Date): boolean {
+    const result = this.database.client
+      .prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE id = ?')
+      .run(status, updatedAt.getTime(), id);
+    return Number(result.changes) === 1;
+  }
+
+  public upsert(input: UpsertConnectedAccountInput): ConnectedAccount {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const existing = client
+        .prepare('SELECT id, connected_at FROM accounts WHERE provider = ? AND external_id = ?')
+        .get(input.provider, input.externalId) as { connected_at: number; id: string } | undefined;
+      const id = existing?.id ?? input.id;
+      const connectedAt =
+        existing === undefined ? input.connectedAt : new Date(existing.connected_at);
+      if (existing === undefined) {
+        client
+          .prepare(
+            `INSERT INTO accounts (
+              id, provider, external_id, display_name, status, capabilities_json,
+              connected_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            id,
+            input.provider,
+            input.externalId,
+            input.displayName,
+            input.status,
+            JSON.stringify(input.capabilities),
+            connectedAt.getTime(),
+            input.updatedAt.getTime(),
+          );
+      } else {
+        client
+          .prepare(
+            `UPDATE accounts SET display_name = ?, status = ?, capabilities_json = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            input.displayName,
+            input.status,
+            JSON.stringify(input.capabilities),
+            input.updatedAt.getTime(),
+            id,
+          );
+      }
+      const row = client
+        .prepare('SELECT * FROM accounts WHERE id = ?')
+        .get(id) as unknown as RawAccountRow;
+      client.exec('COMMIT;');
+      return accountFromRow(row);
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+}
+
+interface RawOAuthAuthorizationRequestRow {
+  readonly binding_hash: string;
+  readonly created_at: number;
+  readonly expires_at: number;
+  readonly id: string;
+  readonly provider: AccountProvider;
+  readonly redirect_uri: string;
+  readonly state_hash: string;
+}
+
+function oauthRequestFromRow(row: RawOAuthAuthorizationRequestRow): OAuthAuthorizationRequest {
+  return {
+    id: row.id,
+    provider: row.provider,
+    stateHash: row.state_hash,
+    bindingHash: row.binding_hash,
+    redirectUri: row.redirect_uri,
+    expiresAt: new Date(row.expires_at),
+    createdAt: new Date(row.created_at),
+  };
+}
+
+/** Atomic one-time OAuth request storage used to validate state across restarts/processes. */
+export class SqliteOAuthAuthorizationRequestRepository implements OAuthAuthorizationRequestRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public create(request: OAuthAuthorizationRequest): void {
+    this.database.client
+      .prepare(
+        `INSERT INTO oauth_authorization_requests (
+          id, provider, state_hash, binding_hash, redirect_uri, expires_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        request.id,
+        request.provider,
+        request.stateHash,
+        request.bindingHash,
+        request.redirectUri,
+        request.expiresAt.getTime(),
+        request.createdAt.getTime(),
+      );
+  }
+
+  public consumeByStateHash(
+    stateHash: string,
+    bindingHash: string,
+  ): OAuthAuthorizationRequest | undefined {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const row = client
+        .prepare(
+          'SELECT * FROM oauth_authorization_requests WHERE state_hash = ? AND binding_hash = ?',
+        )
+        .get(stateHash, bindingHash) as RawOAuthAuthorizationRequestRow | undefined;
+      if (row !== undefined)
+        client.prepare('DELETE FROM oauth_authorization_requests WHERE id = ?').run(row.id);
+      client.exec('COMMIT;');
+      return row === undefined ? undefined : oauthRequestFromRow(row);
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  public deleteExpired(now: Date): readonly OAuthAuthorizationRequest[] {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const rows = client
+        .prepare('SELECT * FROM oauth_authorization_requests WHERE expires_at <= ?')
+        .all(now.getTime()) as unknown as RawOAuthAuthorizationRequestRow[];
+      client
+        .prepare('DELETE FROM oauth_authorization_requests WHERE expires_at <= ?')
+        .run(now.getTime());
+      client.exec('COMMIT;');
+      return rows.map(oauthRequestFromRow);
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
   }
 }
 

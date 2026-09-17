@@ -199,12 +199,18 @@ importers:
       '@openrepurpose/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@openrepurpose/local-secrets':
+        specifier: workspace:*
+        version: link:../../packages/local-secrets
       '@openrepurpose/media':
         specifier: workspace:*
         version: link:../../packages/media
       '@openrepurpose/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@openrepurpose/youtube':
+        specifier: workspace:*
+        version: link:../../integrations/youtube
       commander:
         specifier: 14.0.2
         version: 14.0.2
@@ -227,6 +233,9 @@ importers:
       '@openrepurpose/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@openrepurpose/local-secrets':
+        specifier: workspace:*
+        version: link:../../packages/local-secrets
       '@openrepurpose/media':
         specifier: workspace:*
         version: link:../../packages/media
@@ -236,6 +245,9 @@ importers:
       '@openrepurpose/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@openrepurpose/youtube':
+        specifier: workspace:*
+        version: link:../../integrations/youtube
       fastify:
         specifier: 5.12.5
         version: 5.12.5
@@ -278,6 +290,19 @@ importers:
         specifier: 8.3.0
         version: 8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)
 
+  integrations/youtube:
+    dependencies:
+      '@openrepurpose/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@openrepurpose/platform-sdk':
+        specifier: workspace:*
+        version: link:../../packages/platform-sdk
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.5
+        version: 24.13.5
+
   packages/core:
     devDependencies:
       '@types/node':
@@ -292,6 +317,16 @@ importers:
       drizzle-orm:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4(zod@4.6.5)
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.5
+        version: 24.13.5
+
+  packages/local-secrets:
+    dependencies:
+      '@openrepurpose/platform-sdk':
+        specifier: workspace:*
+        version: link:../platform-sdk
     devDependencies:
       '@types/node':
         specifier: 24.13.5

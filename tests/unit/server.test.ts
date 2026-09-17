@@ -18,6 +18,8 @@ const config: ApplicationConfig = {
     configDirectory: resolve('test-results/config'),
     dataDirectory: resolve('test-results/data'),
     databasePath: resolve('test-results/data/openrepurpose.sqlite'),
+    secretKeyPath: resolve('test-results/config/secret-vault.key'),
+    secretVaultPath: resolve('test-results/data/secrets.vault.json'),
     sessionKeyPath: resolve('test-results/config/session.key'),
     temporaryDirectory: resolve('test-results/temp'),
   },

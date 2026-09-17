@@ -10,6 +10,8 @@ export interface ApplicationPaths {
   readonly configDirectory: string;
   readonly dataDirectory: string;
   readonly databasePath: string;
+  readonly secretKeyPath: string;
+  readonly secretVaultPath: string;
   readonly sessionKeyPath: string;
   readonly temporaryDirectory: string;
 }
@@ -78,6 +80,10 @@ export function resolveApplicationPaths(
     dataDirectory,
     databasePath:
       environment.DATABASE_URL ?? runtime.path.resolve(dataDirectory, 'openrepurpose.sqlite'),
+    secretKeyPath:
+      environment.SECRET_KEY_PATH ?? runtime.path.resolve(configDirectory, 'secret-vault.key'),
+    secretVaultPath:
+      environment.SECRET_VAULT_PATH ?? runtime.path.resolve(dataDirectory, 'secrets.vault.json'),
     sessionKeyPath:
       environment.SESSION_KEY_PATH ?? runtime.path.resolve(configDirectory, 'session.key'),
     temporaryDirectory:
@@ -97,6 +103,8 @@ export function loadApplicationConfig(
       APP_DATA_DIR: absolutePath.optional(),
       APP_TEMP_DIR: absolutePath.optional(),
       DATABASE_URL: absolutePath.optional(),
+      SECRET_KEY_PATH: absolutePath.optional(),
+      SECRET_VAULT_PATH: absolutePath.optional(),
       SESSION_KEY_PATH: absolutePath.optional(),
       BIND_HOST: z.string().trim().min(1).default('127.0.0.1'),
       PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
@@ -114,6 +122,23 @@ export function loadApplicationConfig(
     })
     .parse(environment);
   const defaults = resolveApplicationPaths(environment, runtime);
+  const paths: ApplicationPaths = {
+    configDirectory: parsed.APP_CONFIG_DIR ?? defaults.configDirectory,
+    dataDirectory: parsed.APP_DATA_DIR ?? defaults.dataDirectory,
+    databasePath: parsed.DATABASE_URL ?? defaults.databasePath,
+    secretKeyPath: parsed.SECRET_KEY_PATH ?? defaults.secretKeyPath,
+    secretVaultPath: parsed.SECRET_VAULT_PATH ?? defaults.secretVaultPath,
+    sessionKeyPath: parsed.SESSION_KEY_PATH ?? defaults.sessionKeyPath,
+    temporaryDirectory: parsed.APP_TEMP_DIR ?? defaults.temporaryDirectory,
+  };
+  const sensitivePaths = [paths.secretKeyPath, paths.secretVaultPath, paths.sessionKeyPath].map(
+    (path) => {
+      const resolved = runtime.path.resolve(path);
+      return runtime.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    },
+  );
+  if (new Set(sensitivePaths).size !== sensitivePaths.length)
+    throw new Error('SESSION_KEY_PATH, SECRET_KEY_PATH, and SECRET_VAULT_PATH must be distinct.');
 
   return {
     appUrl: new URL(parsed.APP_URL),
@@ -128,13 +153,7 @@ export function loadApplicationConfig(
       maxRetryDelayMs: parsed.JOB_RETRY_MAX_MS,
       pollIntervalMs: parsed.JOB_POLL_INTERVAL_MS,
     },
-    paths: {
-      configDirectory: parsed.APP_CONFIG_DIR ?? defaults.configDirectory,
-      dataDirectory: parsed.APP_DATA_DIR ?? defaults.dataDirectory,
-      databasePath: parsed.DATABASE_URL ?? defaults.databasePath,
-      sessionKeyPath: parsed.SESSION_KEY_PATH ?? defaults.sessionKeyPath,
-      temporaryDirectory: parsed.APP_TEMP_DIR ?? defaults.temporaryDirectory,
-    },
+    paths,
     port: parsed.PORT,
   };
 }

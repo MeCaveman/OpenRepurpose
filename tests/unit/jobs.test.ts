@@ -33,6 +33,8 @@ function testConfig(directory: string): ApplicationConfig {
       configDirectory: join(directory, 'config'),
       dataDirectory: directory,
       databasePath: join(directory, 'openrepurpose.sqlite'),
+      secretKeyPath: join(directory, 'config', 'secret-vault.key'),
+      secretVaultPath: join(directory, 'secrets.vault.json'),
       sessionKeyPath: join(directory, 'config', 'session.key'),
       temporaryDirectory: join(directory, 'temp'),
     },

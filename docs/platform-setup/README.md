@@ -1,9 +1,5 @@
 # Platform setup
 
-Platform-specific developer-app setup instructions will be added here as integrations are implemented, including:
+- [YouTube OAuth](youtube.md)
 
-- YouTube
-- TikTok
-- Meta
-- Twitch
-- Kick
+Setup guides for TikTok, Meta, Twitch, and Kick will be added in their owning roadmap versions.
