@@ -90,9 +90,15 @@ pnpm build
 pnpm test:e2e
 ```
 
-`pnpm dev` starts the current app development processes. At this packet boundary the web app is a
-minimal Vite smoke page and the server/CLI processes only watch their empty composition roots;
-runtime behavior arrives in the roadmap packets that own it.
+`pnpm dev` starts the Fastify API on `127.0.0.1:3000`, the Vite UI on `127.0.0.1:5173`, and the
+current CLI watcher. Vite proxies `/api` to Fastify. `pnpm build` followed by `pnpm start` runs the
+production server and serves the built React UI from the same loopback origin.
+
+Runtime paths, port, and browser origins are configured through the variables documented in
+`.env.example`. Packet 3 intentionally rejects non-loopback `BIND_HOST` and public `APP_URL` values;
+LAN/VPS exposure remains disabled until its roadmap packet adds authentication and proxy trust.
+The first server start generates a persistent encrypted-session key at `SESSION_KEY_PATH` (or the
+host-native configuration directory by default).
 
 ## Branch convention
 

@@ -3,4 +3,10 @@ packages:
   - packages/*
   - integrations/*
 
+allowBuilds:
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - fastify@5.12.5
+
 saveExact: true

@@ -5,6 +5,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@openrepurpose/db': fileURLToPath(new URL('./packages/db/src/index.ts', import.meta.url)),
+      '@openrepurpose/server': fileURLToPath(
+        new URL('./apps/server/src/index.ts', import.meta.url),
+      ),
       '@openrepurpose/shared': fileURLToPath(
         new URL('./packages/shared/src/index.ts', import.meta.url),
       ),

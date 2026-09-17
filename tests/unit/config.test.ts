@@ -26,6 +26,9 @@ describe('application configuration', () => {
     );
     expect(paths.configDirectory).toBe('C:\\Users\\Ada\\AppData\\Roaming\\OpenRepurpose');
     expect(paths.dataDirectory).toBe('C:\\Users\\Ada\\AppData\\Local\\OpenRepurpose');
+    expect(paths.sessionKeyPath).toBe(
+      'C:\\Users\\Ada\\AppData\\Roaming\\OpenRepurpose\\session.key',
+    );
   });
 
   it('uses XDG paths on Linux and accepts absolute deployment overrides', () => {
@@ -44,11 +47,24 @@ describe('application configuration', () => {
         DATABASE_URL: '/data/database.sqlite',
         APP_URL: 'https://repurpose.example.test',
         BIND_HOST: '0.0.0.0',
+        DEV_SERVER_URL: 'http://127.0.0.1:5173',
+        PORT: '8080',
+        SESSION_KEY_PATH: '/config/custom-session.key',
       },
       linuxRuntime,
     );
     expect(config.appUrl.origin).toBe('https://repurpose.example.test');
     expect(config.bindHost).toBe('0.0.0.0');
+    expect(config.developmentServerUrl?.origin).toBe('http://127.0.0.1:5173');
+    expect(config.paths.sessionKeyPath).toBe('/config/custom-session.key');
+    expect(config.port).toBe(8080);
+  });
+
+  it('rejects invalid network configuration', () => {
+    expect(() => loadApplicationConfig({ PORT: '70000' }, linuxRuntime)).toThrow();
+    expect(() => loadApplicationConfig({ APP_URL: 'file:///tmp/app' }, linuxRuntime)).toThrow(
+      'must use http or https',
+    );
   });
 
   it('rejects relative path overrides', () => {

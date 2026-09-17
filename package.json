@@ -17,8 +17,9 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "verify": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check && corepack pnpm test && corepack pnpm build && corepack pnpm test:e2e"
+    "test:e2e": "corepack pnpm --filter @openrepurpose/web build && playwright test",
+    "verify": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check && corepack pnpm test && corepack pnpm build && corepack pnpm test:e2e",
+    "start": "corepack pnpm --filter @openrepurpose/server start"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

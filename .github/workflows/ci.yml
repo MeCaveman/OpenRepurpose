@@ -57,5 +57,13 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Run Playwright shell
+      - name: Install Playwright browser (Linux)
+        if: runner.os == 'Linux'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install Playwright browser (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm exec playwright install chromium
+
+      - name: Run Playwright user journey
         run: pnpm test:e2e
