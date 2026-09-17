@@ -25,35 +25,33 @@ It must not depend on an OpenRepurpose-hosted backend.
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `AGENTS.md` | Permanent repository rules Codex should always follow |
-| `MODEL_USAGE_GUIDE.md` | Which Codex model/effort to use and how to conserve usage |
-| `docs/roadmap/v0.1.md` | Foundation + usable YouTube/local MVP |
-| `docs/roadmap/v0.2.md` | TikTok publishing |
-| `docs/roadmap/v0.3.md` | Instagram + Facebook publishing |
-| `docs/roadmap/v0.4.md` | Remote/source automation, especially YouTube |
-| `docs/roadmap/v0.5.md` | Scheduling + reliable automation + visual workflow UX |
-| `docs/roadmap/v0.6.md` | FFmpeg transformation pipeline |
-| `docs/roadmap/v0.7.md` | Local transcription and subtitles |
-| `docs/roadmap/v0.8.md` | Twitch, Kick, OBS, streamer workflows |
-| `docs/roadmap/v0.9.md` | MCP, public local API, webhooks, headless/server mode |
+| File                   | Purpose                                                              |
+| ---------------------- | -------------------------------------------------------------------- |
+| `AGENTS.md`            | Permanent repository rules Codex should always follow                |
+| `MODEL_USAGE_GUIDE.md` | Which Codex model/effort to use and how to conserve usage            |
+| `docs/roadmap/v0.1.md` | Foundation + usable YouTube/local MVP                                |
+| `docs/roadmap/v0.2.md` | TikTok publishing                                                    |
+| `docs/roadmap/v0.3.md` | Instagram + Facebook publishing                                      |
+| `docs/roadmap/v0.4.md` | Remote/source automation, especially YouTube                         |
+| `docs/roadmap/v0.5.md` | Scheduling + reliable automation + visual workflow UX                |
+| `docs/roadmap/v0.6.md` | FFmpeg transformation pipeline                                       |
+| `docs/roadmap/v0.7.md` | Local transcription and subtitles                                    |
+| `docs/roadmap/v0.8.md` | Twitch, Kick, OBS, streamer workflows                                |
+| `docs/roadmap/v0.9.md` | MCP, public local API, webhooks, headless/server mode                |
 | `docs/roadmap/v1.0.md` | Stable plugin SDK, packaging, security, migrations, docs and release |
 
-## How to use with Codex Desktop
+## Manual Codex workflow
 
-1. Read `AGENTS.md`, `docs/roadmap/current-version.md`, and `docs/progress/current-version.md` before implementing a work packet.
-2. Open the repository in ChatGPT Desktop/Codex.
-3. Start development with `docs/roadmap/v0.1.md`.
-4. Do **one work packet per Codex turn**. Do not ask Codex to implement an entire version in one turn.
-5. At the end of every packet, Codex must update `docs/progress/vX.Y.md`.
-6. When starting a fresh Codex chat, give it only:
-   - root `AGENTS.md`;
-   - the current version file;
-   - `docs/progress/vX.Y.md`;
-   - any source file directly relevant to the next packet.
-7. Merge/commit after a packet is green.
-8. Move to the next version only when its release gate passes.
+1. Open the OpenRepurpose repository in Codex Chat.
+2. Select the recommended model/reasoning for the current packet.
+3. Tell Codex to read:
+   - `AGENTS.md`
+   - `docs/roadmap/<current-version>.md`
+   - `docs/progress/<current-version>.md`
+4. Implement exactly one packet.
+5. Run its verification commands.
+6. Update the progress file.
+7. Start a new Codex chat for the next packet when appropriate.
 
 ## Recommended model policy
 
@@ -72,7 +70,29 @@ The roadmap documents describe planned functionality. Development begins with `d
 
 ### Implemented
 
-This repository currently contains planning documentation and the initial project structure only. No application features have been implemented.
+The v0.1 workspace/tooling foundation is present. Application features begin in later v0.1 packets.
+
+## Development
+
+Prerequisites:
+
+- Node.js 24.21.0 (the pinned Active LTS release);
+- pnpm 12.4.2.
+
+Install and verify the workspace from Windows PowerShell or a Linux shell:
+
+```text
+pnpm install
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+pnpm test:e2e
+```
+
+`pnpm dev` starts the current app development processes. At this packet boundary the web app is a
+minimal Vite smoke page and the server/CLI processes only watch their empty composition roots;
+runtime behavior arrives in the roadmap packets that own it.
 
 ## Branch convention
 

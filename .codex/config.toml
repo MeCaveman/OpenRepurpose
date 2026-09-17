@@ -1,9 +1,0 @@
-# Project defaults for bounded roadmap tasks. The runners pass explicit overrides
-# for every invocation; this file documents the safe baseline.
-model = "gpt-5.6-terra"
-model_reasoning_effort = "medium"
-
-[roadmap]
-manifest = "scripts/roadmap.json"
-stop_marker = "ROADMAP_STOP:"
-completion_format = "- Packet N — packet title"

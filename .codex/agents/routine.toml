@@ -1,4 +1,0 @@
-role = "routine"
-model = "gpt-5.6-luna"
-reasoning_effort = "medium"
-description = "Tests, documentation, and mechanical changes."

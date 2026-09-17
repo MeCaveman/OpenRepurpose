@@ -1,0 +1,22 @@
+node_modules/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+pnpm-lock.yaml
+
+# Preserve repository governance and release-planning prose verbatim.
+AGENTS.md
+MODEL_USAGE_GUIDE.md
+docs/architecture/
+docs/roadmap/
+docs/progress/v0.2.md
+docs/progress/v0.3.md
+docs/progress/v0.4.md
+docs/progress/v0.5.md
+docs/progress/v0.6.md
+docs/progress/v0.7.md
+docs/progress/v0.8.md
+docs/progress/v0.9.md
+docs/progress/v1.0.md

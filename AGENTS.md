@@ -87,6 +87,89 @@ Do not create packages just to satisfy this diagram. Add them when they have a r
 
 ## 4. Architecture rules
 
+### Dependency direction and separation of concerns
+
+External-facing layers call the application layer; they do not perform business operations directly:
+
+```text
+CLI / Web UI / REST API / schedulers / event triggers
+                         |
+                         v
+                 Application services
+                         |
+                         v
+                   Domain / core
+                         ^
+                         |
+       Infrastructure implementations of core contracts
+```
+
+- UI components, CLI commands, and API route handlers translate input/output and call application services. They must not contain business logic.
+- Integrations provide capabilities through explicit adapters. They must not control workflows directly.
+- Database access stays behind repositories or data-access contracts.
+- Core and application code depend on contracts. Filesystems, databases, schedulers, queues, platform APIs, and other infrastructure implement those contracts.
+- Keep persistence records separate from domain/application models where practical. Database structure must not dictate the application architecture.
+
+### Modular feature boundaries
+
+Treat each major capability as a cohesive module, including publishing, media, metadata, workflows, scheduling, automation, notifications, analytics, authentication, accounts, storage, logging, configuration, webhooks, monitoring, and plugins as they are introduced.
+
+A feature should expose only the public contracts, application services, domain types, infrastructure adapters, and tests that consumers need. Unrelated modules must not import its internal implementation details.
+
+New capabilities should normally be added by implementing or extending a focused interface, service, handler, processor, adapter, provider, or module. Avoid:
+
+- direct imports between unrelated feature modules;
+- large global service objects;
+- central constructors or registries that know every feature;
+- growing switch statements or `if`/`else` chains for providers, triggers, processors, job types, or workflow steps.
+
+Use composition, dependency injection, and modular registration where practical. Adding a provider or feature may register a new implementation, but should not require unrelated modules to know it exists.
+
+Public interfaces and event contracts change deliberately. Preserve backward compatibility between modules when practical; internal implementations may evolve independently.
+
+### Replaceable local infrastructure
+
+Start with the simplest local implementation that satisfies current requirements: SQLite, the local filesystem, an in-process event bus, and a local background job runner/queue. Do not add distributed infrastructure preemptively.
+
+Define narrow contracts so infrastructure can be replaced without rewriting application logic. Representative relationships include:
+
+```text
+SQLiteRepository implements Repository
+LocalJobQueue implements JobQueue
+LocalEventBus implements EventBus
+LocalFileStorage implements StorageProvider
+YouTubeAdapter implements PublishingProvider
+```
+
+These examples do not authorize speculative PostgreSQL, Redis, cloud-storage, or distributed-worker implementations. Add alternatives only when a real requirement justifies them.
+
+All configuration loading and environment-variable access must be centralized and typed. Cross-cutting concerns such as logging, retries, error handling, rate limiting, authentication, telemetry, and caching must be reusable rather than reimplemented independently by every feature.
+
+### Reusable execution and event extension points
+
+Represent long-running and user-triggered operations as commands/jobs handled by application services. CLI, UI, API, schedulers, integrations, and event handlers all use the same execution path.
+
+Important actions may emit typed internal events through an `EventBus` contract so later modules can react without changing the producer. Expected event families include:
+
+```text
+media.downloaded
+media.processed
+upload.started
+upload.completed
+upload.failed
+job.created
+job.completed
+workflow.completed
+```
+
+Event names and payload contracts must be deliberate, testable, and versionable where compatibility requires it. Do not use events to hide required synchronous invariants or create an untraceable dependency graph.
+
+### Extension-point and boundary tests
+
+The architecture must make it clear where to add a publishing platform, media processor, job type, trigger, workflow step, storage backend, notification provider, API endpoint, UI feature, or new feature module.
+
+Test important boundaries with mocks/fakes and contract tests so infrastructure implementations and feature modules can change independently. Prefer the simplest implementation that preserves these boundaries. Do not predict or implement future features merely to prove extensibility.
+
 ### Shared core
 The web UI and CLI must call the same application services. Never duplicate business logic in route handlers, React components, or CLI commands.
 
