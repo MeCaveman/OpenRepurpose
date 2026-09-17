@@ -133,17 +133,36 @@ export const workflows = sqliteTable(
     name: text('name').notNull(),
     enabled: integer('enabled', { mode: 'boolean' }).notNull(),
     sourceDirectory: text('source_directory').notNull(),
-    accountId: text('account_id')
-      .notNull()
-      .references(() => accounts.id),
     titleTemplate: text('title_template').notNull(),
     descriptionTemplate: text('description_template').notNull(),
-    privacy: text('privacy', { enum: ['private', 'public', 'unlisted'] }).notNull(),
-    category: text('category'),
+    failurePolicy: text('failure_policy', { enum: ['best_effort'] }).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('workflows_enabled_idx').on(table.enabled)],
+);
+
+export const workflowDestinations = sqliteTable(
+  'workflow_destinations',
+  {
+    workflowId: text('workflow_id')
+      .notNull()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    destinationId: text('destination_id', { enum: ['youtube', 'tiktok'] }).notNull(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    position: integer('position').notNull(),
+    configurationJson: text('configuration_json').notNull(),
+  },
+  (table) => [
+    uniqueIndex('workflow_destinations_workflow_destination_idx').on(
+      table.workflowId,
+      table.destinationId,
+    ),
+    uniqueIndex('workflow_destinations_workflow_position_idx').on(table.workflowId, table.position),
+    index('workflow_destinations_account_idx').on(table.accountId),
+  ],
 );
 
 export const sourceCursors = sqliteTable(

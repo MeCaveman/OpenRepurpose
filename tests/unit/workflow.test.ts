@@ -107,4 +107,111 @@ describe('watched-folder workflows', () => {
       metadata: { title: 'episode one / Daily upload', privacy: 'unlisted' },
     });
   });
+
+  it('persists destination configuration and creates one idempotent job per destination', () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    const accounts = new SqliteAccountRepository(database);
+    accounts.upsert({
+      id: 'youtube-account',
+      provider: 'youtube',
+      externalId: 'youtube-channel',
+      displayName: 'YouTube Creator',
+      status: 'connected',
+      capabilities: ['youtube.video.upload'],
+      connectedAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    accounts.upsert({
+      id: 'tiktok-account',
+      provider: 'tiktok',
+      externalId: 'tiktok-creator',
+      displayName: 'TikTok Creator',
+      status: 'connected',
+      capabilities: ['tiktok.video.publish'],
+      connectedAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const jobs = new JobService(new SqliteJobRepository(database), () => new Date(1_000));
+    const repository = new SqliteWorkflowRepository(database);
+    const workflows = new WorkflowService(repository, jobs, () => new Date(1_000));
+    const workflow = workflows.create({
+      name: 'Both destinations',
+      sourceDirectory: 'C:\\Media',
+      titleTemplate: '{{file.stem}}',
+      descriptionTemplate: 'Published by {{workflow.name}}',
+      destinations: [
+        {
+          destinationId: 'youtube',
+          accountId: 'youtube-account',
+          privacy: 'unlisted',
+          category: '22',
+        },
+        {
+          destinationId: 'tiktok',
+          accountId: 'tiktok-account',
+          privacyLevel: 'SELF_ONLY',
+          captionTemplate: '{{file.stem}} on TikTok',
+          disableDuet: true,
+        },
+      ],
+    });
+    const media = {
+      id: 'media-1',
+      path: 'C:\\Media\\clip.mp4',
+      fingerprint: 'sha256:clip',
+      sizeBytes: 10,
+      modifiedAt: new Date(0),
+      createdAt: new Date(0),
+      state: 'available' as const,
+      metadata: { hasAudio: true },
+    };
+
+    expect(repository.findById(workflow.id)).toMatchObject({
+      failurePolicy: 'best_effort',
+      destinations: workflow.destinations,
+    });
+    const first = workflows.executeWatchedMedia(workflow.id, media);
+    const repeated = workflows.executeWatchedMedia(workflow.id, media);
+
+    expect(first).toMatchObject({
+      failurePolicy: 'best_effort',
+      destinations: [
+        { destinationId: 'youtube', created: true },
+        { destinationId: 'tiktok', created: true },
+      ],
+    });
+    expect(
+      repeated?.destinations.map(({ destinationId, created }) => ({ destinationId, created })),
+    ).toEqual([
+      { destinationId: 'youtube', created: false },
+      { destinationId: 'tiktok', created: false },
+    ]);
+    expect(jobs.list()).toHaveLength(2);
+    expect(jobs.list().find((job) => job.type === 'youtube.upload')?.input).toMatchObject({
+      accountId: 'youtube-account',
+      metadata: { category: '22', privacy: 'unlisted', title: 'clip' },
+    });
+    expect(jobs.list().find((job) => job.type === 'tiktok.direct-post')?.input).toMatchObject({
+      accountId: 'tiktok-account',
+      metadata: { caption: 'clip on TikTok', disableDuet: true, privacyLevel: 'SELF_ONLY' },
+    });
+  });
+
+  it('rejects rollback semantics because remote publishes cannot be made atomic', () => {
+    temporary = createTemporaryDatabase();
+    const workflows = new WorkflowService(
+      new SqliteWorkflowRepository(temporary.database),
+      new JobService(new SqliteJobRepository(temporary.database)),
+    );
+    expect(() =>
+      workflows.create({
+        name: 'Unsupported policy',
+        sourceDirectory: 'C:\\Media',
+        titleTemplate: '{{file.stem}}',
+        accountId: 'youtube-account',
+        failurePolicy: 'all_or_nothing' as never,
+      }),
+    ).toThrow('Only best-effort destination execution is supported.');
+  });
 });

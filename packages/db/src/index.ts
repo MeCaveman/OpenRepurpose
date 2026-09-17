@@ -28,6 +28,7 @@ import type {
   SourceCursor,
   SourceCursorRepository,
   Workflow,
+  WorkflowDestination,
   WorkflowRepository,
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
@@ -46,6 +47,7 @@ export {
   settings,
   sourceCursors,
   workflows,
+  workflowDestinations,
 } from './schema.js';
 
 export interface OpenDatabaseOptions {
@@ -198,31 +200,73 @@ export class SqliteMediaRepository implements MediaRepository {
 }
 
 interface RawWorkflowRow {
-  readonly account_id: string;
-  readonly category: string | null;
   readonly created_at: number;
   readonly description_template: string;
   readonly enabled: number;
+  readonly failure_policy: Workflow['failurePolicy'];
   readonly id: string;
   readonly name: string;
-  readonly privacy: Workflow['privacy'];
   readonly source_directory: string;
   readonly title_template: string;
   readonly updated_at: number;
 }
-function workflowFromRow(row: RawWorkflowRow): Workflow {
+
+interface RawWorkflowDestinationRow {
+  readonly account_id: string;
+  readonly configuration_json: string;
+  readonly destination_id: WorkflowDestination['destinationId'];
+}
+
+function workflowDestinationFromRow(row: RawWorkflowDestinationRow): WorkflowDestination {
+  const configuration = JSON.parse(row.configuration_json) as Record<string, unknown>;
+  if (row.destination_id === 'youtube') {
+    return {
+      destinationId: 'youtube',
+      accountId: row.account_id,
+      privacy: configuration.privacy as Extract<
+        WorkflowDestination,
+        { destinationId: 'youtube' }
+      >['privacy'],
+      ...(typeof configuration.category === 'string' ? { category: configuration.category } : {}),
+    };
+  }
+  return {
+    destinationId: 'tiktok',
+    accountId: row.account_id,
+    privacyLevel: configuration.privacyLevel as Extract<
+      WorkflowDestination,
+      { destinationId: 'tiktok' }
+    >['privacyLevel'],
+    ...(typeof configuration.captionTemplate === 'string'
+      ? { captionTemplate: configuration.captionTemplate }
+      : {}),
+    ...(typeof configuration.disableComment === 'boolean'
+      ? { disableComment: configuration.disableComment }
+      : {}),
+    ...(typeof configuration.disableDuet === 'boolean'
+      ? { disableDuet: configuration.disableDuet }
+      : {}),
+    ...(typeof configuration.disableStitch === 'boolean'
+      ? { disableStitch: configuration.disableStitch }
+      : {}),
+  };
+}
+
+function workflowFromRow(
+  row: RawWorkflowRow,
+  destinations: readonly WorkflowDestination[],
+): Workflow {
   return {
     id: row.id,
     name: row.name,
     enabled: row.enabled === 1,
     sourceDirectory: row.source_directory,
-    accountId: row.account_id,
     titleTemplate: row.title_template,
     descriptionTemplate: row.description_template,
-    privacy: row.privacy,
+    destinations,
+    failurePolicy: row.failure_policy,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
-    ...(row.category === null ? {} : { category: row.category }),
   };
 }
 
@@ -242,7 +286,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
   public findById(id: string): Workflow | undefined {
     const row = this.database.client.prepare('SELECT * FROM workflows WHERE id = ?').get(id) as
       RawWorkflowRow | undefined;
-    return row === undefined ? undefined : workflowFromRow(row);
+    return row === undefined ? undefined : workflowFromRow(row, this.destinations(id));
   }
   public list(enabled?: boolean): readonly Workflow[] {
     const statement =
@@ -254,42 +298,76 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     const rows = (enabled === undefined
       ? statement.all()
       : statement.all(enabled ? 1 : 0)) as unknown as RawWorkflowRow[];
-    return rows.map(workflowFromRow);
+    return rows.map((row) => workflowFromRow(row, this.destinations(row.id)));
   }
   public update(workflow: Workflow): Workflow | undefined {
     const result = this.write(workflow, true);
     return result ? workflow : undefined;
   }
   private write(workflow: Workflow, update: boolean): boolean {
+    const client = this.database.client;
     const values = [
       workflow.name,
       workflow.enabled ? 1 : 0,
       workflow.sourceDirectory,
-      workflow.accountId,
       workflow.titleTemplate,
       workflow.descriptionTemplate,
-      workflow.privacy,
-      workflow.category ?? null,
+      workflow.failurePolicy,
       workflow.createdAt.getTime(),
       workflow.updatedAt.getTime(),
       workflow.id,
     ];
-    if (update)
-      return (
-        Number(
-          this.database.client
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const changed = update
+        ? Number(
+            client
+              .prepare(
+                `UPDATE workflows SET name=?, enabled=?, source_directory=?, title_template=?, description_template=?, failure_policy=?, created_at=?, updated_at=? WHERE id=?`,
+              )
+              .run(...values).changes,
+          ) === 1
+        : (client
             .prepare(
-              `UPDATE workflows SET name=?, enabled=?, source_directory=?, account_id=?, title_template=?, description_template=?, privacy=?, category=?, created_at=?, updated_at=? WHERE id=?`,
+              `INSERT INTO workflows (name, enabled, source_directory, title_template, description_template, failure_policy, created_at, updated_at, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
-            .run(...values).changes,
-        ) === 1
-      );
-    this.database.client
-      .prepare(
-        `INSERT INTO workflows (name, enabled, source_directory, account_id, title_template, description_template, privacy, category, created_at, updated_at, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(...values);
-    return true;
+            .run(...values),
+          true);
+      if (changed) {
+        client.prepare('DELETE FROM workflow_destinations WHERE workflow_id = ?').run(workflow.id);
+        const insert = client.prepare(
+          `INSERT INTO workflow_destinations (
+             workflow_id, destination_id, account_id, position, configuration_json
+           ) VALUES (?, ?, ?, ?, ?)`,
+        );
+        workflow.destinations.forEach((destination, position) => {
+          const { accountId, destinationId, ...configuration } = destination;
+          insert.run(
+            workflow.id,
+            destinationId,
+            accountId,
+            position,
+            JSON.stringify(configuration),
+          );
+        });
+      }
+      client.exec('COMMIT;');
+      return changed;
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  private destinations(workflowId: string): readonly WorkflowDestination[] {
+    return (
+      this.database.client
+        .prepare(
+          `SELECT destination_id, account_id, configuration_json
+           FROM workflow_destinations WHERE workflow_id = ? ORDER BY position ASC`,
+        )
+        .all(workflowId) as unknown as RawWorkflowDestinationRow[]
+    ).map(workflowDestinationFromRow);
   }
 }
 

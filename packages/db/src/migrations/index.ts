@@ -5,6 +5,7 @@ import { youtubeOAuthMigration } from './0004_youtube_oauth.js';
 import { destinationJobRecordsMigration } from './0005_destination_job_records.js';
 import { workflowsMigration } from './0006_workflows.js';
 import { tiktokOAuthMigration } from './0007_tiktok_oauth.js';
+import { workflowDestinationsMigration } from './0008_workflow_destinations.js';
 import type { Migration } from './types.js';
 
 /** Ordered, immutable migration ledger. Never alter a released migration's SQL. */
@@ -16,5 +17,6 @@ export const migrations: readonly Migration[] = [
   destinationJobRecordsMigration,
   workflowsMigration,
   tiktokOAuthMigration,
+  workflowDestinationsMigration,
 ];
 export type { Migration } from './types.js';

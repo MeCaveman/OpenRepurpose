@@ -7,6 +7,7 @@ import {
   openDatabase,
   runMigrations,
   SettingsRepository,
+  SqliteWorkflowRepository,
 } from '../../packages/db/src/index.js';
 import { createTemporaryDatabase } from '../../packages/testkit/src/index.js';
 import type { TemporaryDatabase } from '../../packages/testkit/src/index.js';
@@ -33,6 +34,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0005_destination_job_records' },
       { id: '0006_workflows' },
       { id: '0007_tiktok_oauth' },
+      { id: '0008_workflow_destinations' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -74,8 +76,23 @@ describe('SQLite migrations and repositories', () => {
 
     runMigrations(database);
 
-    expect(database.client.prepare('SELECT account_id FROM workflows').get()).toEqual({
+    expect(database.client.prepare('SELECT failure_policy FROM workflows').get()).toEqual({
+      failure_policy: 'best_effort',
+    });
+    expect(
+      database.client
+        .prepare('SELECT destination_id, account_id, configuration_json FROM workflow_destinations')
+        .get(),
+    ).toEqual({
       account_id: 'youtube-account',
+      configuration_json: '{"privacy":"private","category":null}',
+      destination_id: 'youtube',
+    });
+    expect(new SqliteWorkflowRepository(database).findById('workflow-1')).toMatchObject({
+      destinations: [
+        { accountId: 'youtube-account', destinationId: 'youtube', privacy: 'private' },
+      ],
+      failurePolicy: 'best_effort',
     });
     expect(() =>
       database.client

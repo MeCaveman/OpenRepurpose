@@ -494,26 +494,51 @@ export class JobRunner {
 
 export type YouTubePrivacy = 'private' | 'public' | 'unlisted';
 
-/** The deliberately small v0.1 workflow shape. More triggers/destinations are additive later. */
-export interface Workflow {
+export type WorkflowFailurePolicy = 'best_effort';
+export type TikTokWorkflowPrivacy =
+  'FOLLOWER_OF_CREATOR' | 'MUTUAL_FOLLOW_FRIENDS' | 'PUBLIC_TO_EVERYONE' | 'SELF_ONLY';
+
+export interface YouTubeWorkflowDestination {
   readonly accountId: string;
   readonly category?: string;
+  readonly destinationId: 'youtube';
+  readonly privacy: YouTubePrivacy;
+}
+
+export interface TikTokWorkflowDestination {
+  readonly accountId: string;
+  readonly captionTemplate?: string;
+  readonly destinationId: 'tiktok';
+  readonly disableComment?: boolean;
+  readonly disableDuet?: boolean;
+  readonly disableStitch?: boolean;
+  readonly privacyLevel: TikTokWorkflowPrivacy;
+}
+
+export type WorkflowDestination = YouTubeWorkflowDestination | TikTokWorkflowDestination;
+
+/** A durable source definition whose destinations execute as independent best-effort jobs. */
+export interface Workflow {
   readonly createdAt: Date;
   readonly descriptionTemplate: string;
+  readonly destinations: readonly WorkflowDestination[];
   readonly enabled: boolean;
+  readonly failurePolicy: WorkflowFailurePolicy;
   readonly id: string;
   readonly name: string;
   readonly sourceDirectory: string;
   readonly titleTemplate: string;
   readonly updatedAt: Date;
-  readonly privacy: YouTubePrivacy;
 }
 
 export interface WorkflowInput {
-  readonly accountId: string;
+  /** v0.1 compatibility input. Normalized to a single YouTube destination. */
+  readonly accountId?: string;
   readonly category?: string;
   readonly descriptionTemplate?: string;
+  readonly destinations?: readonly WorkflowDestination[];
   readonly enabled?: boolean;
+  readonly failurePolicy?: WorkflowFailurePolicy;
   readonly name: string;
   readonly privacy?: YouTubePrivacy;
   readonly sourceDirectory: string;
@@ -576,6 +601,16 @@ export function renderTemplate(template: string, context: WorkflowTemplateContex
   return template.replace(templateToken, (_match, key: string) => values[key] ?? '');
 }
 
+export interface WorkflowDestinationJobResult extends EnqueueJobResult {
+  readonly destinationId: WorkflowDestination['destinationId'];
+}
+
+export interface WorkflowExecutionResult {
+  readonly destinations: readonly WorkflowDestinationJobResult[];
+  readonly failurePolicy: WorkflowFailurePolicy;
+  readonly workflowId: string;
+}
+
 /** Workflow application service: validates user input and snapshots rendered metadata into jobs. */
 export class WorkflowService {
   public constructor(
@@ -606,7 +641,10 @@ export class WorkflowService {
   }
 
   /** Uses rendered values, not a live workflow reference, so later edits cannot affect this job. */
-  public executeWatchedMedia(workflowId: string, media: MediaAsset): EnqueueJobResult | undefined {
+  public executeWatchedMedia(
+    workflowId: string,
+    media: MediaAsset,
+  ): WorkflowExecutionResult | undefined {
     const workflow = this.workflows.findById(workflowId);
     if (workflow === undefined || !workflow.enabled) return undefined;
     const name = media.path.replace(/^.*[\\/]/, '');
@@ -621,21 +659,61 @@ export class WorkflowService {
     const title = renderTemplate(workflow.titleTemplate, context).trim();
     if (title.length === 0) throw new Error('A workflow title template must render a title.');
     const description = renderTemplate(workflow.descriptionTemplate, context);
-    return this.jobs.create({
-      type: 'youtube.upload',
-      idempotencyKey: `workflow:${workflow.id}:media:${media.id}:youtube:${workflow.accountId}`,
-      input: {
-        accountId: workflow.accountId,
+    const destinations = workflow.destinations.map((destination): WorkflowDestinationJobResult => {
+      const common = {
+        accountId: destination.accountId,
         mediaId: media.id,
-        metadata: {
-          title,
-          description,
-          privacy: workflow.privacy,
-          ...(workflow.category === undefined ? {} : { category: workflow.category }),
-        },
         workflow: { id: workflow.id, name: workflow.name },
-      },
+      };
+      const result =
+        destination.destinationId === 'youtube'
+          ? this.jobs.create({
+              type: 'youtube.upload',
+              idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
+              input: {
+                ...common,
+                metadata: {
+                  title,
+                  description,
+                  privacy: destination.privacy,
+                  ...(destination.category === undefined ? {} : { category: destination.category }),
+                },
+              },
+            })
+          : this.jobs.create({
+              type: 'tiktok.direct-post',
+              idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
+              input: {
+                ...common,
+                metadata: {
+                  caption:
+                    destination.captionTemplate === undefined
+                      ? title
+                      : renderTemplate(destination.captionTemplate, context),
+                  privacyLevel: destination.privacyLevel,
+                  ...(destination.disableComment === undefined
+                    ? {}
+                    : { disableComment: destination.disableComment }),
+                  ...(destination.disableDuet === undefined
+                    ? {}
+                    : { disableDuet: destination.disableDuet }),
+                  ...(destination.disableStitch === undefined
+                    ? {}
+                    : { disableStitch: destination.disableStitch }),
+                },
+              },
+            });
+      return { destinationId: destination.destinationId, ...result };
     });
+    return { workflowId: workflow.id, failurePolicy: workflow.failurePolicy, destinations };
+  }
+
+  private destinationIdempotencyKey(
+    workflow: Workflow,
+    media: MediaAsset,
+    destination: WorkflowDestination,
+  ): string {
+    return `workflow:${workflow.id}:media:${media.id}:${destination.destinationId}:${destination.accountId}`;
   }
 
   private validateAndBuild(
@@ -645,28 +723,89 @@ export class WorkflowService {
     updatedAt: Date,
   ): Workflow {
     if (input.name.trim().length === 0) throw new Error('A workflow name is required.');
-    if (input.accountId.trim().length === 0) throw new Error('A YouTube account is required.');
     if (input.sourceDirectory.trim().length === 0) throw new Error('A watched folder is required.');
     if (input.titleTemplate.trim().length === 0) throw new Error('A title template is required.');
     validateTemplate(input.titleTemplate);
     validateTemplate(input.descriptionTemplate ?? '');
-    const privacy = input.privacy ?? 'private';
-    if (!(['private', 'public', 'unlisted'] as const).includes(privacy))
-      throw new Error('Invalid YouTube privacy.');
+    if (input.failurePolicy !== undefined && input.failurePolicy !== 'best_effort')
+      throw new Error('Only best-effort destination execution is supported.');
+    if (
+      input.destinations !== undefined &&
+      (input.accountId !== undefined || input.category !== undefined || input.privacy !== undefined)
+    )
+      throw new Error('Use either destinations or the legacy YouTube account fields, not both.');
+    const destinations =
+      input.destinations === undefined
+        ? this.legacyYouTubeDestination(input)
+        : input.destinations.map((destination) => this.validateDestination(destination));
+    if (destinations.length === 0) throw new Error('At least one destination is required.');
+    if (
+      new Set(destinations.map((destination) => destination.destinationId)).size !==
+      destinations.length
+    )
+      throw new Error('A workflow can contain each destination only once.');
     return {
       id,
       name: input.name.trim(),
       enabled: input.enabled ?? true,
       sourceDirectory: input.sourceDirectory.trim(),
-      accountId: input.accountId.trim(),
       titleTemplate: input.titleTemplate,
       descriptionTemplate: input.descriptionTemplate ?? '',
-      privacy,
-      ...(input.category?.trim() === undefined || input.category.trim() === ''
-        ? {}
-        : { category: input.category.trim() }),
+      destinations,
+      failurePolicy: 'best_effort',
       createdAt,
       updatedAt,
+    };
+  }
+
+  private legacyYouTubeDestination(input: WorkflowInput): readonly WorkflowDestination[] {
+    if (input.accountId === undefined || input.accountId.trim().length === 0)
+      throw new Error('At least one destination is required.');
+    return [
+      this.validateDestination({
+        accountId: input.accountId,
+        destinationId: 'youtube',
+        privacy: input.privacy ?? 'private',
+        ...(input.category === undefined ? {} : { category: input.category }),
+      }),
+    ];
+  }
+
+  private validateDestination(destination: WorkflowDestination): WorkflowDestination {
+    const accountId = destination.accountId.trim();
+    if (accountId.length === 0) throw new Error('A destination account is required.');
+    if (destination.destinationId === 'youtube') {
+      if (!(['private', 'public', 'unlisted'] as const).includes(destination.privacy))
+        throw new Error('Invalid YouTube privacy.');
+      const category = destination.category?.trim();
+      return {
+        destinationId: 'youtube',
+        accountId,
+        privacy: destination.privacy,
+        ...(category === undefined || category === '' ? {} : { category }),
+      };
+    }
+    if (
+      !(
+        ['FOLLOWER_OF_CREATOR', 'MUTUAL_FOLLOW_FRIENDS', 'PUBLIC_TO_EVERYONE', 'SELF_ONLY'] as const
+      ).includes(destination.privacyLevel)
+    )
+      throw new Error('Invalid TikTok privacy level.');
+    if (destination.captionTemplate !== undefined) validateTemplate(destination.captionTemplate);
+    return {
+      destinationId: 'tiktok',
+      accountId,
+      privacyLevel: destination.privacyLevel,
+      ...(destination.captionTemplate === undefined
+        ? {}
+        : { captionTemplate: destination.captionTemplate }),
+      ...(destination.disableComment === undefined
+        ? {}
+        : { disableComment: destination.disableComment }),
+      ...(destination.disableDuet === undefined ? {} : { disableDuet: destination.disableDuet }),
+      ...(destination.disableStitch === undefined
+        ? {}
+        : { disableStitch: destination.disableStitch }),
     };
   }
 }
