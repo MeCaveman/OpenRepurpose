@@ -245,6 +245,9 @@ importers:
       '@openrepurpose/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@openrepurpose/tiktok':
+        specifier: workspace:*
+        version: link:../../integrations/tiktok
       '@openrepurpose/youtube':
         specifier: workspace:*
         version: link:../../integrations/youtube
@@ -289,6 +292,19 @@ importers:
       vite:
         specifier: 8.3.0
         version: 8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)
+
+  integrations/tiktok:
+    dependencies:
+      '@openrepurpose/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@openrepurpose/platform-sdk':
+        specifier: workspace:*
+        version: link:../../packages/platform-sdk
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.5
+        version: 24.13.5
 
   integrations/youtube:
     dependencies:

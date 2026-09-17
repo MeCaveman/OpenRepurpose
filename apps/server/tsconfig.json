@@ -14,6 +14,7 @@
     { "path": "../../packages/media" },
     { "path": "../../packages/platform-sdk" },
     { "path": "../../packages/local-secrets" },
+    { "path": "../../integrations/tiktok" },
     { "path": "../../integrations/youtube" }
   ]
 }

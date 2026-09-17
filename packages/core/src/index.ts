@@ -44,9 +44,13 @@ export interface MediaRepository {
   list(): readonly MediaAsset[];
 }
 
-export type AccountProvider = 'youtube';
+export type AccountProvider = 'tiktok' | 'youtube';
 export type AccountStatus = 'connected' | 'reauthorization_required';
-export type AccountCapability = 'youtube.identity.read' | 'youtube.video.upload';
+export type AccountCapability =
+  | 'tiktok.identity.read'
+  | 'tiktok.video.publish'
+  | 'youtube.identity.read'
+  | 'youtube.video.upload';
 
 /** Browser-safe account metadata. OAuth credentials and tokens live only in SecretStore. */
 export interface ConnectedAccount {

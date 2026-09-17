@@ -680,7 +680,7 @@ export class YouTubeOAuthService {
 
   public async removeAccount(id: string): Promise<ConnectedAccount | undefined> {
     const existing = this.accounts.findById(id);
-    if (existing === undefined) return undefined;
+    if (existing === undefined || existing.provider !== 'youtube') return undefined;
     await this.secrets.delete(youtubeRefreshTokenReference(id));
     return this.accounts.remove(id);
   }

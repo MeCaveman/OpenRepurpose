@@ -18,12 +18,20 @@ async function serveProductionAssets(page: Page): Promise<void> {
   });
 }
 
-test('setup journey reports mocked YouTube readiness', async ({ page }) => {
+test('setup journey reports mocked destination readiness and TikTok audit restriction', async ({
+  page,
+}) => {
   await serveProductionAssets(page);
   await page.route('**/api/setup', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
+        tiktok: {
+          configured: true,
+          clientSecretConfigured: true,
+          flow: 'desktop',
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/tiktok/oauth/callback',
+        },
         youtube: {
           configured: true,
           clientSecretConfigured: true,
@@ -34,7 +42,8 @@ test('setup journey reports mocked YouTube readiness', async ({ page }) => {
   );
   await page.goto('/setup');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Setup');
-  await expect(page.getByText('Configured')).toBeVisible();
+  await expect(page.getByText('Configured')).toHaveCount(2);
+  await expect(page.getByText('TikTok unaudited clients can publish only')).toBeVisible();
 });
 
 test('manual import to publish queues one YouTube upload', async ({ page }) => {

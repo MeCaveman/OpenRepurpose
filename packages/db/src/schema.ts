@@ -79,7 +79,7 @@ export const accounts = sqliteTable(
   'accounts',
   {
     id: text('id').primaryKey(),
-    provider: text('provider', { enum: ['youtube'] }).notNull(),
+    provider: text('provider', { enum: ['youtube', 'tiktok'] }).notNull(),
     externalId: text('external_id').notNull(),
     displayName: text('display_name').notNull(),
     status: text('status', { enum: ['connected', 'reauthorization_required'] }).notNull(),
@@ -97,7 +97,7 @@ export const oauthAuthorizationRequests = sqliteTable(
   'oauth_authorization_requests',
   {
     id: text('id').primaryKey(),
-    provider: text('provider', { enum: ['youtube'] }).notNull(),
+    provider: text('provider', { enum: ['youtube', 'tiktok'] }).notNull(),
     stateHash: text('state_hash').notNull().unique(),
     bindingHash: text('binding_hash').notNull(),
     redirectUri: text('redirect_uri').notNull(),

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 const expectedPackages = new Map([
+  ['integrations/tiktok', '@openrepurpose/tiktok'],
   ['integrations/youtube', '@openrepurpose/youtube'],
   ['apps/cli', '@openrepurpose/cli'],
   ['apps/server', '@openrepurpose/server'],

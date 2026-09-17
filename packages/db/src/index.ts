@@ -84,21 +84,32 @@ export function runMigrations(
     'INSERT INTO __openrepurpose_migrations (id, checksum, applied_at) VALUES (?, ?, ?)',
   );
   for (const migration of migrationSet) {
-    const checksum = createHash('sha256').update(migration.sql).digest('hex');
+    const checksum = createHash('sha256')
+      .update(migration.sql)
+      .update(migration.foreignKeysDisabled === true ? '\nforeign_keys_disabled=true' : '')
+      .digest('hex');
     const existing = lookup.get(migration.id) as { checksum: string } | undefined;
     if (existing !== undefined) {
       if (existing.checksum !== checksum)
         throw new Error(`Applied migration ${migration.id} does not match its recorded checksum.`);
       continue;
     }
+    if (migration.foreignKeysDisabled === true) database.client.exec('PRAGMA foreign_keys = OFF;');
     database.client.exec('BEGIN IMMEDIATE;');
     try {
       database.client.exec(migration.sql);
+      if (
+        migration.foreignKeysDisabled === true &&
+        database.client.prepare('PRAGMA foreign_key_check;').all().length > 0
+      )
+        throw new Error(`Migration ${migration.id} introduced a foreign key violation.`);
       record.run(migration.id, checksum, Date.now());
       database.client.exec('COMMIT;');
     } catch (error) {
       database.client.exec('ROLLBACK;');
       throw error;
+    } finally {
+      if (migration.foreignKeysDisabled === true) database.client.exec('PRAGMA foreign_keys = ON;');
     }
   }
 }

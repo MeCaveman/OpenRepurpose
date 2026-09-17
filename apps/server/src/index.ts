@@ -22,6 +22,7 @@ import { loadApplicationConfig } from '@openrepurpose/shared';
 import { redactLogText } from '@openrepurpose/platform-sdk';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
 import { YouTubeOAuthService, YouTubeUploadJobHandler } from '@openrepurpose/youtube';
+import { TikTokOAuthService } from '@openrepurpose/tiktok';
 import { assertLocalOnly, buildServer } from './app.js';
 import { loadOrCreateSessionKey } from './session-key.js';
 
@@ -37,9 +38,17 @@ export async function startServer(): Promise<void> {
     config.paths.secretVaultPath,
     config.paths.secretKeyPath,
   );
+  const accountRepository = new SqliteAccountRepository(database);
+  const authorizationRequestRepository = new SqliteOAuthAuthorizationRequestRepository(database);
   const youtubeOAuthService = new YouTubeOAuthService(
-    new SqliteAccountRepository(database),
-    new SqliteOAuthAuthorizationRequestRepository(database),
+    accountRepository,
+    authorizationRequestRepository,
+    secretStore,
+    config.appUrl,
+  );
+  const tiktokOAuthService = new TikTokOAuthService(
+    accountRepository,
+    authorizationRequestRepository,
     secretStore,
     config.appUrl,
   );
@@ -82,6 +91,7 @@ export async function startServer(): Promise<void> {
     sessionKey: loadOrCreateSessionKey(config.paths.sessionKeyPath),
     mediaRepository,
     workflowService,
+    tiktokOAuthService,
     youtubeOAuthService,
     ...(mediaImportService === undefined ? {} : { mediaImportService }),
   });

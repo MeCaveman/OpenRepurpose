@@ -7,6 +7,7 @@ import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from
 import type { ApplicationConfig } from '@openrepurpose/shared';
 import { isPlatformError, REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
 import type { YouTubeOAuthService } from '@openrepurpose/youtube';
+import type { TikTokOAuthService } from '@openrepurpose/tiktok';
 import type {
   JobService,
   JobStatus,
@@ -38,6 +39,7 @@ export interface BuildServerOptions {
   readonly mediaRepository?: MediaRepository;
   readonly sessionKey: Buffer;
   readonly staticRoot?: false | string;
+  readonly tiktokOAuthService?: TikTokOAuthService;
   readonly youtubeOAuthService?: YouTubeOAuthService;
   readonly workflowService?: WorkflowService;
 }
@@ -220,8 +222,10 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     async () => ({ service: 'openrepurpose', status: 'ok', version: '0.1.0' }),
   );
 
-  if (options.youtubeOAuthService !== undefined) {
+  if (options.youtubeOAuthService !== undefined || options.tiktokOAuthService !== undefined) {
     const youtube = options.youtubeOAuthService;
+    const tiktok = options.tiktokOAuthService;
+    const accounts = youtube ?? tiktok!;
     const safePlatformFailure = (error: unknown, reply: FastifyReply) => {
       if (!isPlatformError(error)) throw error;
       return reply
@@ -232,69 +236,150 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         });
     };
     server.get('/api/accounts', async () => ({
-      accounts: youtube.listAccounts(),
-      youtube: await youtube.credentialStatus(),
+      accounts: accounts.listAccounts(),
+      youtube: await youtube?.credentialStatus(),
+      tiktok: await tiktok?.credentialStatus(),
     }));
-    server.get('/api/setup', async () => ({ youtube: await youtube.credentialStatus() }));
-    server.post<{
-      Body: { clientId?: unknown; clientSecret?: unknown };
-    }>('/api/accounts/youtube/credentials', async (request, reply) => {
-      if (
-        typeof request.body?.clientId !== 'string' ||
-        (request.body.clientSecret !== undefined && typeof request.body.clientSecret !== 'string')
-      ) {
-        return reply.code(400).send({
-          error: 'A client ID and optional client secret are required.',
-          code: 'INVALID_YOUTUBE_CREDENTIALS',
-        });
-      }
-      try {
-        await youtube.configureCredentials({
-          clientId: request.body.clientId,
-          ...(request.body.clientSecret === undefined
-            ? {}
-            : { clientSecret: request.body.clientSecret }),
-        });
-        return { youtube: await youtube.credentialStatus() };
-      } catch (error) {
-        return safePlatformFailure(error, reply);
-      }
-    });
-    server.post('/api/accounts/youtube/oauth/start', async (request, reply) => {
-      try {
-        const browserBinding = request.session.get('csrfToken');
-        if (typeof browserBinding !== 'string')
-          return reply.code(403).send({
-            error: 'A local browser session is required.',
-            code: 'YOUTUBE_OAUTH_SESSION_REQUIRED',
+    server.get('/api/setup', async () => ({
+      youtube: await youtube?.credentialStatus(),
+      tiktok: await tiktok?.credentialStatus(),
+    }));
+    if (youtube !== undefined) {
+      server.post<{
+        Body: { clientId?: unknown; clientSecret?: unknown };
+      }>('/api/accounts/youtube/credentials', async (request, reply) => {
+        if (
+          typeof request.body?.clientId !== 'string' ||
+          (request.body.clientSecret !== undefined && typeof request.body.clientSecret !== 'string')
+        ) {
+          return reply.code(400).send({
+            error: 'A client ID and optional client secret are required.',
+            code: 'INVALID_YOUTUBE_CREDENTIALS',
           });
-        return await youtube.beginAuthorization(browserBinding);
-      } catch (error) {
-        return safePlatformFailure(error, reply);
-      }
-    });
-    server.get<{
-      Querystring: { code?: string; error?: string; state?: string };
-    }>('/api/accounts/youtube/oauth/callback', async (request, reply) => {
-      const destination = new URL('/accounts', options.config.appUrl);
-      try {
-        const browserBinding = request.session.get('csrfToken');
-        await youtube.completeAuthorization({
-          ...request.query,
-          ...(typeof browserBinding === 'string' ? { browserBinding } : {}),
-        });
-        destination.searchParams.set('youtube', 'connected');
-      } catch (error) {
-        destination.searchParams.set('youtube', 'error');
-        destination.searchParams.set(
-          'code',
-          isPlatformError(error) ? error.code : 'YOUTUBE_OAUTH_CALLBACK_FAILED',
-        );
-      }
-      return reply.redirect(destination.toString());
-    });
+        }
+        try {
+          await youtube.configureCredentials({
+            clientId: request.body.clientId,
+            ...(request.body.clientSecret === undefined
+              ? {}
+              : { clientSecret: request.body.clientSecret }),
+          });
+          return { youtube: await youtube.credentialStatus() };
+        } catch (error) {
+          return safePlatformFailure(error, reply);
+        }
+      });
+      server.post('/api/accounts/youtube/oauth/start', async (request, reply) => {
+        try {
+          const browserBinding = request.session.get('csrfToken');
+          if (typeof browserBinding !== 'string')
+            return reply.code(403).send({
+              error: 'A local browser session is required.',
+              code: 'YOUTUBE_OAUTH_SESSION_REQUIRED',
+            });
+          return await youtube.beginAuthorization(browserBinding);
+        } catch (error) {
+          return safePlatformFailure(error, reply);
+        }
+      });
+      server.get<{
+        Querystring: { code?: string; error?: string; state?: string };
+      }>('/api/accounts/youtube/oauth/callback', async (request, reply) => {
+        const destination = new URL('/accounts', options.config.appUrl);
+        try {
+          const browserBinding = request.session.get('csrfToken');
+          await youtube.completeAuthorization({
+            ...request.query,
+            ...(typeof browserBinding === 'string' ? { browserBinding } : {}),
+          });
+          destination.searchParams.set('youtube', 'connected');
+        } catch (error) {
+          destination.searchParams.set('youtube', 'error');
+          destination.searchParams.set(
+            'code',
+            isPlatformError(error) ? error.code : 'YOUTUBE_OAUTH_CALLBACK_FAILED',
+          );
+        }
+        return reply.redirect(destination.toString());
+      });
+    }
+    if (tiktok !== undefined) {
+      server.post<{
+        Body: { clientKey?: unknown; clientSecret?: unknown };
+      }>('/api/accounts/tiktok/credentials', async (request, reply) => {
+        if (
+          typeof request.body?.clientKey !== 'string' ||
+          typeof request.body.clientSecret !== 'string'
+        ) {
+          return reply.code(400).send({
+            error: 'A client key and client secret are required.',
+            code: 'INVALID_TIKTOK_CREDENTIALS',
+          });
+        }
+        try {
+          await tiktok.configureCredentials({
+            clientKey: request.body.clientKey,
+            clientSecret: request.body.clientSecret,
+          });
+          return { tiktok: await tiktok.credentialStatus() };
+        } catch (error) {
+          return safePlatformFailure(error, reply);
+        }
+      });
+      server.post('/api/accounts/tiktok/oauth/start', async (request, reply) => {
+        try {
+          const browserBinding = request.session.get('csrfToken');
+          if (typeof browserBinding !== 'string')
+            return reply.code(403).send({
+              error: 'A browser session is required.',
+              code: 'TIKTOK_OAUTH_SESSION_REQUIRED',
+            });
+          return await tiktok.beginAuthorization(browserBinding);
+        } catch (error) {
+          return safePlatformFailure(error, reply);
+        }
+      });
+      server.get<{
+        Querystring: { code?: string; error?: string; state?: string };
+      }>('/api/accounts/tiktok/oauth/callback', async (request, reply) => {
+        const destination = new URL('/accounts', options.config.appUrl);
+        try {
+          const browserBinding = request.session.get('csrfToken');
+          await tiktok.completeAuthorization({
+            ...request.query,
+            ...(typeof browserBinding === 'string' ? { browserBinding } : {}),
+          });
+          destination.searchParams.set('tiktok', 'connected');
+        } catch (error) {
+          destination.searchParams.set('tiktok', 'error');
+          destination.searchParams.set(
+            'code',
+            isPlatformError(error) ? error.code : 'TIKTOK_OAUTH_CALLBACK_FAILED',
+          );
+        }
+        return reply.redirect(destination.toString());
+      });
+      server.get<{ Params: { id: string } }>(
+        '/api/accounts/tiktok/:id/capabilities',
+        async (request, reply) => {
+          try {
+            return {
+              capabilities: await tiktok.getAccountCapabilities(request.params.id),
+            };
+          } catch (error) {
+            return safePlatformFailure(error, reply);
+          }
+        },
+      );
+    }
     server.delete<{ Params: { id: string } }>('/api/accounts/:id', async (request, reply) => {
-      const account = await youtube.removeAccount(request.params.id);
+      const existing = accounts.listAccounts().find((account) => account.id === request.params.id);
+      const account =
+        existing?.provider === 'youtube'
+          ? await youtube?.removeAccount(request.params.id)
+          : existing?.provider === 'tiktok'
+            ? await tiktok?.removeAccount(request.params.id)
+            : undefined;
       return account === undefined
         ? reply.code(404).send({ error: 'Account not found.', code: 'ACCOUNT_NOT_FOUND' })
         : { account };

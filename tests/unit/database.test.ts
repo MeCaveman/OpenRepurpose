@@ -1,5 +1,13 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runMigrations, SettingsRepository } from '../../packages/db/src/index.js';
+import {
+  migrations,
+  openDatabase,
+  runMigrations,
+  SettingsRepository,
+} from '../../packages/db/src/index.js';
 import { createTemporaryDatabase } from '../../packages/testkit/src/index.js';
 import type { TemporaryDatabase } from '../../packages/testkit/src/index.js';
 
@@ -24,6 +32,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0004_youtube_oauth' },
       { id: '0005_destination_job_records' },
       { id: '0006_workflows' },
+      { id: '0007_tiktok_oauth' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -33,5 +42,50 @@ describe('SQLite migrations and repositories', () => {
         { id: '0001_initial_settings', sql: 'CREATE TABLE settings (key TEXT PRIMARY KEY);' },
       ]),
     ).toThrow('does not match its recorded checksum');
+  });
+  it('upgrades a populated v0.1 schema and preserves YouTube workflow references', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-v01-migration-'));
+    const database = openDatabase(join(directory, 'openrepurpose.sqlite'));
+    temporaryDatabase = {
+      directory,
+      database,
+      dispose: () => {
+        database.close();
+        rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
+      },
+    };
+    runMigrations(database, migrations.slice(0, 6));
+    database.client
+      .prepare(
+        `INSERT INTO accounts (
+          id, provider, external_id, display_name, status, capabilities_json,
+          connected_at, updated_at
+        ) VALUES (?, 'youtube', ?, ?, 'connected', ?, ?, ?)`,
+      )
+      .run('youtube-account', 'youtube-channel', 'Creator', '[]', 1, 1);
+    database.client
+      .prepare(
+        `INSERT INTO workflows (
+          id, name, enabled, source_directory, account_id, title_template,
+          description_template, privacy, category, created_at, updated_at
+        ) VALUES (?, ?, 1, ?, ?, ?, '', 'private', NULL, ?, ?)`,
+      )
+      .run('workflow-1', 'Existing workflow', 'C:\\Media', 'youtube-account', '{{filename}}', 1, 1);
+
+    runMigrations(database);
+
+    expect(database.client.prepare('SELECT account_id FROM workflows').get()).toEqual({
+      account_id: 'youtube-account',
+    });
+    expect(() =>
+      database.client
+        .prepare(
+          `INSERT INTO accounts (
+            id, provider, external_id, display_name, status, capabilities_json,
+            connected_at, updated_at
+          ) VALUES (?, 'tiktok', ?, ?, 'connected', ?, ?, ?)`,
+        )
+        .run('tiktok-account', 'open-id', 'TikTok Creator', '[]', 2, 2),
+    ).not.toThrow();
   });
 });

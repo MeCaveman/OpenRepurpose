@@ -83,6 +83,36 @@ type YouTubeCredentialStatus = {
   configured: boolean;
   redirectUri: string;
 };
+type TikTokCredentialStatus = {
+  clientSecretConfigured: boolean;
+  configured: boolean;
+  flow: 'desktop' | 'web';
+  redirectUri: string;
+};
+type TikTokAccountCapabilities = {
+  accountId: string;
+  audit: { status: 'not_exposed_by_tiktok'; unauditedClientsPrivateOnly: true };
+  creator?: { nickname: string; username: string };
+  directPostAvailable: boolean;
+  grantedScopes: readonly string[];
+  interactions?: {
+    commentsDisabled: boolean;
+    duetDisabled: boolean;
+    stitchDisabled: boolean;
+  };
+  media?: {
+    captionMaxUtf16CodeUnits: number;
+    formats: readonly string[];
+    maxFileSizeBytes: number;
+    maxVideoDurationSeconds: number;
+  };
+  privacyLevelOptions: readonly string[];
+  publicPostingAvailability:
+    'not_authorized' | 'requires_audit_confirmation' | 'unavailable_for_creator';
+};
+type TikTokCapabilityView =
+  | { capabilities: TikTokAccountCapabilities; error?: never }
+  | { capabilities?: never; error: string };
 function usePathname(): string {
   const [pathname, setPathname] = useState(window.location.pathname);
   useEffect(() => {
@@ -110,6 +140,12 @@ export function App() {
   const [youtubeStatus, setYoutubeStatus] = useState<YouTubeCredentialStatus>();
   const [youtubeClientId, setYoutubeClientId] = useState('');
   const [youtubeClientSecret, setYoutubeClientSecret] = useState('');
+  const [tiktokStatus, setTikTokStatus] = useState<TikTokCredentialStatus>();
+  const [tiktokClientKey, setTikTokClientKey] = useState('');
+  const [tiktokClientSecret, setTikTokClientSecret] = useState('');
+  const [tiktokCapabilities, setTikTokCapabilities] = useState<
+    Readonly<Record<string, TikTokCapabilityView>>
+  >({});
   const [publishMediaId, setPublishMediaId] = useState<string>();
   const [publishAccountId, setPublishAccountId] = useState('');
   const [publishTitle, setPublishTitle] = useState('');
@@ -131,16 +167,42 @@ export function App() {
     if (!response.ok) throw new Error('Account status is unavailable.');
     const body = (await response.json()) as {
       accounts: readonly AccountItem[];
+      tiktok: TikTokCredentialStatus;
       youtube: YouTubeCredentialStatus;
     };
     setAccounts(body.accounts);
     setYoutubeStatus(body.youtube);
+    setTikTokStatus(body.tiktok);
+    const views = await Promise.all(
+      body.accounts
+        .filter((account) => account.provider === 'tiktok')
+        .map(async (account): Promise<readonly [string, TikTokCapabilityView]> => {
+          const capabilityResponse = await fetch(
+            `/api/accounts/tiktok/${encodeURIComponent(account.id)}/capabilities`,
+          );
+          const capabilityBody = (await capabilityResponse.json()) as {
+            capabilities?: TikTokAccountCapabilities;
+            error?: string;
+          };
+          return [
+            account.id,
+            capabilityResponse.ok && capabilityBody.capabilities !== undefined
+              ? { capabilities: capabilityBody.capabilities }
+              : { error: capabilityBody.error ?? 'TikTok posting availability is unavailable.' },
+          ];
+        }),
+    );
+    setTikTokCapabilities(Object.fromEntries(views));
   };
   const loadSetup = async () => {
     const response = await fetch('/api/setup');
     if (!response.ok) throw new Error('Setup status is unavailable.');
-    const body = (await response.json()) as { youtube: YouTubeCredentialStatus };
+    const body = (await response.json()) as {
+      tiktok: TikTokCredentialStatus;
+      youtube: YouTubeCredentialStatus;
+    };
     setYoutubeStatus(body.youtube);
+    setTikTokStatus(body.tiktok);
   };
   const showAttempts = async (jobId: string) => {
     const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
@@ -277,6 +339,43 @@ export function App() {
       );
     }
   };
+  const saveTikTokCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError(undefined);
+    try {
+      const response = await fetch('/api/accounts/tiktok/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await csrfToken() },
+        body: JSON.stringify({ clientKey: tiktokClientKey, clientSecret: tiktokClientSecret }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? 'TikTok credentials could not be saved.');
+      setTikTokClientKey('');
+      setTikTokClientSecret('');
+      await loadAccounts();
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : 'TikTok credentials could not be saved.',
+      );
+    }
+  };
+  const connectTikTok = async () => {
+    setError(undefined);
+    try {
+      const response = await fetch('/api/accounts/tiktok/oauth/start', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': await csrfToken() },
+      });
+      const body = (await response.json()) as { authorizationUrl?: string; error?: string };
+      if (!response.ok || body.authorizationUrl === undefined)
+        throw new Error(body.error ?? 'TikTok authorization could not be started.');
+      window.location.assign(body.authorizationUrl);
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : 'TikTok authorization could not be started.',
+      );
+    }
+  };
   const removeAccount = async (accountId: string) => {
     setError(undefined);
     try {
@@ -348,6 +447,16 @@ export function App() {
                       YouTube connection failed. Check the credential setup and try again.
                     </p>
                   )}
+                  {new URLSearchParams(window.location.search).get('tiktok') === 'connected' && (
+                    <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-200">
+                      TikTok connected successfully.
+                    </p>
+                  )}
+                  {new URLSearchParams(window.location.search).get('tiktok') === 'error' && (
+                    <p className="rounded-lg border border-rose-300/20 bg-rose-300/10 p-3 text-sm text-rose-200">
+                      TikTok connection failed. Check the credential setup and granted scopes.
+                    </p>
+                  )}
                   {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
                   <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
                     <h2 className="font-semibold">Google OAuth credentials</h2>
@@ -399,54 +508,165 @@ export function App() {
                       Callback: {youtubeStatus?.redirectUri ?? 'Loading…'}
                     </p>
                   </section>
+                  <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h2 className="font-semibold">TikTok Login Kit credentials</h2>
+                        <p className="mt-2 text-sm leading-6 text-slate-400">
+                          Use your own TikTok developer app with Login Kit and Content Posting API.
+                          Credentials and tokens stay encrypted on this machine.
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs text-amber-200">
+                        Unaudited apps: private only
+                      </span>
+                    </div>
+                    <form className="mt-5 grid gap-3" onSubmit={saveTikTokCredentials}>
+                      <label className="grid gap-1 text-sm" htmlFor="tiktok-client-key">
+                        <span className="text-slate-300">Client key</span>
+                        <input
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="tiktok-client-key"
+                          onChange={(event) => setTikTokClientKey(event.target.value)}
+                          required
+                          value={tiktokClientKey}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm" htmlFor="tiktok-client-secret">
+                        <span className="text-slate-300">Client secret</span>
+                        <input
+                          autoComplete="new-password"
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="tiktok-client-secret"
+                          onChange={(event) => setTikTokClientSecret(event.target.value)}
+                          required
+                          type="password"
+                          value={tiktokClientSecret}
+                        />
+                      </label>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
+                          type="submit"
+                        >
+                          Save TikTok credentials
+                        </button>
+                        <button
+                          className="rounded-lg border border-cyan-300/30 px-4 py-2 text-sm text-cyan-200 disabled:opacity-40"
+                          disabled={tiktokStatus?.configured !== true}
+                          onClick={() => void connectTikTok()}
+                          type="button"
+                        >
+                          Connect TikTok
+                        </button>
+                      </div>
+                    </form>
+                    <p className="mt-4 break-all text-xs text-slate-500">
+                      {tiktokStatus?.flow === 'desktop' ? 'Desktop + PKCE' : 'HTTPS web'} callback:{' '}
+                      {tiktokStatus?.redirectUri ?? 'Loading…'}
+                    </p>
+                    <p className="mt-3 text-sm leading-6 text-amber-200/80">
+                      Request <code>user.info.basic</code> and <code>video.publish</code> in the
+                      TikTok portal. TikTok does not expose app-audit status through creator-info;
+                      non-private posting requires a successful TikTok audit and is never assumed.
+                    </p>
+                  </section>
                   <section>
                     <h2 className="font-semibold">Connected accounts</h2>
                     <div className="mt-3 grid gap-3">
-                      {accounts.map((account) => (
-                        <article
-                          className="rounded-xl border border-white/10 bg-slate-950 p-5"
-                          key={account.id}
-                        >
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
-                              <h3 className="font-medium">{account.displayName}</h3>
-                              <p className="mt-1 font-mono text-xs text-slate-500">
-                                {account.externalId}
-                              </p>
-                            </div>
-                            <span
-                              className={
-                                account.status === 'connected'
-                                  ? 'text-emerald-200'
-                                  : 'text-amber-200'
-                              }
-                            >
-                              {account.status === 'connected' ? 'Connected' : 'Reconnect required'}
-                            </span>
-                          </div>
-                          <p className="mt-4 text-sm text-slate-300">
-                            Upload:{' '}
-                            {account.capabilities.includes('youtube.video.upload')
-                              ? 'allowed'
-                              : 'not granted'}{' '}
-                            · Identity:{' '}
-                            {account.capabilities.includes('youtube.identity.read')
-                              ? 'available'
-                              : 'not granted'}
-                          </p>
-                          <button
-                            className="mt-4 text-sm text-rose-200 hover:underline"
-                            onClick={() => void removeAccount(account.id)}
-                            type="button"
+                      {accounts.map((account) => {
+                        const tiktokView = tiktokCapabilities[account.id];
+                        return (
+                          <article
+                            className="rounded-xl border border-white/10 bg-slate-950 p-5"
+                            key={account.id}
                           >
-                            Remove local connection
-                          </button>
-                        </article>
-                      ))}
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <h3 className="font-medium">
+                                  {account.displayName}{' '}
+                                  <span className="text-xs uppercase tracking-wide text-slate-500">
+                                    {account.provider}
+                                  </span>
+                                </h3>
+                                <p className="mt-1 font-mono text-xs text-slate-500">
+                                  {account.externalId}
+                                </p>
+                              </div>
+                              <span
+                                className={
+                                  account.status === 'connected'
+                                    ? 'text-emerald-200'
+                                    : 'text-amber-200'
+                                }
+                              >
+                                {account.status === 'connected'
+                                  ? 'Connected'
+                                  : 'Reconnect required'}
+                              </span>
+                            </div>
+                            {account.provider === 'youtube' ? (
+                              <p className="mt-4 text-sm text-slate-300">
+                                Upload:{' '}
+                                {account.capabilities.includes('youtube.video.upload')
+                                  ? 'allowed'
+                                  : 'not granted'}{' '}
+                                · Identity:{' '}
+                                {account.capabilities.includes('youtube.identity.read')
+                                  ? 'available'
+                                  : 'not granted'}
+                              </p>
+                            ) : tiktokView?.capabilities !== undefined ? (
+                              <div className="mt-4 space-y-2 text-sm text-slate-300">
+                                <p>
+                                  Granted scopes: {tiktokView.capabilities.grantedScopes.join(', ')}
+                                </p>
+                                <p>
+                                  Direct Post:{' '}
+                                  {tiktokView.capabilities.directPostAvailable
+                                    ? 'available for this creator'
+                                    : 'video.publish not granted'}
+                                </p>
+                                {tiktokView.capabilities.creator !== undefined && (
+                                  <p>
+                                    Live creator: @{tiktokView.capabilities.creator.username} · up
+                                    to {tiktokView.capabilities.media?.maxVideoDurationSeconds}s ·{' '}
+                                    {tiktokView.capabilities.privacyLevelOptions.join(', ')}
+                                  </p>
+                                )}
+                                <p className="text-amber-200/80">
+                                  Public posting:{' '}
+                                  {tiktokView.capabilities.publicPostingAvailability ===
+                                  'requires_audit_confirmation'
+                                    ? 'creator allows it, but TikTok app audit must be confirmed'
+                                    : tiktokView.capabilities.publicPostingAvailability ===
+                                        'unavailable_for_creator'
+                                      ? 'not offered for this creator'
+                                      : 'not authorized'}
+                                  . Unaudited clients are private-only.
+                                </p>
+                              </div>
+                            ) : tiktokView?.error !== undefined ? (
+                              <p className="mt-4 text-sm text-amber-200">{tiktokView.error}</p>
+                            ) : (
+                              <p className="mt-4 text-sm text-slate-400">
+                                Loading live TikTok posting availability…
+                              </p>
+                            )}
+                            <button
+                              className="mt-4 text-sm text-rose-200 hover:underline"
+                              onClick={() => void removeAccount(account.id)}
+                              type="button"
+                            >
+                              Remove local connection
+                            </button>
+                          </article>
+                        );
+                      })}
                     </div>
                     {accounts.length === 0 && (
                       <p className="mt-3 text-sm text-slate-400">
-                        No YouTube account is connected.
+                        No publishing account is connected.
                       </p>
                     )}
                   </section>
@@ -476,6 +696,29 @@ export function App() {
                     </div>
                     <p className="mt-3 break-all text-xs text-slate-500">
                       {youtubeStatus?.redirectUri}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-white/10 bg-slate-950 p-5">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <h2 className="font-semibold">TikTok credentials</h2>
+                        <p className="mt-1 text-sm text-slate-400">
+                          BYO TikTok Login Kit app · {tiktokStatus?.flow ?? 'deployment'} flow
+                        </p>
+                      </div>
+                      <span
+                        className={
+                          tiktokStatus?.configured === true ? 'text-emerald-200' : 'text-amber-200'
+                        }
+                      >
+                        {tiktokStatus?.configured === true ? 'Configured' : 'Action required'}
+                      </span>
+                    </div>
+                    <p className="mt-3 break-all text-xs text-slate-500">
+                      {tiktokStatus?.redirectUri}
+                    </p>
+                    <p className="mt-2 text-xs text-amber-200/80">
+                      TikTok unaudited clients can publish only with private visibility.
                     </p>
                   </div>
                 </div>
