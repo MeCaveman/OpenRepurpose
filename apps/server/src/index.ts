@@ -22,7 +22,7 @@ import { loadApplicationConfig } from '@openrepurpose/shared';
 import { redactLogText } from '@openrepurpose/platform-sdk';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
 import { YouTubeOAuthService, YouTubeUploadJobHandler } from '@openrepurpose/youtube';
-import { TikTokOAuthService } from '@openrepurpose/tiktok';
+import { TikTokDirectPostJobHandler, TikTokOAuthService } from '@openrepurpose/tiktok';
 import { assertLocalOnly, buildServer } from './app.js';
 import { loadOrCreateSessionKey } from './session-key.js';
 
@@ -61,6 +61,12 @@ export async function startServer(): Promise<void> {
         mediaRepository,
         new SqliteDestinationJobRepository(database),
         youtubeOAuthService,
+      ),
+      new TikTokDirectPostJobHandler(
+        mediaRepository,
+        new SqliteDestinationJobRepository(database),
+        tiktokOAuthService,
+        secretStore,
       ),
     ],
     config.jobRunner,

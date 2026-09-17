@@ -1,11 +1,20 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import type {
   AccountCapability,
   AccountRepository,
   ConnectedAccount,
+  DestinationJobRecord,
+  DestinationJobRepository,
+  JobHandler,
+  JobHandlerContext,
+  JsonValue,
+  MediaAsset,
+  MediaRepository,
   OAuthAuthorizationRequest,
   OAuthAuthorizationRequestRepository,
 } from '@openrepurpose/core';
+import { JobExecutionError } from '@openrepurpose/core';
 import type { SecretReference, SecretStore } from '@openrepurpose/platform-sdk';
 import { PlatformError } from '@openrepurpose/platform-sdk';
 
@@ -27,6 +36,11 @@ export function tiktokTokenBundleReference(accountId: string): SecretReference {
   return { name: 'tiktok-token-bundle', ownerId: accountId, scope: 'account' };
 }
 
+/** The expiring TikTok upload URL contains authorization material and never enters SQLite. */
+export function tiktokUploadUrlReference(jobId: string): SecretReference {
+  return { name: 'tiktok-upload-url', ownerId: `tiktok-upload:${jobId}`, scope: 'application' };
+}
+
 function verifierReference(requestId: string): SecretReference {
   return {
     name: 'code-verifier',
@@ -40,6 +54,32 @@ export interface TikTokOAuthEndpoints {
   readonly creatorInfo: string;
   readonly token: string;
   readonly userInfo: string;
+}
+
+const defaultPublishEndpoints = {
+  init: 'https://open.tiktokapis.com/v2/post/publish/video/init/',
+  status: 'https://open.tiktokapis.com/v2/post/publish/status/fetch/',
+};
+
+export const TIKTOK_DIRECT_POST_JOB_TYPE = 'tiktok.direct-post';
+
+export interface TikTokDirectPostJobInput {
+  readonly accountId: string;
+  readonly mediaId: string;
+  readonly metadata: {
+    readonly caption?: string;
+    readonly disableComment?: boolean;
+    readonly disableDuet?: boolean;
+    readonly disableStitch?: boolean;
+    readonly privacyLevel: TikTokPrivacyLevel;
+  };
+}
+
+export interface TikTokDirectPostJobHandlerOptions {
+  readonly chunkSizeBytes?: number;
+  readonly endpoints?: Partial<typeof defaultPublishEndpoints>;
+  readonly http?: TikTokHttpClient;
+  readonly now?: () => Date;
 }
 
 export interface TikTokHttpClient {
@@ -773,5 +813,470 @@ export class TikTokOAuthService {
         'Configure TikTok Login Kit credentials before connecting TikTok.',
       );
     return { clientKey, clientSecret };
+  }
+}
+
+function isJsonRecord(value: unknown): value is { readonly [key: string]: JsonValue } {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function directPostInput(value: JsonValue): TikTokDirectPostJobInput {
+  if (
+    !isJsonRecord(value) ||
+    typeof value.accountId !== 'string' ||
+    typeof value.mediaId !== 'string'
+  )
+    throw new JobExecutionError(
+      'TIKTOK_DIRECT_POST_INPUT_INVALID',
+      false,
+      'The TikTok publish job is invalid.',
+    );
+  const metadata = value.metadata;
+  if (
+    !isJsonRecord(metadata) ||
+    typeof metadata.privacyLevel !== 'string' ||
+    !privacyLevels.has(metadata.privacyLevel as TikTokPrivacyLevel)
+  )
+    throw new JobExecutionError(
+      'TIKTOK_PRIVACY_LEVEL_INVALID',
+      false,
+      'Choose a privacy level offered by TikTok for this creator.',
+    );
+  for (const key of ['disableComment', 'disableDuet', 'disableStitch'] as const) {
+    if (metadata[key] !== undefined && typeof metadata[key] !== 'boolean')
+      throw new JobExecutionError(
+        'TIKTOK_DIRECT_POST_INPUT_INVALID',
+        false,
+        'The TikTok publish options are invalid.',
+      );
+  }
+  if (metadata.caption !== undefined && typeof metadata.caption !== 'string')
+    throw new JobExecutionError(
+      'TIKTOK_DIRECT_POST_INPUT_INVALID',
+      false,
+      'The TikTok caption is invalid.',
+    );
+  return {
+    accountId: value.accountId,
+    mediaId: value.mediaId,
+    metadata: {
+      privacyLevel: metadata.privacyLevel as TikTokPrivacyLevel,
+      ...(typeof metadata.caption === 'string' ? { caption: metadata.caption } : {}),
+      ...(typeof metadata.disableComment === 'boolean'
+        ? { disableComment: metadata.disableComment }
+        : {}),
+      ...(typeof metadata.disableDuet === 'boolean' ? { disableDuet: metadata.disableDuet } : {}),
+      ...(typeof metadata.disableStitch === 'boolean'
+        ? { disableStitch: metadata.disableStitch }
+        : {}),
+    },
+  };
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get('retry-after');
+  const seconds = value === null ? Number.NaN : Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1_000) : undefined;
+}
+
+function remoteErrorCode(body: Record<string, unknown> | undefined): string {
+  const error = safeJsonObject(body?.error);
+  return typeof error?.code === 'string' ? error.code : 'request_failed';
+}
+
+function requestFailure(
+  response: Response,
+  body: Record<string, unknown> | undefined,
+  operation: 'init' | 'status',
+): JobExecutionError {
+  const code = remoteErrorCode(body);
+  const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+  const unavailable = new Set([
+    'unaudited_client_can_only_post_to_private_accounts',
+    'privacy_level_option_mismatch',
+    'spam_risk_too_many_posts',
+    'spam_risk_user_banned_from_posting',
+    'reached_active_user_cap',
+  ]);
+  return new JobExecutionError(
+    `TIKTOK_${operation.toUpperCase()}_${code.toUpperCase()}`,
+    retryable,
+    unavailable.has(code)
+      ? 'TikTok cannot accept this post with the selected account or privacy settings.'
+      : response.status === 401
+        ? 'Reconnect the TikTok account to continue publishing.'
+        : retryable
+          ? 'TikTok is temporarily unavailable. The publish job will retry.'
+          : 'TikTok rejected the publish request.',
+    retryAfterMs(response),
+  );
+}
+
+function uploadFailure(response: Response): JobExecutionError {
+  const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+  return new JobExecutionError(
+    response.status === 403 || response.status === 404
+      ? 'TIKTOK_UPLOAD_URL_EXPIRED'
+      : response.status === 416
+        ? 'TIKTOK_UPLOAD_RANGE_CONFLICT'
+        : response.status === 429
+          ? 'TIKTOK_UPLOAD_RATE_LIMITED'
+          : 'TIKTOK_UPLOAD_FAILED',
+    retryable,
+    response.status === 403 || response.status === 404
+      ? 'TikTok no longer accepts this upload URL. The existing post cannot be safely resumed.'
+      : retryable
+        ? 'TikTok is temporarily unavailable. The upload will retry at the last confirmed chunk.'
+        : 'TikTok rejected this upload chunk.',
+    retryAfterMs(response),
+  );
+}
+
+function mimeType(path: string): string | undefined {
+  const lower = path.toLowerCase();
+  if (lower.endsWith('.mp4')) return 'video/mp4';
+  if (lower.endsWith('.webm')) return 'video/webm';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  return undefined;
+}
+
+function utf16Length(value: string): number {
+  return value.length;
+}
+
+interface UploadUrlLease {
+  readonly expiresAt: number;
+  readonly uploadUrl: string;
+}
+
+/**
+ * Direct Post transport. It records TikTok's durable publish ID in the ordinary destination
+ * checkpoint, but stores the short-lived signed upload URL only in SecretStore. A missing or
+ * expired URL after an interrupted transfer deliberately fails safely instead of creating a
+ * second Direct Post.
+ */
+export class TikTokDirectPostJobHandler implements JobHandler {
+  public readonly type = TIKTOK_DIRECT_POST_JOB_TYPE;
+  private readonly chunkSizeBytes: number;
+  private readonly endpoints: typeof defaultPublishEndpoints;
+  private readonly http: TikTokHttpClient;
+  private readonly now: () => Date;
+
+  public constructor(
+    private readonly media: MediaRepository,
+    private readonly checkpoints: DestinationJobRepository,
+    private readonly oauth: TikTokOAuthService,
+    private readonly secrets: SecretStore,
+    options: TikTokDirectPostJobHandlerOptions = {},
+  ) {
+    this.endpoints = { ...defaultPublishEndpoints, ...options.endpoints };
+    this.http = options.http ?? fetch;
+    this.now = options.now ?? (() => new Date());
+    this.chunkSizeBytes = options.chunkSizeBytes ?? 10 * 1024 * 1024;
+    if (
+      !Number.isInteger(this.chunkSizeBytes) ||
+      this.chunkSizeBytes < 5 * 1024 * 1024 ||
+      this.chunkSizeBytes > 64 * 1024 * 1024
+    )
+      throw new Error('TikTok upload chunks must be between 5 MiB and 64 MiB.');
+  }
+
+  public async execute(inputValue: JsonValue, context: JobHandlerContext): Promise<void> {
+    const input = directPostInput(inputValue);
+    const asset = this.media.list().find((candidate) => candidate.id === input.mediaId);
+    if (asset === undefined || asset.state !== 'available')
+      throw new JobExecutionError(
+        'TIKTOK_UPLOAD_MEDIA_UNAVAILABLE',
+        false,
+        'The selected media file is unavailable.',
+      );
+    this.validateMedia(asset, input);
+
+    let checkpoint = this.checkpoints.find(context.jobId) ?? {
+      destinationId: 'tiktok',
+      jobId: context.jobId,
+      remoteStatus: 'uploading',
+      uploadedBytes: 0,
+      updatedAt: this.now(),
+    };
+    if (checkpoint.remoteId !== undefined && checkpoint.uploadedBytes >= asset.sizeBytes)
+      return this.poll(checkpoint, input.accountId, context);
+
+    const capabilities = await this.oauth.getAccountCapabilities(input.accountId);
+    this.validateCreatorOptions(capabilities, input, asset);
+    const accessToken = await this.accessToken(input.accountId);
+    if (checkpoint.remoteId === undefined)
+      checkpoint = await this.initialize(input, asset, accessToken, checkpoint, context.jobId);
+    const lease = await this.readLease(context.jobId);
+    if (lease === undefined || lease.expiresAt <= this.now().getTime())
+      throw new JobExecutionError(
+        'TIKTOK_UPLOAD_RECOVERY_AMBIGUOUS',
+        false,
+        'TikTok upload recovery needs a valid upload URL. The existing post will not be duplicated automatically.',
+      );
+
+    while (checkpoint.uploadedBytes < asset.sizeBytes) {
+      if (context.signal.aborted)
+        throw new JobExecutionError(
+          'TIKTOK_UPLOAD_CANCELLED',
+          false,
+          'The TikTok upload was cancelled.',
+        );
+      if (lease.expiresAt <= this.now().getTime())
+        throw new JobExecutionError(
+          'TIKTOK_UPLOAD_RECOVERY_AMBIGUOUS',
+          false,
+          'TikTok upload recovery needs a valid upload URL. The existing post will not be duplicated automatically.',
+        );
+      const start = checkpoint.uploadedBytes;
+      const end = Math.min(asset.sizeBytes - 1, start + this.chunkSize(asset.sizeBytes) - 1);
+      let response: Response;
+      try {
+        response = await this.http(lease.uploadUrl, {
+          body: createReadStream(asset.path, { start, end }),
+          duplex: 'half',
+          headers: {
+            'Content-Length': String(end - start + 1),
+            'Content-Range': `bytes ${start}-${end}/${asset.sizeBytes}`,
+            'Content-Type': mimeType(asset.path)!,
+          },
+          method: 'PUT',
+          signal: context.signal,
+        } as RequestInit);
+      } catch {
+        throw new JobExecutionError(
+          'TIKTOK_UPLOAD_NETWORK_ERROR',
+          true,
+          'TikTok could not be reached. The upload will retry at the last confirmed chunk.',
+        );
+      }
+      if (response.status === 206) {
+        checkpoint = this.save({ ...checkpoint, uploadedBytes: end + 1 });
+        continue;
+      }
+      if (response.status !== 201) throw uploadFailure(response);
+      if (end !== asset.sizeBytes - 1)
+        throw new JobExecutionError(
+          'TIKTOK_UPLOAD_RESPONSE_INVALID',
+          true,
+          'TikTok completed the upload before all file chunks were sent.',
+        );
+      checkpoint = this.save({
+        ...checkpoint,
+        remoteStatus: 'processing',
+        uploadedBytes: asset.sizeBytes,
+      });
+      await this.secrets.delete(tiktokUploadUrlReference(context.jobId));
+    }
+    return this.poll(checkpoint, input.accountId, context);
+  }
+
+  private validateMedia(asset: MediaAsset, input: TikTokDirectPostJobInput): void {
+    const type = mimeType(asset.path);
+    if (type === undefined || asset.sizeBytes <= 0 || asset.sizeBytes > 4_294_967_296)
+      throw new JobExecutionError(
+        'TIKTOK_UPLOAD_MEDIA_INVALID',
+        false,
+        'TikTok Direct Post accepts a non-empty MP4, MOV, or WebM video up to 4 GB.',
+      );
+    if (input.metadata.caption !== undefined && utf16Length(input.metadata.caption) > 2_200)
+      throw new JobExecutionError(
+        'TIKTOK_CAPTION_TOO_LONG',
+        false,
+        'TikTok captions are limited to 2,200 UTF-16 code units.',
+      );
+  }
+
+  private validateCreatorOptions(
+    capabilities: TikTokAccountCapabilities,
+    input: TikTokDirectPostJobInput,
+    asset: MediaAsset,
+  ): void {
+    if (!capabilities.directPostAvailable || capabilities.media === undefined)
+      throw new JobExecutionError(
+        'TIKTOK_DIRECT_POST_NOT_AUTHORIZED',
+        false,
+        'This TikTok account did not grant Direct Post access.',
+      );
+    if (!capabilities.privacyLevelOptions.includes(input.metadata.privacyLevel))
+      throw new JobExecutionError(
+        'TIKTOK_PRIVACY_LEVEL_UNAVAILABLE',
+        false,
+        'The selected TikTok privacy level is not currently available for this creator.',
+      );
+    if (
+      asset.metadata.durationSeconds !== undefined &&
+      asset.metadata.durationSeconds > capabilities.media.maxVideoDurationSeconds
+    )
+      throw new JobExecutionError(
+        'TIKTOK_VIDEO_DURATION_EXCEEDED',
+        false,
+        'This video is longer than the current TikTok limit for this creator.',
+      );
+  }
+
+  private async initialize(
+    input: TikTokDirectPostJobInput,
+    asset: MediaAsset,
+    accessToken: string,
+    checkpoint: DestinationJobRecord,
+    jobId: string,
+  ): Promise<DestinationJobRecord> {
+    const chunkSize = this.chunkSize(asset.sizeBytes);
+    let response: Response;
+    try {
+      response = await this.http(this.endpoints.init, {
+        body: JSON.stringify({
+          post_info: {
+            privacy_level: input.metadata.privacyLevel,
+            ...(input.metadata.caption === undefined ? {} : { title: input.metadata.caption }),
+            ...(input.metadata.disableComment === undefined
+              ? {}
+              : { disable_comment: input.metadata.disableComment }),
+            ...(input.metadata.disableDuet === undefined
+              ? {}
+              : { disable_duet: input.metadata.disableDuet }),
+            ...(input.metadata.disableStitch === undefined
+              ? {}
+              : { disable_stitch: input.metadata.disableStitch }),
+          },
+          source_info: {
+            chunk_size: chunkSize,
+            source: 'FILE_UPLOAD',
+            total_chunk_count: Math.ceil(asset.sizeBytes / chunkSize),
+            video_size: asset.sizeBytes,
+          },
+        }),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json; charset=UTF-8',
+        },
+        method: 'POST',
+      });
+    } catch {
+      throw new JobExecutionError(
+        'TIKTOK_INIT_NETWORK_ERROR',
+        true,
+        'TikTok could not be reached. The publish job will retry before creating a post.',
+      );
+    }
+    const body = await responseJson(response);
+    if (!response.ok || remoteErrorCode(body) !== 'ok')
+      throw requestFailure(response, body, 'init');
+    const data = safeJsonObject(body?.data);
+    if (typeof data?.publish_id !== 'string' || typeof data.upload_url !== 'string')
+      throw new JobExecutionError(
+        'TIKTOK_INIT_RESPONSE_INVALID',
+        true,
+        'TikTok returned an invalid upload initialization response.',
+      );
+    // Checkpoint the durable remote operation first. If secret persistence fails, recovery refuses
+    // to create a second Direct Post rather than losing the only evidence of the first one.
+    const saved = this.save({
+      ...checkpoint,
+      remoteId: data.publish_id,
+      remoteStatus: 'uploading',
+    });
+    await this.secrets.set(
+      tiktokUploadUrlReference(jobId),
+      JSON.stringify({
+        expiresAt: this.now().getTime() + 60 * 60 * 1_000,
+        uploadUrl: data.upload_url,
+      }),
+    );
+    return saved;
+  }
+
+  private async poll(
+    checkpoint: DestinationJobRecord,
+    accountId: string,
+    context: JobHandlerContext,
+  ): Promise<void> {
+    if (checkpoint.remoteId === undefined)
+      throw new JobExecutionError(
+        'TIKTOK_PUBLISH_ID_MISSING',
+        true,
+        'TikTok publish status is not available yet.',
+      );
+    let response: Response;
+    try {
+      response = await this.http(this.endpoints.status, {
+        body: JSON.stringify({ publish_id: checkpoint.remoteId }),
+        headers: {
+          Authorization: `Bearer ${await this.accessToken(accountId)}`,
+          'Content-Type': 'application/json; charset=UTF-8',
+        },
+        method: 'POST',
+        signal: context.signal,
+      });
+    } catch {
+      throw new JobExecutionError(
+        'TIKTOK_STATUS_NETWORK_ERROR',
+        true,
+        'TikTok publish status could not be loaded.',
+      );
+    }
+    const body = await responseJson(response);
+    if (!response.ok || remoteErrorCode(body) !== 'ok')
+      throw requestFailure(response, body, 'status');
+    const data = safeJsonObject(body?.data);
+    const status = data?.status;
+    if (status === 'PROCESSING_UPLOAD') {
+      this.save({ ...checkpoint, remoteStatus: 'processing' });
+      throw new JobExecutionError(
+        'TIKTOK_PROCESSING',
+        true,
+        'TikTok is still processing the uploaded video.',
+      );
+    }
+    if (status === 'PUBLISH_COMPLETE') {
+      this.save({ ...checkpoint, remoteStatus: 'published' });
+      return;
+    }
+    if (status === 'FAILED') {
+      const reason = typeof data?.fail_reason === 'string' ? data.fail_reason : 'unknown';
+      this.save({ ...checkpoint, remoteStatus: 'failed' });
+      throw new JobExecutionError(
+        `TIKTOK_PUBLISH_FAILED_${reason.toUpperCase()}`,
+        reason === 'internal',
+        'TikTok failed to publish this video.',
+      );
+    }
+    throw new JobExecutionError(
+      'TIKTOK_STATUS_RESPONSE_INVALID',
+      true,
+      'TikTok returned an invalid publish status.',
+    );
+  }
+
+  private chunkSize(sizeBytes: number): number {
+    return sizeBytes < 5 * 1024 * 1024 ? sizeBytes : Math.min(this.chunkSizeBytes, sizeBytes);
+  }
+
+  private async readLease(jobId: string): Promise<UploadUrlLease | undefined> {
+    const stored = await this.secrets.get(tiktokUploadUrlReference(jobId));
+    if (stored === undefined) return undefined;
+    try {
+      const value = JSON.parse(stored) as Partial<UploadUrlLease>;
+      if (typeof value.uploadUrl !== 'string' || typeof value.expiresAt !== 'number')
+        return undefined;
+      return { uploadUrl: value.uploadUrl, expiresAt: value.expiresAt };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async accessToken(accountId: string): Promise<string> {
+    try {
+      return await this.oauth.refreshAccessToken(accountId);
+    } catch (error) {
+      if (error instanceof PlatformError)
+        throw new JobExecutionError(error.code, error.retryable, error.publicMessage);
+      throw error;
+    }
+  }
+
+  private save(record: Omit<DestinationJobRecord, 'updatedAt'>): DestinationJobRecord {
+    return this.checkpoints.save({ ...record, updatedAt: this.now() });
   }
 }
