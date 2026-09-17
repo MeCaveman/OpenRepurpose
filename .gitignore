@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local application data
+data/
+.local/
+tmp/
+temp/
+
+# SQLite runtime databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+
+# Package manager
+.pnpm-store/
+
+# Local AI/model/media artifacts
+models/
+media/
+derivatives/
+transcripts/
+
+# Generated artifacts
+artifacts/
