@@ -1,0 +1,4 @@
+role = "builder"
+model = "gpt-5.6-terra"
+reasoning_effort = "medium"
+description = "Normal feature implementation."
