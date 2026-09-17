@@ -7,3 +7,4 @@ Use sequential, descriptive filenames, for example:
 - `0001-local-first-modular-monolith.md`
 - `0002-job-engine.md`
 - `0003-secret-storage.md`
+- `0004-tiktok-direct-post.md`
