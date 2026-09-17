@@ -12,7 +12,11 @@
   },
   "dependencies": {
     "@openrepurpose/db": "workspace:*",
-    "@openrepurpose/shared": "workspace:*"
+    "@openrepurpose/shared": "workspace:*",
+    "@openrepurpose/core": "workspace:*",
+    "@openrepurpose/media": "workspace:*",
+    "commander": "14.0.2",
+    "commander": "14.0.2"
   },
   "devDependencies": {
     "@types/node": "24.13.5"

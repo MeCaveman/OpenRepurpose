@@ -5,6 +5,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { LogController } from 'fastify';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ApplicationConfig } from '@openrepurpose/shared';
+import type { MediaImportService, MediaRepository } from '@openrepurpose/core';
 
 declare module '@fastify/secure-session' {
   interface SessionData {
@@ -18,6 +19,8 @@ const defaultStaticRoot = fileURLToPath(new URL('../../web/dist', import.meta.ur
 export interface BuildServerOptions {
   readonly config: ApplicationConfig;
   readonly logger?: boolean;
+  readonly mediaImportService?: MediaImportService;
+  readonly mediaRepository?: MediaRepository;
   readonly sessionKey: Buffer;
   readonly staticRoot?: false | string;
 }
@@ -159,6 +162,19 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     async () => ({ service: 'openrepurpose', status: 'ok', version: '0.1.0' }),
   );
 
+  if (options.mediaRepository !== undefined) {
+    server.get('/api/media', async () => ({ media: options.mediaRepository!.list() }));
+  }
+  if (options.mediaImportService !== undefined) {
+    server.post<{ Body: { path?: unknown } }>('/api/media/import', async (request, reply) => {
+      if (typeof request.body?.path !== 'string')
+        return reply
+          .code(400)
+          .send({ error: 'A string path is required.', code: 'INVALID_MEDIA_PATH' });
+      const result = await options.mediaImportService!.import(request.body.path);
+      return reply.code(result.duplicate ? 200 : 201).send(result);
+    });
+  }
   server.get(
     '/api/session',
     {

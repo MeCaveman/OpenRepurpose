@@ -4,9 +4,18 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
+      '@openrepurpose/core': fileURLToPath(
+        new URL('./packages/core/src/index.ts', import.meta.url),
+      ),
+      '@openrepurpose/media': fileURLToPath(
+        new URL('./packages/media/src/index.ts', import.meta.url),
+      ),
       '@openrepurpose/db': fileURLToPath(new URL('./packages/db/src/index.ts', import.meta.url)),
       '@openrepurpose/server': fileURLToPath(
         new URL('./apps/server/src/index.ts', import.meta.url),
+      ),
+      '@openrepurpose/testkit': fileURLToPath(
+        new URL('./packages/testkit/src/index.ts', import.meta.url),
       ),
       '@openrepurpose/shared': fileURLToPath(
         new URL('./packages/shared/src/index.ts', import.meta.url),

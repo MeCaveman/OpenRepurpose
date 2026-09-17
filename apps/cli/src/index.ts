@@ -1,6 +1,13 @@
 import { accessSync, constants, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { openDatabase, runMigrations } from '@openrepurpose/db';
+import { Command } from 'commander';
+import { MediaImportService } from '@openrepurpose/core';
+import { openDatabase, runMigrations, SqliteMediaRepository } from '@openrepurpose/db';
+import {
+  discoverMediaExecutables,
+  FfprobeMediaProbe,
+  LocalMediaFileInspector,
+} from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import type { Environment } from '@openrepurpose/shared';
 
@@ -9,7 +16,6 @@ export interface DoctorCheck {
   readonly name: string;
   readonly ok: boolean;
 }
-
 function writableDirectoryCheck(name: string, directory: string): DoctorCheck {
   try {
     mkdirSync(directory, { recursive: true });
@@ -23,8 +29,6 @@ function writableDirectoryCheck(name: string, directory: string): DoctorCheck {
     };
   }
 }
-
-/** Packet 2 diagnostic composition. Future packets add server and media dependency probes here. */
 export function runDoctor(environment: Environment = process.env): readonly DoctorCheck[] {
   try {
     const config = loadApplicationConfig(environment);
@@ -59,21 +63,73 @@ export function runDoctor(environment: Environment = process.env): readonly Doct
   }
 }
 
-function isExecutedDirectly(): boolean {
-  return (
-    process.argv[1] !== undefined && import.meta.url === new URL(`file:${process.argv[1]}`).href
-  );
+async function mediaContext() {
+  const config = loadApplicationConfig();
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  const executables = await discoverMediaExecutables();
+  if (executables.ffprobe === undefined) {
+    database.close();
+    throw new Error('ffprobe was not found. Set FFPROBE_PATH or add ffprobe to PATH.');
+  }
+  const repository = new SqliteMediaRepository(database);
+  return {
+    database,
+    repository,
+    service: new MediaImportService(
+      new LocalMediaFileInspector(),
+      new FfprobeMediaProbe(executables.ffprobe),
+      repository,
+    ),
+  };
 }
 
-if (isExecutedDirectly()) {
-  if (process.argv[2] !== 'doctor') {
-    process.stderr.write('Usage: openrepurpose doctor\n');
-    process.exitCode = 1;
-  } else {
+export function createCli(): Command {
+  const program = new Command().name('openrepurpose').description('Local media automation');
+  program.command('doctor').action(() => {
     const checks = runDoctor();
-    for (const check of checks) {
+    for (const check of checks)
       process.stdout.write(`${check.ok ? 'OK' : 'FAIL'} ${check.name}: ${check.detail}\n`);
-    }
     if (checks.some((check) => !check.ok)) process.exitCode = 1;
-  }
+  });
+  const media = program.command('media').description('Manage local media');
+  media.command('import <path>').action(async (path: string) => {
+    const context = await mediaContext();
+    try {
+      const result = await context.service.import(path);
+      process.stdout.write(
+        `${result.duplicate ? 'Already imported' : 'Imported'} ${result.asset.id}: ${result.asset.path}\n`,
+      );
+    } finally {
+      context.database.close();
+    }
+  });
+  media
+    .command('list')
+    .option('--json', 'write JSON')
+    .action(async (options: { json?: boolean }) => {
+      const context = await mediaContext();
+      try {
+        const assets = context.repository.list();
+        process.stdout.write(
+          options.json
+            ? `${JSON.stringify(assets)}\n`
+            : assets.map((asset) => `${asset.id}\t${asset.state}\t${asset.path}`).join('\n') +
+                (assets.length > 0 ? '\n' : ''),
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  return program;
 }
+
+if (process.argv[1] !== undefined && import.meta.url === new URL(`file:${process.argv[1]}`).href)
+  createCli()
+    .parseAsync(process.argv)
+    .catch((error: unknown) => {
+      process.stderr.write(
+        `OpenRepurpose failed: ${error instanceof Error ? error.message : 'Unknown error'}\n`,
+      );
+      process.exitCode = 1;
+    });

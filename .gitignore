@@ -47,7 +47,7 @@ Desktop.ini
 
 # Local AI/model/media artifacts
 models/
-media/
+/media/
 derivatives/
 transcripts/
 
