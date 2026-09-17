@@ -230,6 +230,9 @@ importers:
       '@openrepurpose/media':
         specifier: workspace:*
         version: link:../../packages/media
+      '@openrepurpose/platform-sdk':
+        specifier: workspace:*
+        version: link:../../packages/platform-sdk
       '@openrepurpose/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -304,7 +307,11 @@ importers:
         specifier: 24.13.5
         version: 24.13.5
 
-  packages/platform-sdk: {}
+  packages/platform-sdk:
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.5
+        version: 24.13.5
 
   packages/shared:
     dependencies:
@@ -321,6 +328,9 @@ importers:
       '@openrepurpose/db':
         specifier: workspace:*
         version: link:../db
+      '@openrepurpose/platform-sdk':
+        specifier: workspace:*
+        version: link:../platform-sdk
     devDependencies:
       '@types/node':
         specifier: 24.13.5

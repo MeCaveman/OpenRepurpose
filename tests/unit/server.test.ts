@@ -123,4 +123,39 @@ describe('Fastify local security boundary', () => {
     expect(missingApi.statusCode).toBe(404);
     expect(missingApi.json()).toMatchObject({ code: 'API_ROUTE_NOT_FOUND' });
   });
+
+  it('redacts sensitive structured fields and raw errors from server logs', async () => {
+    const chunks: string[] = [];
+    server = buildServer({
+      config,
+      logger: true,
+      loggerDestination: { write: (chunk) => chunks.push(chunk) },
+      sessionKey: Buffer.alloc(32, 7),
+      staticRoot: false,
+    });
+    server.get('/api/log-redaction', async (request) => {
+      request.log.info(
+        {
+          authorization: 'Bearer request-secret',
+          credentials: { clientSecret: 'client-secret-value' },
+        },
+        'Structured log test',
+      );
+      request.log.error({ err: new Error('refresh token: raw-error-secret') }, 'Safe error');
+      return { ok: true };
+    });
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/log-redaction',
+      headers: allowedHost,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const output = chunks.join('');
+    expect(output).not.toContain('request-secret');
+    expect(output).not.toContain('client-secret-value');
+    expect(output).not.toContain('raw-error-secret');
+    expect(output).toContain('[REDACTED]');
+  });
 });

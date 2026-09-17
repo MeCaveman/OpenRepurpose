@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { openDatabase, runMigrations } from '@openrepurpose/db';
 import type { OpenRepurposeDatabase } from '@openrepurpose/db';
 
+export * from './platform.js';
+
 export interface TemporaryDatabase {
   readonly directory: string;
   readonly database: OpenRepurposeDatabase;

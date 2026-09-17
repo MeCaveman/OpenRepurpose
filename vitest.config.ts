@@ -11,6 +11,9 @@ export default defineConfig({
         new URL('./packages/media/src/index.ts', import.meta.url),
       ),
       '@openrepurpose/db': fileURLToPath(new URL('./packages/db/src/index.ts', import.meta.url)),
+      '@openrepurpose/platform-sdk': fileURLToPath(
+        new URL('./packages/platform-sdk/src/index.ts', import.meta.url),
+      ),
       '@openrepurpose/server': fileURLToPath(
         new URL('./apps/server/src/index.ts', import.meta.url),
       ),

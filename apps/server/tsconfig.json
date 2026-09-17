@@ -11,6 +11,7 @@
     { "path": "../../packages/shared" },
     { "path": "../../packages/core" },
     { "path": "../../packages/db" },
-    { "path": "../../packages/media" }
+    { "path": "../../packages/media" },
+    { "path": "../../packages/platform-sdk" }
   ]
 }

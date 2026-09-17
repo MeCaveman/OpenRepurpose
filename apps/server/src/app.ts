@@ -3,8 +3,9 @@ import { fileURLToPath } from 'node:url';
 import fastifySecureSession from '@fastify/secure-session';
 import fastifyStatic from '@fastify/static';
 import Fastify, { LogController } from 'fastify';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ApplicationConfig } from '@openrepurpose/shared';
+import { REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
 import type {
   JobService,
   JobStatus,
@@ -21,10 +22,15 @@ declare module '@fastify/secure-session' {
 const stateChangingMethods = new Set(['DELETE', 'PATCH', 'POST', 'PUT']);
 const defaultStaticRoot = fileURLToPath(new URL('../../web/dist', import.meta.url));
 
+export interface LoggerDestination {
+  write(chunk: string): void;
+}
+
 export interface BuildServerOptions {
   readonly config: ApplicationConfig;
   readonly jobService?: JobService;
   readonly logger?: boolean;
+  readonly loggerDestination?: LoggerDestination;
   readonly mediaImportService?: MediaImportService;
   readonly mediaRepository?: MediaRepository;
   readonly sessionKey: Buffer;
@@ -68,6 +74,30 @@ export function assertLocalOnly(config: ApplicationConfig): void {
   }
 }
 
+const sensitiveLogPaths = [
+  'authorization',
+  'cookie',
+  'password',
+  'secret',
+  'token',
+  'accessToken',
+  'refreshToken',
+  'clientSecret',
+  'authorizationCode',
+  '*.authorization',
+  '*.cookie',
+  '*.password',
+  '*.secret',
+  '*.token',
+  '*.accessToken',
+  '*.refreshToken',
+  '*.clientSecret',
+  '*.authorizationCode',
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'res.headers["set-cookie"]',
+] as const;
+
 export function buildServer(options: BuildServerOptions): FastifyInstance {
   if (options.sessionKey.length !== 32) {
     throw new Error('The secure session key must contain exactly 32 bytes.');
@@ -75,7 +105,22 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
   const server = Fastify({
     logController: new LogController({ disableRequestLogging: true }),
-    logger: options.logger ?? false,
+    logger:
+      options.logger === true
+        ? {
+            redact: { paths: [...sensitiveLogPaths], censor: REDACTED_LOG_VALUE },
+            serializers: {
+              err: (error: FastifyError) => ({
+                type: error.name,
+                message: 'Request failed.',
+                stack: REDACTED_LOG_VALUE,
+              }),
+            },
+            ...(options.loggerDestination === undefined
+              ? {}
+              : { stream: options.loggerDestination }),
+          }
+        : false,
     trustProxy: false,
   });
   const allowedOrigins = new Set([options.config.appUrl.origin]);

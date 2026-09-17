@@ -18,6 +18,7 @@
     "@openrepurpose/core": "workspace:*",
     "@openrepurpose/db": "workspace:*",
     "@openrepurpose/media": "workspace:*",
+    "@openrepurpose/platform-sdk": "workspace:*",
     "fastify": "5.12.5"
   },
   "devDependencies": {

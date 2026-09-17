@@ -13,6 +13,7 @@ import {
   LocalMediaFileInspector,
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
+import { redactLogText } from '@openrepurpose/platform-sdk';
 import { assertLocalOnly, buildServer } from './app.js';
 import { loadOrCreateSessionKey } from './session-key.js';
 
@@ -72,7 +73,7 @@ function isExecutedDirectly(): boolean {
 if (isExecutedDirectly())
   startServer().catch((error: unknown) => {
     process.stderr.write(
-      `OpenRepurpose server failed to start: ${error instanceof Error ? error.message : 'Server startup failed.'}\n`,
+      `OpenRepurpose server failed to start: ${error instanceof Error ? redactLogText(error.message) : 'Server startup failed.'}\n`,
     );
     process.exitCode = 1;
   });

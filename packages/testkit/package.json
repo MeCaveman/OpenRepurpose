@@ -14,7 +14,8 @@
     "typecheck": "tsc -b tsconfig.json"
   },
   "dependencies": {
-    "@openrepurpose/db": "workspace:*"
+    "@openrepurpose/db": "workspace:*",
+    "@openrepurpose/platform-sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.13.5"
