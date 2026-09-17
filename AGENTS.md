@@ -371,6 +371,24 @@ Commands return non-zero exit codes on failure. Support `--json` on machine-read
 
 Do not attempt a whole release in one giant turn.
 
+### Editing fallback
+
+Do not make any specific patch, sandbox, or editing helper a hard dependency.
+
+Prefer the normal Codex file-editing tools. If an editing or patch tool fails because of the local environment, especially on Windows, continue using another safe editing mechanism available to you, including direct workspace file writes or shell/PowerShell-based file edits.
+
+Do not abandon or report a packet as blocked solely because `apply_patch`, a patch helper, or a sandbox-specific editing mechanism is unavailable.
+
+When using an editing fallback:
+- work only inside the current OpenRepurpose repository unless the user explicitly authorizes otherwise;
+- check `git status` before and after edits;
+- preserve existing user changes;
+- do not reset, discard, or overwrite unrelated work;
+- avoid destructive commands outside the repository;
+- use shell/PowerShell only as an editing/automation fallback, not to weaken the application's command-execution security rules elsewhere in this file.
+
+For every version:
+
 For every version:
 1. Read this file.
 2. Read only the current version file.

@@ -8,6 +8,13 @@
   "scripts": {
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -b tsconfig.json"
+  },
+  "dependencies": {
+    "@openrepurpose/db": "workspace:*",
+    "@openrepurpose/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.5"
   }
 }
