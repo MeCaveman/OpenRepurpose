@@ -1,12 +1,25 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import type {
   AccountCapability,
   AccountRepository,
   ConnectedAccount,
+  DestinationJobRecord,
+  DestinationJobRepository,
+  JobHandler,
+  JobHandlerContext,
+  JsonValue,
+  MediaRepository,
   OAuthAuthorizationRequest,
   OAuthAuthorizationRequestRepository,
 } from '@openrepurpose/core';
-import type { SecretReference, SecretStore } from '@openrepurpose/platform-sdk';
+import { JobExecutionError } from '@openrepurpose/core';
+import type {
+  DestinationCapabilities,
+  PublishMetadata,
+  SecretReference,
+  SecretStore,
+} from '@openrepurpose/platform-sdk';
 import { PlatformError } from '@openrepurpose/platform-sdk';
 
 export const YOUTUBE_READONLY_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly';
@@ -94,6 +107,468 @@ const defaultEndpoints: YouTubeOAuthEndpoints = {
   channels: 'https://www.googleapis.com/youtube/v3/channels',
   token: 'https://oauth2.googleapis.com/token',
 };
+
+const defaultUploadEndpoints = {
+  upload: 'https://www.googleapis.com/upload/youtube/v3/videos',
+  videos: 'https://www.googleapis.com/youtube/v3/videos',
+};
+
+export const YOUTUBE_UPLOAD_JOB_TYPE = 'youtube.upload';
+
+export const youtubeDestinationCapabilities: DestinationCapabilities = {
+  media: { kinds: ['video'] },
+  metadata: {
+    category: { required: false, supported: true },
+    description: { maxLength: 5_000, required: false, supported: true },
+    tags: { maxItemLength: 500, maxItems: 500, supported: true },
+    title: { maxLength: 100, required: true, supported: true },
+  },
+  privacy: { supported: true, values: ['private', 'unlisted', 'public'] },
+  resumableUpload: true,
+  statusPolling: true,
+};
+
+export interface YouTubeUploadJobInput {
+  readonly accountId: string;
+  readonly mediaId: string;
+  readonly metadata: PublishMetadata;
+}
+
+export interface YouTubeUploadJobHandlerOptions {
+  readonly endpoints?: Partial<typeof defaultUploadEndpoints>;
+  readonly http?: OAuthHttpClient;
+  readonly now?: () => Date;
+  readonly chunkSizeBytes?: number;
+}
+
+function isRecord(value: unknown): value is { readonly [key: string]: JsonValue } {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function uploadInput(value: JsonValue): YouTubeUploadJobInput {
+  if (!isRecord(value) || typeof value.accountId !== 'string' || typeof value.mediaId !== 'string')
+    throw new JobExecutionError(
+      'YOUTUBE_UPLOAD_INPUT_INVALID',
+      false,
+      'The YouTube upload job is invalid.',
+    );
+  const metadata = value.metadata;
+  if (
+    !isRecord(metadata) ||
+    typeof metadata.title !== 'string' ||
+    metadata.title.trim().length === 0
+  )
+    throw new JobExecutionError(
+      'YOUTUBE_UPLOAD_TITLE_REQUIRED',
+      false,
+      'A YouTube video title is required.',
+    );
+  const optionalText = (name: 'category' | 'description' | 'privacy') => metadata[name];
+  const tags = metadata.tags;
+  if (
+    (optionalText('category') !== undefined && typeof optionalText('category') !== 'string') ||
+    (optionalText('description') !== undefined &&
+      typeof optionalText('description') !== 'string') ||
+    (optionalText('privacy') !== undefined &&
+      optionalText('privacy') !== 'private' &&
+      optionalText('privacy') !== 'public' &&
+      optionalText('privacy') !== 'unlisted') ||
+    (tags !== undefined && (!Array.isArray(tags) || tags.some((tag) => typeof tag !== 'string')))
+  )
+    throw new JobExecutionError(
+      'YOUTUBE_UPLOAD_INPUT_INVALID',
+      false,
+      'The YouTube upload metadata is invalid.',
+    );
+  return {
+    accountId: value.accountId,
+    mediaId: value.mediaId,
+    metadata: {
+      title: metadata.title,
+      ...(typeof metadata.description === 'string' ? { description: metadata.description } : {}),
+      ...(typeof metadata.category === 'string' ? { category: metadata.category } : {}),
+      ...(typeof metadata.privacy === 'string'
+        ? { privacy: metadata.privacy as 'private' | 'public' | 'unlisted' }
+        : {}),
+      ...(Array.isArray(tags) ? { tags: tags as readonly string[] } : {}),
+    },
+  };
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get('retry-after');
+  if (value === null) return undefined;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1_000) : undefined;
+}
+
+function uploadFailure(response: Response, operation: string): JobExecutionError {
+  const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+  const code =
+    response.status === 401
+      ? 'YOUTUBE_UPLOAD_AUTH_FAILED'
+      : response.status === 403
+        ? 'YOUTUBE_UPLOAD_QUOTA_OR_PERMISSION_DENIED'
+        : response.status === 429
+          ? 'YOUTUBE_UPLOAD_RATE_LIMITED'
+          : `YOUTUBE_${operation.toUpperCase()}_FAILED`;
+  return new JobExecutionError(
+    code,
+    retryable,
+    response.status === 401
+      ? 'Reconnect the YouTube account to continue uploading.'
+      : response.status === 403
+        ? 'YouTube denied the upload. Check account permissions and API quota.'
+        : retryable
+          ? 'YouTube is temporarily unavailable. The upload will retry.'
+          : 'YouTube rejected the upload request.',
+    retryAfterMs(response),
+  );
+}
+
+function parseRange(value: string | null): number {
+  const match = value?.match(/(?:bytes=)?0-(\d+)/i);
+  return match === null || match === undefined ? 0 : Number(match[1]) + 1;
+}
+
+async function json(response: Response): Promise<Record<string, unknown> | undefined> {
+  try {
+    return safeJsonObject(await response.json());
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Durable YouTube `videos.insert` transport. The session URL is checkpointed before bytes are
+ * sent; after an interruption it queries the session with the resumable status Content-Range and
+ * resumes only the acknowledged suffix. Once a remote ID exists it never creates a new upload.
+ */
+export class YouTubeUploadJobHandler implements JobHandler {
+  public readonly type = YOUTUBE_UPLOAD_JOB_TYPE;
+  private readonly chunkSizeBytes: number;
+  private readonly endpoints: typeof defaultUploadEndpoints;
+  private readonly http: OAuthHttpClient;
+  private readonly now: () => Date;
+
+  public constructor(
+    private readonly media: MediaRepository,
+    private readonly checkpoints: DestinationJobRepository,
+    private readonly oauth: YouTubeOAuthService,
+    options: YouTubeUploadJobHandlerOptions = {},
+  ) {
+    this.endpoints = { ...defaultUploadEndpoints, ...options.endpoints };
+    this.http = options.http ?? fetch;
+    this.now = options.now ?? (() => new Date());
+    this.chunkSizeBytes = options.chunkSizeBytes ?? 8 * 1024 * 1024;
+    if (!Number.isInteger(this.chunkSizeBytes) || this.chunkSizeBytes < 256 * 1024)
+      throw new Error('YouTube upload chunk size must be at least 256 KiB.');
+  }
+
+  public async execute(inputValue: JsonValue, context: JobHandlerContext): Promise<void> {
+    const input = uploadInput(inputValue);
+    const asset = this.media.list().find((candidate) => candidate.id === input.mediaId);
+    if (asset === undefined || asset.state !== 'available')
+      throw new JobExecutionError(
+        'YOUTUBE_UPLOAD_MEDIA_UNAVAILABLE',
+        false,
+        'The selected media file is unavailable.',
+      );
+    if (asset.sizeBytes <= 0)
+      throw new JobExecutionError(
+        'YOUTUBE_UPLOAD_MEDIA_EMPTY',
+        false,
+        'The selected media file is empty.',
+      );
+
+    let checkpoint = this.checkpoints.find(context.jobId) ?? {
+      jobId: context.jobId,
+      destinationId: 'youtube',
+      remoteStatus: 'uploading',
+      uploadedBytes: 0,
+      updatedAt: this.now(),
+    };
+    if (checkpoint.remoteId !== undefined) return this.poll(checkpoint, input.accountId, context);
+
+    const accessToken = await this.accessToken(input.accountId);
+    if (checkpoint.resumableSessionUrl === undefined) {
+      checkpoint = await this.startSession(
+        input,
+        asset.sizeBytes,
+        asset.path,
+        accessToken,
+        checkpoint,
+      );
+    } else {
+      const recovered = await this.resumeOffset(checkpoint, asset.sizeBytes, accessToken);
+      if (recovered === undefined) {
+        checkpoint = this.save(this.withoutSession(checkpoint, { uploadedBytes: 0 }));
+        checkpoint = await this.startSession(
+          input,
+          asset.sizeBytes,
+          asset.path,
+          accessToken,
+          checkpoint,
+        );
+      } else {
+        checkpoint =
+          recovered === asset.sizeBytes
+            ? this.checkpoints.find(context.jobId)!
+            : this.save({ ...checkpoint, uploadedBytes: recovered });
+      }
+    }
+
+    while (checkpoint.uploadedBytes < asset.sizeBytes) {
+      if (context.signal.aborted)
+        throw new JobExecutionError(
+          'YOUTUBE_UPLOAD_CANCELLED',
+          false,
+          'The YouTube upload was cancelled.',
+        );
+      const start = checkpoint.uploadedBytes;
+      const end = Math.min(asset.sizeBytes - 1, start + this.chunkSizeBytes - 1);
+      let response: Response;
+      try {
+        response = await this.http(checkpoint.resumableSessionUrl!, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Length': String(end - start + 1),
+            'Content-Range': `bytes ${start}-${end}/${asset.sizeBytes}`,
+            'Content-Type': this.mimeType(asset.path),
+          },
+          body: createReadStream(asset.path, { start, end }),
+          duplex: 'half',
+          signal: context.signal,
+        } as RequestInit);
+      } catch {
+        throw new JobExecutionError(
+          'YOUTUBE_UPLOAD_NETWORK_ERROR',
+          true,
+          'YouTube could not be reached. The upload will resume.',
+        );
+      }
+      if (response.status === 308) {
+        checkpoint = this.save({
+          ...checkpoint,
+          uploadedBytes: parseRange(response.headers.get('range')),
+        });
+        continue;
+      }
+      if (!response.ok) throw uploadFailure(response, 'upload');
+      const body = await json(response);
+      if (typeof body?.id !== 'string')
+        throw new JobExecutionError(
+          'YOUTUBE_UPLOAD_RESPONSE_INVALID',
+          true,
+          'YouTube returned an invalid upload response.',
+        );
+      checkpoint = this.save({
+        ...this.withoutSession(checkpoint),
+        remoteId: body.id,
+        remoteUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(body.id)}`,
+        remoteStatus: 'processing',
+        uploadedBytes: asset.sizeBytes,
+      });
+    }
+    return this.poll(checkpoint, input.accountId, context);
+  }
+
+  private async startSession(
+    input: YouTubeUploadJobInput,
+    sizeBytes: number,
+    path: string,
+    accessToken: string,
+    checkpoint: DestinationJobRecord,
+  ): Promise<DestinationJobRecord> {
+    const url = new URL(this.endpoints.upload);
+    url.searchParams.set('uploadType', 'resumable');
+    url.searchParams.set('part', 'snippet,status');
+    let response: Response;
+    try {
+      response = await this.http(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-Upload-Content-Length': String(sizeBytes),
+          'X-Upload-Content-Type': this.mimeType(path),
+        },
+        body: JSON.stringify({
+          snippet: {
+            title: input.metadata.title,
+            ...(input.metadata.description === undefined
+              ? {}
+              : { description: input.metadata.description }),
+            ...(input.metadata.category === undefined
+              ? {}
+              : { categoryId: input.metadata.category }),
+            ...(input.metadata.tags === undefined ? {} : { tags: input.metadata.tags }),
+          },
+          status: { privacyStatus: input.metadata.privacy ?? 'private' },
+        }),
+      });
+    } catch {
+      throw new JobExecutionError(
+        'YOUTUBE_SESSION_NETWORK_ERROR',
+        true,
+        'YouTube could not be reached. The upload will retry.',
+      );
+    }
+    if (!response.ok) throw uploadFailure(response, 'session');
+    const sessionUrl = response.headers.get('location');
+    if (sessionUrl === null || !sessionUrl.startsWith('https://'))
+      throw new JobExecutionError(
+        'YOUTUBE_SESSION_URL_MISSING',
+        true,
+        'YouTube did not return an upload session.',
+      );
+    return this.save({ ...checkpoint, resumableSessionUrl: sessionUrl, uploadedBytes: 0 });
+  }
+
+  /** Returns undefined only for an expired session, which is safe to replace before any new insert. */
+  private async resumeOffset(
+    checkpoint: DestinationJobRecord,
+    sizeBytes: number,
+    accessToken: string,
+  ): Promise<number | undefined> {
+    let response: Response;
+    try {
+      response = await this.http(checkpoint.resumableSessionUrl!, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Length': '0',
+          'Content-Range': `bytes */${sizeBytes}`,
+        },
+      });
+    } catch {
+      throw new JobExecutionError(
+        'YOUTUBE_RESUME_NETWORK_ERROR',
+        true,
+        'YouTube could not be reached. The upload will resume.',
+      );
+    }
+    if (response.status === 404) return undefined;
+    if (response.status === 308) return parseRange(response.headers.get('range'));
+    if (!response.ok) throw uploadFailure(response, 'resume');
+    const body = await json(response);
+    if (typeof body?.id !== 'string')
+      throw new JobExecutionError(
+        'YOUTUBE_RESUME_RESPONSE_INVALID',
+        true,
+        'YouTube returned an invalid upload response.',
+      );
+    this.save({
+      ...this.withoutSession(checkpoint),
+      remoteId: body.id,
+      remoteUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(body.id)}`,
+      remoteStatus: 'processing',
+      uploadedBytes: sizeBytes,
+    });
+    return sizeBytes;
+  }
+
+  private async poll(
+    checkpoint: DestinationJobRecord,
+    accountId: string,
+    context: JobHandlerContext,
+  ): Promise<void> {
+    if (checkpoint.remoteId === undefined)
+      throw new JobExecutionError(
+        'YOUTUBE_REMOTE_ID_MISSING',
+        true,
+        'YouTube upload status is not available yet.',
+      );
+    const url = new URL(this.endpoints.videos);
+    url.searchParams.set('part', 'processingDetails');
+    url.searchParams.set('id', checkpoint.remoteId);
+    let response: Response;
+    try {
+      response = await this.http(url, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${await this.accessToken(accountId)}` },
+        signal: context.signal,
+      });
+    } catch {
+      throw new JobExecutionError(
+        'YOUTUBE_PROCESSING_NETWORK_ERROR',
+        true,
+        'YouTube processing status could not be loaded.',
+      );
+    }
+    if (!response.ok) throw uploadFailure(response, 'processing_status');
+    const body = await json(response);
+    const item = Array.isArray(body?.items) ? safeJsonObject(body.items[0]) : undefined;
+    const details = safeJsonObject(item?.processingDetails);
+    const status = details?.processingStatus;
+    if (status === 'processing') {
+      this.save({ ...checkpoint, remoteStatus: 'processing' });
+      throw new JobExecutionError(
+        'YOUTUBE_PROCESSING',
+        true,
+        'YouTube is still processing the uploaded video.',
+      );
+    }
+    if (status === 'succeeded') {
+      this.save({ ...checkpoint, remoteStatus: 'succeeded' });
+      return;
+    }
+    if (status === 'failed') {
+      this.save({ ...checkpoint, remoteStatus: 'failed' });
+      throw new JobExecutionError(
+        'YOUTUBE_PROCESSING_FAILED',
+        false,
+        'YouTube failed to process the uploaded video.',
+      );
+    }
+    if (status === 'terminated') {
+      this.save({ ...checkpoint, remoteStatus: 'terminated' });
+      throw new JobExecutionError(
+        'YOUTUBE_PROCESSING_TERMINATED',
+        false,
+        'YouTube processing status is no longer available.',
+      );
+    }
+    throw new JobExecutionError(
+      'YOUTUBE_PROCESSING_RESPONSE_INVALID',
+      true,
+      'YouTube returned an invalid processing status.',
+    );
+  }
+
+  private async accessToken(accountId: string): Promise<string> {
+    try {
+      return await this.oauth.refreshAccessToken(accountId);
+    } catch (error) {
+      if (error instanceof PlatformError)
+        throw new JobExecutionError(error.code, error.retryable, error.publicMessage);
+      throw error;
+    }
+  }
+
+  private mimeType(path: string): string {
+    const lower = path.toLowerCase();
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    return 'application/octet-stream';
+  }
+
+  private save(record: Omit<DestinationJobRecord, 'updatedAt'>): DestinationJobRecord {
+    return this.checkpoints.save({ ...record, updatedAt: this.now() });
+  }
+
+  private withoutSession(
+    checkpoint: DestinationJobRecord,
+    changes: Partial<Omit<DestinationJobRecord, 'updatedAt' | 'resumableSessionUrl'>> = {},
+  ): Omit<DestinationJobRecord, 'updatedAt'> {
+    const record: Record<string, unknown> = { ...checkpoint };
+    Reflect.deleteProperty(record, 'resumableSessionUrl');
+    Reflect.deleteProperty(record, 'updatedAt');
+    return { ...record, ...changes } as Omit<DestinationJobRecord, 'updatedAt'>;
+  }
+}
 
 function safeJsonObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

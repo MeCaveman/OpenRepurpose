@@ -5,6 +5,7 @@ import {
   openDatabase,
   runMigrations,
   SqliteAccountRepository,
+  SqliteDestinationJobRepository,
   SqliteJobRepository,
   SqliteMediaRepository,
   SqliteOAuthAuthorizationRequestRepository,
@@ -17,7 +18,7 @@ import {
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import { redactLogText } from '@openrepurpose/platform-sdk';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
-import { YouTubeOAuthService } from '@openrepurpose/youtube';
+import { YouTubeOAuthService, YouTubeUploadJobHandler } from '@openrepurpose/youtube';
 import { assertLocalOnly, buildServer } from './app.js';
 import { loadOrCreateSessionKey } from './session-key.js';
 
@@ -40,7 +41,17 @@ export async function startServer(): Promise<void> {
     config.appUrl,
   );
   const jobService = new JobService(jobRepository);
-  const jobRunner = new JobRunner(jobRepository, [], config.jobRunner);
+  const jobRunner = new JobRunner(
+    jobRepository,
+    [
+      new YouTubeUploadJobHandler(
+        mediaRepository,
+        new SqliteDestinationJobRepository(database),
+        youtubeOAuthService,
+      ),
+    ],
+    config.jobRunner,
+  );
   jobRunner.start();
   const mediaImportService =
     executables.ffprobe === undefined

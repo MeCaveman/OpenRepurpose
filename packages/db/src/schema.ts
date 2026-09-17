@@ -106,3 +106,22 @@ export const oauthAuthorizationRequests = sqliteTable(
   },
   (table) => [index('oauth_authorization_requests_expires_at_idx').on(table.expiresAt)],
 );
+
+export const destinationJobRecords = sqliteTable(
+  'destination_job_records',
+  {
+    jobId: text('job_id')
+      .primaryKey()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    destinationId: text('destination_id').notNull(),
+    remoteId: text('remote_id'),
+    remoteUrl: text('remote_url'),
+    remoteStatus: text('remote_status').notNull(),
+    resumableSessionUrl: text('resumable_session_url'),
+    uploadedBytes: integer('uploaded_bytes').notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('destination_job_records_remote_id_idx').on(table.destinationId, table.remoteId),
+  ],
+);

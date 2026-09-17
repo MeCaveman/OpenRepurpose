@@ -54,6 +54,18 @@ are not returned to the browser or persisted. If Google grants only some request
 Accounts page reports the resulting capabilities and upload remains unavailable without
 `youtube.upload`.
 
+## Upload and processing behavior
+
+OpenRepurpose starts YouTube uploads with the official resumable `videos.insert` protocol. It stores
+the returned session URL and acknowledged byte offset locally, so a worker restart asks YouTube for
+the session's `Range` and sends only the remaining bytes. Once YouTube returns a video ID,
+OpenRepurpose stores the ID and canonical watch URL and never starts another insert for that job.
+
+The job then polls owner-authorized `videos.list(part=processingDetails)` until YouTube reports
+`succeeded`, or records the terminal `failed` / `terminated` state with an actionable job error.
+`processing` is intentionally retried through the local persistent job runner; upload completion
+does not imply that the video is published and viewable.
+
 ## Local secret-vault threat model
 
 The vault uses AES-256-GCM with a randomly generated key stored in a separate file. Both files use
@@ -82,3 +94,5 @@ Official references checked for this packet:
 - [YouTube OAuth scopes](https://developers.google.com/youtube/v3/guides/authentication)
 - [Channels: list](https://developers.google.com/youtube/v3/docs/channels/list)
 - [Videos: insert and audit restriction](https://developers.google.com/youtube/v3/docs/videos/insert)
+- [Resumable upload protocol](https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol)
+- [Videos: list processing details](https://developers.google.com/youtube/v3/docs/videos/list)

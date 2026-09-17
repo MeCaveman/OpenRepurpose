@@ -189,6 +189,7 @@ export interface JobFailure {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 }
 
 export interface JobRepository {
@@ -209,6 +210,24 @@ export interface JobRepository {
   listAttempts(jobId: string): readonly JobAttempt[];
   recoverExpiredLeases(now: Date): number;
   requestCancellation(id: string, now: Date): Job | undefined;
+}
+
+/** Durable external-operation checkpoint owned by a destination job. */
+export interface DestinationJobRecord {
+  readonly destinationId: string;
+  readonly jobId: string;
+  readonly remoteId?: string;
+  readonly remoteStatus: string;
+  readonly remoteUrl?: string;
+  readonly resumableSessionUrl?: string;
+  readonly uploadedBytes: number;
+  readonly updatedAt: Date;
+}
+
+/** Separate from the queue so adapters can checkpoint remote work across process restarts. */
+export interface DestinationJobRepository {
+  find(jobId: string): DestinationJobRecord | undefined;
+  save(record: DestinationJobRecord): DestinationJobRecord;
 }
 
 export interface CreateJobInput {
@@ -294,6 +313,7 @@ export class JobExecutionError extends Error {
     public readonly code: string,
     public readonly retryable: boolean,
     public readonly publicMessage: string,
+    public readonly retryAfterMs?: number,
   ) {
     super(publicMessage);
     this.name = 'JobExecutionError';
@@ -402,14 +422,14 @@ export class JobRunner {
     await Promise.allSettled(launched);
   }
 
-  private retryAt(job: Job): Date {
+  private retryAt(job: Job, retryAfterMs?: number): Date {
     const exponential = Math.min(
       this.maxRetryDelayMs,
       this.baseRetryDelayMs * 2 ** Math.max(0, job.attemptCount - 1),
     );
     const random = Math.min(1, Math.max(0, this.random()));
     const jittered = Math.ceil(exponential * (0.5 + random * 0.5));
-    return new Date(this.now().getTime() + jittered);
+    return new Date(this.now().getTime() + Math.max(jittered, retryAfterMs ?? 0));
   }
 
   private async execute(job: Job): Promise<void> {
@@ -446,7 +466,12 @@ export class JobRunner {
       } else {
         const failure: JobFailure =
           error instanceof JobExecutionError
-            ? { code: error.code, message: error.publicMessage, retryable: error.retryable }
+            ? {
+                code: error.code,
+                message: error.publicMessage,
+                retryable: error.retryable,
+                ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
+              }
             : { code: 'UNEXPECTED_JOB_ERROR', message: 'Job execution failed.', retryable: false };
         const canRetry = failure.retryable && job.attemptCount < job.maxAttempts;
         this.repository.fail(
@@ -454,7 +479,7 @@ export class JobRunner {
           this.workerId,
           failure,
           this.now(),
-          ...(canRetry ? [this.retryAt(job)] : []),
+          ...(canRetry ? [this.retryAt(job, failure.retryAfterMs)] : []),
         );
       }
     } finally {

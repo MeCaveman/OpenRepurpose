@@ -10,6 +10,8 @@ import type {
   AccountRepository,
   AccountStatus,
   ConnectedAccount,
+  DestinationJobRecord,
+  DestinationJobRepository,
   EnqueueJobInput,
   EnqueueJobResult,
   Job,
@@ -32,6 +34,7 @@ export { migrations } from './migrations/index.js';
 export type { Migration } from './migrations/index.js';
 export {
   accounts,
+  destinationJobRecords,
   jobAttempts,
   jobs,
   mediaAssets,
@@ -388,6 +391,73 @@ export class SqliteOAuthAuthorizationRequestRepository implements OAuthAuthoriza
       client.exec('ROLLBACK;');
       throw error;
     }
+  }
+}
+
+interface RawDestinationJobRecordRow {
+  readonly destination_id: string;
+  readonly job_id: string;
+  readonly remote_id: string | null;
+  readonly remote_status: string;
+  readonly remote_url: string | null;
+  readonly resumable_session_url: string | null;
+  readonly updated_at: number;
+  readonly uploaded_bytes: number;
+}
+
+function destinationJobRecordFromRow(row: RawDestinationJobRecordRow): DestinationJobRecord {
+  return {
+    jobId: row.job_id,
+    destinationId: row.destination_id,
+    remoteStatus: row.remote_status,
+    uploadedBytes: row.uploaded_bytes,
+    updatedAt: new Date(row.updated_at),
+    ...(row.remote_id === null ? {} : { remoteId: row.remote_id }),
+    ...(row.remote_url === null ? {} : { remoteUrl: row.remote_url }),
+    ...(row.resumable_session_url === null
+      ? {}
+      : { resumableSessionUrl: row.resumable_session_url }),
+  };
+}
+
+/** SQLite checkpoint repository for resumable destination work. */
+export class SqliteDestinationJobRepository implements DestinationJobRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public find(jobId: string): DestinationJobRecord | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM destination_job_records WHERE job_id = ?')
+      .get(jobId) as RawDestinationJobRecordRow | undefined;
+    return row === undefined ? undefined : destinationJobRecordFromRow(row);
+  }
+
+  public save(record: DestinationJobRecord): DestinationJobRecord {
+    this.database.client
+      .prepare(
+        `INSERT INTO destination_job_records (
+          job_id, destination_id, remote_id, remote_url, remote_status,
+          resumable_session_url, uploaded_bytes, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_id) DO UPDATE SET
+          destination_id = excluded.destination_id,
+          remote_id = excluded.remote_id,
+          remote_url = excluded.remote_url,
+          remote_status = excluded.remote_status,
+          resumable_session_url = excluded.resumable_session_url,
+          uploaded_bytes = excluded.uploaded_bytes,
+          updated_at = excluded.updated_at`,
+      )
+      .run(
+        record.jobId,
+        record.destinationId,
+        record.remoteId ?? null,
+        record.remoteUrl ?? null,
+        record.remoteStatus,
+        record.resumableSessionUrl ?? null,
+        record.uploadedBytes,
+        record.updatedAt.getTime(),
+      );
+    return record;
   }
 }
 
