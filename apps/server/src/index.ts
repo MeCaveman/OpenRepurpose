@@ -24,7 +24,7 @@ import { redactLogText } from '@openrepurpose/platform-sdk';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
 import { YouTubeOAuthService, YouTubeUploadJobHandler } from '@openrepurpose/youtube';
 import { TikTokDirectPostJobHandler, TikTokOAuthService } from '@openrepurpose/tiktok';
-import { MetaOAuthService } from '@openrepurpose/meta';
+import { InstagramReelsJobHandler, MetaOAuthService } from '@openrepurpose/meta';
 import { assertLocalOnly, buildServer } from './app.js';
 import { loadOrCreateSessionKey } from './session-key.js';
 
@@ -74,6 +74,12 @@ export async function startServer(): Promise<void> {
         mediaRepository,
         new SqliteDestinationJobRepository(database),
         tiktokOAuthService,
+        secretStore,
+      ),
+      new InstagramReelsJobHandler(
+        mediaRepository,
+        new SqliteDestinationJobRepository(database),
+        new SqliteMetaCredentialRepository(database),
         secretStore,
       ),
     ],

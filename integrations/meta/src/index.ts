@@ -1,11 +1,20 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import type {
+  DestinationJobRecord,
+  DestinationJobRepository,
+  JobHandler,
+  JobHandlerContext,
+  JsonValue,
+  MediaAsset,
+  MediaRepository,
   MetaCredential,
   MetaCredentialRepository,
   MetaPublishTarget,
   OAuthAuthorizationRequest,
   OAuthAuthorizationRequestRepository,
 } from '@openrepurpose/core';
+import { JobExecutionError } from '@openrepurpose/core';
 import type { SecretReference, SecretStore } from '@openrepurpose/platform-sdk';
 import { PlatformError } from '@openrepurpose/platform-sdk';
 
@@ -73,6 +82,14 @@ export function metaTokenBundleReference(credentialId: string): SecretReference 
 }
 export function metaPageTokenReference(targetId: string): SecretReference {
   return { name: 'meta-page-token', ownerId: targetId, scope: 'account' };
+}
+/** Meta's returned upload URI is treated as secret material and is never checkpointed in SQLite. */
+export function instagramUploadUriReference(jobId: string): SecretReference {
+  return {
+    name: 'instagram-upload-uri',
+    ownerId: `instagram-upload:${jobId}`,
+    scope: 'application',
+  };
 }
 const defaults: MetaEndpoints = {
   authorization: 'https://www.facebook.com/v26.0/dialog/oauth',
@@ -455,5 +472,473 @@ export class MetaOAuthService {
   }
   private redirectUri(): string {
     return new URL('/api/accounts/meta/oauth/callback', this.appUrl).toString();
+  }
+}
+
+export const INSTAGRAM_REELS_JOB_TYPE = 'instagram.reels.publish';
+
+export interface InstagramReelsJobInput {
+  readonly mediaId: string;
+  readonly targetId: string;
+  readonly metadata?: {
+    readonly caption?: string;
+    readonly shareToFeed?: boolean;
+  };
+}
+
+export interface InstagramReelsJobHandlerOptions {
+  readonly endpoints?: Partial<InstagramReelsEndpoints>;
+  readonly http?: MetaHttpClient;
+  readonly now?: () => Date;
+}
+
+export interface InstagramReelsEndpoints {
+  readonly graph: string;
+}
+
+const defaultInstagramReelsEndpoints: InstagramReelsEndpoints = {
+  graph: 'https://graph.facebook.com/v26.0',
+};
+
+function jobInput(value: JsonValue): InstagramReelsJobInput {
+  const input = object(value);
+  if (!input || typeof input.mediaId !== 'string' || typeof input.targetId !== 'string')
+    throw new JobExecutionError(
+      'INSTAGRAM_REELS_INPUT_INVALID',
+      false,
+      'The Instagram Reels publish job is invalid.',
+    );
+  const metadata = object(input.metadata);
+  if (
+    metadata !== undefined &&
+    ((metadata.caption !== undefined && typeof metadata.caption !== 'string') ||
+      (metadata.shareToFeed !== undefined && typeof metadata.shareToFeed !== 'boolean'))
+  )
+    throw new JobExecutionError(
+      'INSTAGRAM_REELS_INPUT_INVALID',
+      false,
+      'The Instagram Reels publish options are invalid.',
+    );
+  return {
+    mediaId: input.mediaId,
+    targetId: input.targetId,
+    ...(metadata === undefined
+      ? {}
+      : {
+          metadata: {
+            ...(typeof metadata.caption === 'string' ? { caption: metadata.caption } : {}),
+            ...(typeof metadata.shareToFeed === 'boolean'
+              ? { shareToFeed: metadata.shareToFeed }
+              : {}),
+          },
+        }),
+  };
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const seconds = Number(response.headers.get('retry-after'));
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1_000) : undefined;
+}
+
+function graphFailure(
+  response: Response,
+  value: Record<string, unknown> | undefined,
+  phase: string,
+) {
+  const error = object(value?.error);
+  const remoteCode = typeof error?.code === 'number' ? String(error.code) : 'REQUEST_FAILED';
+  const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+  const permission =
+    response.status === 401 ||
+    response.status === 403 ||
+    remoteCode === '10' ||
+    remoteCode === '190';
+  return new JobExecutionError(
+    `INSTAGRAM_${phase}_${permission ? 'PERMISSION_DENIED' : remoteCode}`,
+    retryable,
+    permission
+      ? 'Instagram rejected this target or its publishing permission. Reconnect the Meta account and verify the linked Page role.'
+      : retryable
+        ? 'Instagram is temporarily unavailable. The publish job will retry.'
+        : 'Instagram rejected the Reels publish request.',
+    retryAfterMs(response),
+  );
+}
+
+async function responseBody(response: Response): Promise<Record<string, unknown> | undefined> {
+  try {
+    return object(await response.json());
+  } catch {
+    return undefined;
+  }
+}
+
+function isUploadUri(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'rupload.facebook.com';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Instagram's local resumable flow has no documented byte-offset recovery query. Container IDs
+ * are checkpointed before transfer; a transport interruption consequently stops safely instead of
+ * creating another container or replaying unknown bytes.
+ */
+export class InstagramReelsJobHandler implements JobHandler {
+  public readonly type = INSTAGRAM_REELS_JOB_TYPE;
+  private readonly endpoints: InstagramReelsEndpoints;
+  private readonly http: MetaHttpClient;
+  private readonly now: () => Date;
+
+  public constructor(
+    private readonly media: MediaRepository,
+    private readonly checkpoints: DestinationJobRepository,
+    private readonly targets: MetaCredentialRepository,
+    private readonly secrets: SecretStore,
+    options: InstagramReelsJobHandlerOptions = {},
+  ) {
+    this.endpoints = { ...defaultInstagramReelsEndpoints, ...options.endpoints };
+    this.http = options.http ?? fetch;
+    this.now = options.now ?? (() => new Date());
+  }
+
+  public async execute(value: JsonValue, context: JobHandlerContext): Promise<void> {
+    const input = jobInput(value);
+    const asset = this.media.list().find((candidate) => candidate.id === input.mediaId);
+    if (asset === undefined || asset.state !== 'available')
+      throw new JobExecutionError(
+        'INSTAGRAM_REELS_MEDIA_UNAVAILABLE',
+        false,
+        'The selected media file is unavailable.',
+      );
+    this.validateMedia(asset, input);
+    const target = this.targets.listTargets().find((candidate) => candidate.id === input.targetId);
+    if (
+      target === undefined ||
+      target.kind !== 'instagram_professional' ||
+      !target.enabled ||
+      target.availability !== 'available'
+    )
+      throw new JobExecutionError(
+        'INSTAGRAM_TARGET_UNAVAILABLE',
+        false,
+        'This Instagram professional account is not enabled for publishing. Reconnect Meta and verify the linked Page content role.',
+      );
+    const credential = this.targets.findCredential(target.credentialId);
+    if (credential?.status !== 'connected')
+      throw new JobExecutionError(
+        'INSTAGRAM_REAUTHORIZATION_REQUIRED',
+        false,
+        'Reconnect the Meta account to continue publishing to Instagram.',
+      );
+    const accessToken = await this.secrets.get(metaPageTokenReference(target.id));
+    if (!accessToken)
+      throw new JobExecutionError(
+        'INSTAGRAM_PAGE_TOKEN_MISSING',
+        false,
+        'Reconnect the Meta account to restore the linked Page publishing token.',
+      );
+
+    let checkpoint =
+      this.checkpoints.find(context.jobId) ??
+      this.save({
+        destinationId: 'instagram',
+        jobId: context.jobId,
+        remoteStatus: 'validating',
+        uploadedBytes: 0,
+      });
+    if (checkpoint.remoteId === undefined)
+      checkpoint = await this.createContainer(
+        input,
+        target.externalId,
+        accessToken,
+        checkpoint,
+        context.jobId,
+      );
+    if (checkpoint.uploadedBytes < asset.sizeBytes) {
+      if (context.attemptNumber > 1 && checkpoint.remoteStatus !== 'upload_retryable')
+        throw new JobExecutionError(
+          'INSTAGRAM_UPLOAD_RECOVERY_AMBIGUOUS',
+          false,
+          'Instagram does not provide a confirmed upload offset for this interrupted transfer. The container will not be replayed automatically.',
+        );
+      await this.upload(asset, accessToken, checkpoint, context);
+      checkpoint = this.save({
+        ...checkpoint,
+        remoteStatus: 'remote_processing',
+        uploadedBytes: asset.sizeBytes,
+      });
+      await this.secrets.delete(instagramUploadUriReference(context.jobId));
+    }
+    const status = await this.containerStatus(checkpoint, accessToken, context);
+    if (status === 'IN_PROGRESS')
+      throw new JobExecutionError(
+        'INSTAGRAM_CONTAINER_PROCESSING',
+        true,
+        'Instagram is still processing the Reel container.',
+        60_000,
+      );
+    if (status === 'ERROR' || status === 'EXPIRED') {
+      this.save({ ...checkpoint, remoteStatus: 'failed' });
+      throw new JobExecutionError(
+        `INSTAGRAM_CONTAINER_${status}`,
+        false,
+        status === 'EXPIRED'
+          ? 'The Instagram Reel container expired before it could be published.'
+          : 'Instagram could not process this Reel. Check the video format and try again.',
+      );
+    }
+    if (status === 'PUBLISHED') {
+      this.save({ ...checkpoint, remoteStatus: 'published' });
+      return;
+    }
+    if (status !== 'FINISHED')
+      throw new JobExecutionError(
+        'INSTAGRAM_CONTAINER_STATUS_INVALID',
+        true,
+        'Instagram returned an unknown Reel container status.',
+      );
+    if (checkpoint.remoteStatus === 'published' && checkpoint.remoteId !== undefined) return;
+    checkpoint = this.save({ ...checkpoint, remoteStatus: 'publishing' });
+    await this.publish(target.externalId, accessToken, checkpoint, context);
+  }
+
+  private validateMedia(asset: MediaAsset, input: InstagramReelsJobInput): void {
+    const extension = asset.path.toLowerCase();
+    if ((!extension.endsWith('.mp4') && !extension.endsWith('.mov')) || asset.sizeBytes <= 0)
+      throw new JobExecutionError(
+        'INSTAGRAM_REELS_MEDIA_INVALID',
+        false,
+        'Instagram Reels accepts a non-empty MP4 or MOV video.',
+      );
+    if (asset.sizeBytes > 300 * 1024 * 1024)
+      throw new JobExecutionError(
+        'INSTAGRAM_REELS_FILE_TOO_LARGE',
+        false,
+        'Instagram Reels accepts video files up to 300 MB.',
+      );
+    const duration = asset.metadata.durationSeconds;
+    if (duration !== undefined && (duration < 3 || duration > 15 * 60))
+      throw new JobExecutionError(
+        'INSTAGRAM_REELS_DURATION_INVALID',
+        false,
+        'Instagram Reels must be between 3 seconds and 15 minutes long.',
+      );
+    if (
+      asset.metadata.frameRate !== undefined &&
+      (asset.metadata.frameRate < 23 || asset.metadata.frameRate > 60)
+    )
+      throw new JobExecutionError(
+        'INSTAGRAM_REELS_FRAME_RATE_INVALID',
+        false,
+        'Instagram Reels requires a video frame rate from 23 to 60 FPS.',
+      );
+    if (asset.metadata.width !== undefined && asset.metadata.width > 1920)
+      throw new JobExecutionError(
+        'INSTAGRAM_REELS_WIDTH_INVALID',
+        false,
+        'Instagram Reels supports videos up to 1920 pixels wide.',
+      );
+    if (input.metadata?.caption !== undefined && input.metadata.caption.length > 2200)
+      throw new JobExecutionError(
+        'INSTAGRAM_REELS_CAPTION_TOO_LONG',
+        false,
+        'Instagram Reel captions are limited to 2,200 characters.',
+      );
+  }
+
+  private async createContainer(
+    input: InstagramReelsJobInput,
+    instagramId: string,
+    accessToken: string,
+    checkpoint: DestinationJobRecord,
+    jobId: string,
+  ): Promise<DestinationJobRecord> {
+    const form = new URLSearchParams({
+      media_type: 'REELS',
+      upload_type: 'resumable',
+      access_token: accessToken,
+    });
+    if (input.metadata?.caption !== undefined) form.set('caption', input.metadata.caption);
+    if (input.metadata?.shareToFeed !== undefined)
+      form.set('share_to_feed', String(input.metadata.shareToFeed));
+    let response: Response;
+    try {
+      response = await this.http(
+        `${this.endpoints.graph}/${encodeURIComponent(instagramId)}/media`,
+        {
+          body: form,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          method: 'POST',
+        },
+      );
+    } catch {
+      throw new JobExecutionError(
+        'INSTAGRAM_CONTAINER_NETWORK_ERROR',
+        true,
+        'Instagram could not be reached before creating a Reel container.',
+      );
+    }
+    const result = await responseBody(response);
+    if (!response.ok) throw graphFailure(response, result, 'CONTAINER');
+    const containerId = typeof result?.id === 'string' ? result.id : undefined;
+    const uploadUri = typeof result?.uri === 'string' ? result.uri : undefined;
+    if (!containerId || !uploadUri || !isUploadUri(uploadUri))
+      throw new JobExecutionError(
+        'INSTAGRAM_CONTAINER_RESPONSE_INVALID',
+        true,
+        'Instagram returned an invalid resumable upload container.',
+      );
+    const saved = this.save({ ...checkpoint, remoteId: containerId, remoteStatus: 'uploading' });
+    await this.secrets.set(instagramUploadUriReference(jobId), uploadUri);
+    return saved;
+  }
+
+  private async upload(
+    asset: MediaAsset,
+    accessToken: string,
+    checkpoint: DestinationJobRecord,
+    context: JobHandlerContext,
+  ): Promise<void> {
+    const uploadUri = await this.secrets.get(instagramUploadUriReference(context.jobId));
+    if (!uploadUri || !isUploadUri(uploadUri))
+      throw new JobExecutionError(
+        'INSTAGRAM_UPLOAD_URI_MISSING',
+        false,
+        'Instagram upload recovery needs the original upload URI. The container will not be duplicated automatically.',
+      );
+    let response: Response;
+    try {
+      response = await this.http(uploadUri, {
+        body: createReadStream(asset.path),
+        duplex: 'half',
+        headers: {
+          Authorization: `OAuth ${accessToken}`,
+          'Content-Type': 'application/octet-stream',
+          file_size: String(asset.sizeBytes),
+          offset: String(checkpoint.uploadedBytes),
+        },
+        method: 'POST',
+        signal: context.signal,
+      } as RequestInit);
+    } catch {
+      throw new JobExecutionError(
+        'INSTAGRAM_UPLOAD_RECOVERY_AMBIGUOUS',
+        false,
+        'The Instagram upload connection ended without a confirmed result. The container will not be replayed automatically.',
+      );
+    }
+    if (!response.ok) {
+      const retryable =
+        response.status === 408 || response.status === 429 || response.status >= 500;
+      if (retryable) this.save({ ...checkpoint, remoteStatus: 'upload_retryable' });
+      throw new JobExecutionError(
+        response.status === 429 ? 'INSTAGRAM_UPLOAD_RATE_LIMITED' : 'INSTAGRAM_UPLOAD_FAILED',
+        retryable,
+        retryable
+          ? 'Instagram temporarily rejected the upload. The transfer will retry before any bytes are accepted.'
+          : 'Instagram rejected the Reel upload.',
+        retryAfterMs(response),
+      );
+    }
+  }
+
+  private async containerStatus(
+    checkpoint: DestinationJobRecord,
+    accessToken: string,
+    context: JobHandlerContext,
+  ): Promise<string> {
+    if (!checkpoint.remoteId)
+      throw new JobExecutionError(
+        'INSTAGRAM_CONTAINER_ID_MISSING',
+        true,
+        'Instagram container status is not available yet.',
+      );
+    const url = new URL(`${this.endpoints.graph}/${encodeURIComponent(checkpoint.remoteId)}`);
+    url.searchParams.set('fields', 'status_code,status');
+    url.searchParams.set('access_token', accessToken);
+    let response: Response;
+    try {
+      response = await this.http(url, { signal: context.signal });
+    } catch {
+      throw new JobExecutionError(
+        'INSTAGRAM_STATUS_NETWORK_ERROR',
+        true,
+        'Instagram container status could not be loaded.',
+      );
+    }
+    const result = await responseBody(response);
+    if (!response.ok) throw graphFailure(response, result, 'STATUS');
+    return typeof result?.status_code === 'string' ? result.status_code : '';
+  }
+
+  private async publish(
+    instagramId: string,
+    accessToken: string,
+    checkpoint: DestinationJobRecord,
+    context: JobHandlerContext,
+  ): Promise<void> {
+    if (!checkpoint.remoteId)
+      throw new JobExecutionError(
+        'INSTAGRAM_CONTAINER_ID_MISSING',
+        true,
+        'Instagram Reel publishing is not available yet.',
+      );
+    const form = new URLSearchParams({
+      access_token: accessToken,
+      creation_id: checkpoint.remoteId,
+    });
+    let response: Response;
+    try {
+      response = await this.http(
+        `${this.endpoints.graph}/${encodeURIComponent(instagramId)}/media_publish`,
+        {
+          body: form,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          method: 'POST',
+          signal: context.signal,
+        },
+      );
+    } catch {
+      throw new JobExecutionError(
+        'INSTAGRAM_PUBLISH_RECOVERY_AMBIGUOUS',
+        false,
+        'Instagram did not confirm whether the Reel was published. It will not be published again automatically.',
+      );
+    }
+    const result = await responseBody(response);
+    if (!response.ok) throw graphFailure(response, result, 'PUBLISH');
+    if (typeof result?.id !== 'string')
+      throw new JobExecutionError(
+        'INSTAGRAM_PUBLISH_RESPONSE_INVALID',
+        true,
+        'Instagram returned an invalid publish response.',
+      );
+    let remoteUrl: string | undefined;
+    try {
+      const permalink = new URL(`${this.endpoints.graph}/${encodeURIComponent(result.id)}`);
+      permalink.searchParams.set('fields', 'permalink');
+      permalink.searchParams.set('access_token', accessToken);
+      const permalinkResponse = await this.http(permalink, { signal: context.signal });
+      const permalinkBody = await responseBody(permalinkResponse);
+      if (permalinkResponse.ok && typeof permalinkBody?.permalink === 'string')
+        remoteUrl = permalinkBody.permalink;
+    } catch {
+      // Publishing has already succeeded; a best-effort permalink lookup must not turn it into a retry.
+    }
+    this.save({
+      ...checkpoint,
+      remoteId: result.id,
+      remoteStatus: 'published',
+      uploadedBytes: checkpoint.uploadedBytes,
+      ...(remoteUrl === undefined ? {} : { remoteUrl }),
+    });
+  }
+
+  private save(record: Omit<DestinationJobRecord, 'updatedAt'>): DestinationJobRecord {
+    return this.checkpoints.save({ ...record, updatedAt: this.now() });
   }
 }
