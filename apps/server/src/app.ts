@@ -17,6 +17,7 @@ import type {
   MediaRepository,
   WorkflowInput,
   WorkflowService,
+  SourceService,
 } from '@openrepurpose/core';
 
 declare module '@fastify/secure-session' {
@@ -42,6 +43,7 @@ export interface BuildServerOptions {
   readonly mediaRepository?: MediaRepository;
   readonly metaOAuthService?: MetaOAuthService;
   readonly sessionKey: Buffer;
+  readonly sourceService?: SourceService;
   readonly staticRoot?: false | string;
   readonly tiktokOAuthService?: TikTokOAuthService;
   readonly youtubeOAuthService?: YouTubeOAuthService;
@@ -743,6 +745,50 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         ? reply.code(204).send()
         : reply.code(404).send({ error: 'Workflow not found.', code: 'WORKFLOW_NOT_FOUND' }),
     );
+  }
+  if (options.sourceService !== undefined) {
+    const sources = options.sourceService;
+    server.get('/api/sources', async () => ({ sources: sources.list() }));
+    server.get<{ Params: { id: string } }>('/api/sources/:id', async (request, reply) => {
+      const source = sources.get(request.params.id);
+      return source === undefined
+        ? reply.code(404).send({ error: 'Source not found.', code: 'SOURCE_NOT_FOUND' })
+        : { source, items: sources.items(source.id) };
+    });
+    server.post<{ Body: unknown }>('/api/sources/youtube', async (request, reply) => {
+      const value = request.body;
+      if (typeof value !== 'object' || value === null)
+        return reply.code(400).send({ error: 'Invalid YouTube source.', code: 'INVALID_SOURCE' });
+      const body = value as Record<string, unknown>;
+      if (typeof body.accountId !== 'string' || typeof body.channelId !== 'string')
+        return reply
+          .code(400)
+          .send({ error: 'An account and channel ID are required.', code: 'INVALID_SOURCE' });
+      try {
+        return reply.code(201).send({
+          source: sources.addYouTube({
+            accountId: body.accountId,
+            channelId: body.channelId,
+            ...(typeof body.displayName === 'string' ? { displayName: body.displayName } : {}),
+          }),
+        });
+      } catch (error) {
+        return reply.code(400).send({
+          error: error instanceof Error ? error.message : 'Invalid YouTube source.',
+          code: 'INVALID_SOURCE',
+        });
+      }
+    });
+    for (const action of ['poll', 'pause', 'resume'] as const)
+      server.post<{ Params: { id: string } }>(
+        `/api/sources/:id/${action}`,
+        async (request, reply) => {
+          const source = sources[action](request.params.id);
+          return source === undefined
+            ? reply.code(404).send({ error: 'Source not found.', code: 'SOURCE_NOT_FOUND' })
+            : { source };
+        },
+      );
   }
   server.get(
     '/api/session',

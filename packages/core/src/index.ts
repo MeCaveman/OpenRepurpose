@@ -723,7 +723,18 @@ export interface RemoteSourceItem {
 }
 
 export interface SourcePollingRepository {
+  createConnection(input: {
+    readonly adapterId: string;
+    readonly configuration: Readonly<Record<string, SourceJsonValue>>;
+    readonly displayName: string;
+    readonly externalSourceId: string;
+    readonly now: Date;
+  }): SourceConnection;
+  findConnection(id: string): SourceConnection | undefined;
+  listConnections(): readonly SourceConnection[];
   listDue(now: Date): readonly SourceConnection[];
+  listItems(connectionId: string, limit?: number): readonly SourceItemStatus[];
+  requestPoll(connectionId: string, now: Date): SourceConnection | undefined;
   recordPollFailure(input: {
     readonly connectionId: string;
     readonly errorCode: string;
@@ -743,6 +754,68 @@ export interface SourcePollingRepository {
     readonly item: SourceItemObservation;
     readonly now: Date;
   }): { readonly created: boolean; readonly item: RemoteSourceItem };
+  setConnectionStatus(
+    connectionId: string,
+    status: Extract<SourceConnectionStatus, 'active' | 'paused'>,
+    now: Date,
+  ): SourceConnection | undefined;
+}
+
+/** Browser/CLI-safe source history summary. Media bytes are never exposed here. */
+export interface SourceItemStatus extends RemoteSourceItem {
+  readonly cleanupStatus?: SourceWorkflowExecution['cleanupStatus'];
+  readonly lifecycleStatus: SourceItemLifecycleState;
+  readonly resolutionStatus: SourceResolutionStatus;
+}
+
+/** Shared application surface for source setup and inspection; polling remains runner-owned. */
+export class SourceService {
+  public constructor(
+    private readonly repository: SourcePollingRepository,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  public addYouTube(input: {
+    readonly accountId: string;
+    readonly channelId: string;
+    readonly displayName?: string;
+  }): SourceConnection {
+    const accountId = input.accountId.trim();
+    const channelId = input.channelId.trim();
+    if (accountId.length === 0 || channelId.length === 0)
+      throw new Error('A connected YouTube account and channel ID are required.');
+    return this.repository.createConnection({
+      adapterId: 'youtube',
+      configuration: { accountId },
+      displayName: input.displayName?.trim() || `YouTube channel ${channelId}`,
+      externalSourceId: channelId,
+      now: this.now(),
+    });
+  }
+
+  public get(id: string): SourceConnection | undefined {
+    return this.repository.findConnection(id);
+  }
+
+  public list(): readonly SourceConnection[] {
+    return this.repository.listConnections();
+  }
+
+  public items(id: string): readonly SourceItemStatus[] {
+    return this.repository.listItems(id);
+  }
+
+  public pause(id: string): SourceConnection | undefined {
+    return this.repository.setConnectionStatus(id, 'paused', this.now());
+  }
+
+  public resume(id: string): SourceConnection | undefined {
+    return this.repository.setConnectionStatus(id, 'active', this.now());
+  }
+
+  public poll(id: string): SourceConnection | undefined {
+    return this.repository.requestPoll(id, this.now());
+  }
 }
 
 export interface SourcePollingRunnerOptions {

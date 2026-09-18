@@ -11,6 +11,7 @@ import {
   SourceItemObservedJobHandler,
   SourceMediaCleanupService,
   SourcePollingRunner,
+  SourceService,
   SourceWorkflowCoordinator,
   WorkflowService,
   type JobHandler,
@@ -121,8 +122,9 @@ export async function startServer(): Promise<void> {
         );
   // The durable loop is intentionally server-owned, so polling continues with no browser session
   // or web UI open. The YouTube adapter performs detection/metadata only.
+  const sourceRepository = new SqliteSourcePollingRepository(database);
   const sourcePollingRunner = new SourcePollingRunner(
-    new SqliteSourcePollingRepository(database),
+    sourceRepository,
     new SourceRegistry([new YouTubeSourceAdapter(youtubeOAuthService)]),
     jobService,
     {
@@ -191,6 +193,7 @@ export async function startServer(): Promise<void> {
     sessionKey: loadOrCreateSessionKey(config.paths.sessionKeyPath),
     mediaRepository,
     workflowService,
+    sourceService: new SourceService(sourceRepository),
     tiktokOAuthService,
     metaOAuthService,
     youtubeOAuthService,

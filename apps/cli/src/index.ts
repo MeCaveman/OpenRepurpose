@@ -1,7 +1,12 @@
 import { accessSync, constants, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Command } from 'commander';
-import { JobService, MediaImportService, WorkflowService } from '@openrepurpose/core';
+import {
+  JobService,
+  MediaImportService,
+  SourceService,
+  WorkflowService,
+} from '@openrepurpose/core';
 import type { JobStatus } from '@openrepurpose/core';
 import {
   openDatabase,
@@ -10,6 +15,7 @@ import {
   SqliteJobRepository,
   SqliteMediaRepository,
   SqliteOAuthAuthorizationRequestRepository,
+  SqliteSourcePollingRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
 import {
@@ -110,6 +116,12 @@ function workflowContext(environment: Environment) {
   runMigrations(database);
   const jobs = new JobService(new SqliteJobRepository(database));
   return { database, service: new WorkflowService(new SqliteWorkflowRepository(database), jobs) };
+}
+function sourceContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  return { database, service: new SourceService(new SqliteSourcePollingRepository(database)) };
 }
 
 function accountContext(environment: Environment) {
@@ -359,7 +371,9 @@ export function createCli(options: CreateCliOptions = {}): Command {
       },
     );
 
-  const workflows = program.command('workflows').description('Manage watched-folder workflows');
+  const workflows = program
+    .command('workflows')
+    .description('Manage local and remote-source workflows');
   workflows
     .command('list')
     .option('--json', 'write JSON')
@@ -381,6 +395,65 @@ export function createCli(options: CreateCliOptions = {}): Command {
         context.database.close();
       }
     });
+
+  const sources = program.command('sources').description('Manage remote media sources');
+  sources
+    .command('list')
+    .option('--json', 'write JSON')
+    .action((options: { json?: boolean }) => {
+      const context = sourceContext(environment);
+      try {
+        const results = context.service.list();
+        write(
+          options.json
+            ? `${JSON.stringify(results)}\n`
+            : results
+                .map(
+                  (source) =>
+                    `${source.id}\t${source.status}\t${source.adapterId}\t${source.displayName}`,
+                )
+                .join('\n') + (results.length > 0 ? '\n' : ''),
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  const addSource = sources.command('add').description('Add a remote source');
+  addSource
+    .command('youtube')
+    .requiredOption('--account <account-id>', 'Connected YouTube account ID')
+    .requiredOption('--channel <channel-id>', 'YouTube channel ID to poll')
+    .option('--name <display-name>', 'Local display name')
+    .option('--json', 'write JSON')
+    .action((options: { account: string; channel: string; name?: string; json?: boolean }) => {
+      const context = sourceContext(environment);
+      try {
+        const source = context.service.addYouTube({
+          accountId: options.account,
+          channelId: options.channel,
+          ...(options.name === undefined ? {} : { displayName: options.name }),
+        });
+        write(
+          options.json ? `${JSON.stringify(source)}\n` : `${source.id}\t${source.displayName}\n`,
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  for (const action of ['poll', 'pause', 'resume'] as const)
+    sources
+      .command(`${action} <id>`)
+      .option('--json', 'write JSON')
+      .action((id: string, options: { json?: boolean }) => {
+        const context = sourceContext(environment);
+        try {
+          const source = context.service[action](id);
+          if (source === undefined) throw new Error(`Source not found: ${id}`);
+          write(options.json ? `${JSON.stringify(source)}\n` : `${source.id}\t${source.status}\n`);
+        } finally {
+          context.database.close();
+        }
+      });
 
   const jobs = program.command('jobs').description('Inspect and control persistent jobs');
   jobs

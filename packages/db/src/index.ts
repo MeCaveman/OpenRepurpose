@@ -570,11 +570,25 @@ interface RawRemoteSourceItemRow {
   readonly external_id: string;
   readonly first_observed_at: number;
   readonly id: string;
+  readonly lifecycle_status:
+    | 'observed'
+    | 'queued'
+    | 'resolving'
+    | 'media_ready'
+    | 'processing'
+    | 'publishing'
+    | 'partial_failure'
+    | 'retrying'
+    | 'published'
+    | 'cleanup_pending'
+    | 'completed'
+    | 'failed';
   readonly last_observed_at: number;
   readonly metadata_json: string;
   readonly media_descriptor_json: string | null;
   readonly published_at: number | null;
   readonly source_connection_id: string;
+  readonly resolution_status: 'unresolved' | 'resolving' | 'ready' | 'unavailable' | 'failed';
   readonly updated_at: number;
 }
 
@@ -624,6 +638,46 @@ function remoteSourceItemFromRow(row: RawRemoteSourceItemRow): RemoteSourceItem 
 export class SqliteSourcePollingRepository implements SourcePollingRepository {
   public constructor(private readonly database: OpenRepurposeDatabase) {}
 
+  public createConnection(input: {
+    readonly adapterId: string;
+    readonly configuration: Readonly<Record<string, SourceJsonValue>>;
+    readonly displayName: string;
+    readonly externalSourceId: string;
+    readonly now: Date;
+  }): SourceConnection {
+    const id = randomUUID();
+    this.database.client
+      .prepare(
+        `INSERT INTO source_connections (
+          id, adapter_id, external_source_id, display_name, configuration_json, status, cursor_json,
+          consecutive_poll_failures, next_poll_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'active', NULL, 0, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.adapterId,
+        input.externalSourceId,
+        input.displayName,
+        JSON.stringify(input.configuration),
+        input.now.getTime(),
+        input.now.getTime(),
+        input.now.getTime(),
+      );
+    return this.connection(id)!;
+  }
+
+  public findConnection(id: string): SourceConnection | undefined {
+    return this.connection(id);
+  }
+
+  public listConnections(): readonly SourceConnection[] {
+    return (
+      this.database.client
+        .prepare('SELECT * FROM source_connections ORDER BY created_at DESC, id ASC')
+        .all() as unknown as RawSourceConnectionRow[]
+    ).map(sourceConnectionFromRow);
+  }
+
   public listDue(now: Date): readonly SourceConnection[] {
     return (
       this.database.client
@@ -634,6 +688,47 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
         )
         .all(now.getTime()) as unknown as RawSourceConnectionRow[]
     ).map(sourceConnectionFromRow);
+  }
+
+  public listItems(connectionId: string, limit = 25) {
+    const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
+    const rows = this.database.client
+      .prepare(
+        `SELECT source_items.*, (
+          SELECT cleanup_status FROM source_workflow_executions
+          WHERE source_item_id = source_items.id
+          ORDER BY created_at DESC LIMIT 1
+        ) AS cleanup_status
+        FROM source_items WHERE source_connection_id = ?
+        ORDER BY last_observed_at DESC, id DESC LIMIT ?`,
+      )
+      .all(connectionId, safeLimit) as unknown as (RawRemoteSourceItemRow & {
+      readonly cleanup_status:
+        | 'not_eligible'
+        | 'eligible'
+        | 'scheduled'
+        | 'running'
+        | 'completed'
+        | 'failed'
+        | 'retained'
+        | null;
+    })[];
+    return rows.map((row) => ({
+      ...remoteSourceItemFromRow(row),
+      lifecycleStatus: row.lifecycle_status,
+      resolutionStatus: row.resolution_status,
+      ...(row.cleanup_status === null ? {} : { cleanupStatus: row.cleanup_status }),
+    }));
+  }
+
+  public requestPoll(connectionId: string, now: Date): SourceConnection | undefined {
+    this.database.client
+      .prepare(
+        `UPDATE source_connections SET next_poll_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'active'`,
+      )
+      .run(now.getTime(), now.getTime(), connectionId);
+    return this.connection(connectionId);
   }
 
   public recordPollFailure(input: {
@@ -749,6 +844,19 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
       client.exec('ROLLBACK;');
       throw error;
     }
+  }
+
+  public setConnectionStatus(
+    connectionId: string,
+    status: 'active' | 'paused',
+    now: Date,
+  ): SourceConnection | undefined {
+    this.database.client
+      .prepare(
+        `UPDATE source_connections SET status = ?, next_poll_at = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(status, status === 'active' ? now.getTime() : null, now.getTime(), connectionId);
+    return this.connection(connectionId);
   }
 
   private connection(id: string): SourceConnection | undefined {
