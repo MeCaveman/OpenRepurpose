@@ -9,3 +9,5 @@ Use sequential, descriptive filenames, for example:
 - `0003-secret-storage.md`
 - `0004-tiktok-direct-post.md`
 - `0005-meta-reels-publishing.md`
+- `0006-remote-source-lifecycle.md`
+- `0007-persistent-scheduler-semantics.md`
