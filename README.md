@@ -90,8 +90,8 @@ pnpm build
 pnpm test:e2e
 ```
 
-`pnpm dev` starts the Fastify API on `127.0.0.1:3000`, the Vite UI on `127.0.0.1:5173`, and the
-current CLI watcher. Vite proxies `/api` to Fastify. `pnpm build` followed by `pnpm start` runs the
+`pnpm dev` starts the Fastify API on `127.0.0.1:3000` and the Vite UI on `127.0.0.1:5173` in the
+same terminal. Vite proxies `/api` to Fastify. `pnpm build` followed by `pnpm start` runs the
 production server and serves the built React UI from the same loopback origin.
 
 Runtime paths, port, and browser origins are configured through the variables documented in

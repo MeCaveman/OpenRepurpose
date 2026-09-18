@@ -21,6 +21,17 @@ const expectedPackages = new Map([
 ]);
 
 describe('workspace skeleton', () => {
+  it('runs the server and web development scripts in parallel', async () => {
+    const manifestUrl = new URL('package.json', `file:///${repositoryRoot}/`);
+    const manifest = JSON.parse(await readFile(manifestUrl, 'utf8')) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(manifest.scripts?.dev).toBe(
+      'corepack pnpm -r --parallel --filter @openrepurpose/server --filter @openrepurpose/web dev',
+    );
+  });
+
   it.each([...expectedPackages])('declares %s as %s', async (directory, expectedName) => {
     const manifestUrl = new URL(`${directory}/package.json`, `file:///${repositoryRoot}/`);
     const manifest = JSON.parse(await readFile(manifestUrl, 'utf8')) as {

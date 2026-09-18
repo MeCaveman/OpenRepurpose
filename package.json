@@ -9,7 +9,7 @@
     "pnpm": "12.4.2"
   },
   "scripts": {
-    "dev": "corepack pnpm -r --parallel --filter './apps/**' dev",
+    "dev": "corepack pnpm -r --parallel --filter @openrepurpose/server --filter @openrepurpose/web dev",
     "build": "corepack pnpm -r --if-present build",
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "lint": "eslint . --max-warnings=0",
