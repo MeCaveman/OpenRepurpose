@@ -11,6 +11,7 @@ import {
 } from '../../packages/db/src/index.js';
 import { createTemporaryDatabase } from '../../packages/testkit/src/index.js';
 import type { TemporaryDatabase } from '../../packages/testkit/src/index.js';
+import { createV02DatabaseFixture } from '../fixtures/v02-database.js';
 
 describe('SQLite migrations and repositories', () => {
   let temporaryDatabase: TemporaryDatabase | undefined;
@@ -106,5 +107,30 @@ describe('SQLite migrations and repositories', () => {
         )
         .run('tiktok-account', 'open-id', 'TikTok Creator', '[]', 2, 2),
     ).not.toThrow();
+  });
+  it('upgrades a populated v0.2 fixture and preserves both destination records', () => {
+    const fixture = createV02DatabaseFixture();
+    temporaryDatabase = fixture;
+
+    runMigrations(fixture.database);
+
+    expect(
+      fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
+    ).toHaveLength(10);
+    expect(
+      fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
+    ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);
+    expect(new SqliteWorkflowRepository(fixture.database).findById('workflow-v02')).toMatchObject({
+      name: 'v0.2 watched uploads',
+      destinations: [
+        { destinationId: 'youtube', accountId: 'youtube-v02', privacy: 'private' },
+        { destinationId: 'tiktok', accountId: 'tiktok-v02', privacyLevel: 'SELF_ONLY' },
+      ],
+    });
+    expect(
+      fixture.database.client
+        .prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?) ORDER BY name')
+        .all('meta_credentials', 'meta_publish_targets'),
+    ).toEqual([{ name: 'meta_credentials' }, { name: 'meta_publish_targets' }]);
   });
 });

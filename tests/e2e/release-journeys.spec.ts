@@ -46,6 +46,63 @@ test('setup journey reports mocked destination readiness and TikTok audit restri
   await expect(page.getByText('TikTok unaudited clients can publish only')).toBeVisible();
 });
 
+test('Meta accounts journey keeps Facebook Pages and Instagram targets distinct', async ({
+  page,
+}) => {
+  await serveProductionAssets(page);
+  await page.route('**/api/accounts', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        accounts: [],
+        meta: {
+          configured: true,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/meta/oauth/callback',
+        },
+        metaCredentials: [
+          {
+            id: 'meta-credential-1',
+            externalId: 'meta-user-1',
+            displayName: 'Meta Creator',
+            status: 'connected',
+            scopes: ['pages_show_list', 'pages_manage_posts', 'instagram_content_publish'],
+            tokenExpiresAt: '2026-10-01T00:00:00.000Z',
+          },
+        ],
+        metaTargets: [
+          {
+            id: 'page-target-1',
+            credentialId: 'meta-credential-1',
+            kind: 'facebook_page',
+            displayName: 'Northwind Page',
+            pageId: 'page-1',
+            enabled: true,
+            availability: 'available',
+          },
+          {
+            id: 'instagram-target-1',
+            credentialId: 'meta-credential-1',
+            kind: 'instagram_professional',
+            displayName: 'Northwind Reels',
+            username: 'northwind_reels',
+            pageId: 'page-1',
+            enabled: false,
+            availability: 'available',
+          },
+        ],
+      }),
+    }),
+  );
+  await page.goto('/accounts');
+  await expect(page.getByText('Meta Creator')).toBeVisible();
+  await expect(page.getByText('Northwind Page')).toBeVisible();
+  await expect(page.getByText('Facebook Page target')).toBeVisible();
+  await expect(page.getByText('Northwind Reels')).toBeVisible();
+  await expect(page.getByText('Instagram professional target')).toBeVisible();
+  await expect(page.getByText('@northwind_reels')).toBeVisible();
+  await expect(page.getByRole('checkbox')).toHaveCount(2);
+});
+
 test('manual import to publish queues one YouTube upload', async ({ page }) => {
   await serveProductionAssets(page);
   await page.route('**/api/media', (route) =>
