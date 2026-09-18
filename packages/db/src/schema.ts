@@ -264,6 +264,28 @@ export const sourceConnections = sqliteTable(
   ],
 );
 
+export const workflowRemoteSources = sqliteTable(
+  'workflow_remote_sources',
+  {
+    workflowId: text('workflow_id')
+      .primaryKey()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    sourceConnectionId: text('source_connection_id')
+      .notNull()
+      .references(() => sourceConnections.id, { onDelete: 'restrict' }),
+    filtersJson: text('filters_json').notNull(),
+    retentionPolicy: text('retention_policy', {
+      enum: ['delete_after_success', 'keep_for_duration', 'keep_forever'],
+    }).notNull(),
+    retentionDurationSeconds: integer('retention_duration_seconds'),
+    rightsConfirmed: integer('rights_confirmed', { mode: 'boolean' }).notNull(),
+    localOriginalJson: text('local_original_json'),
+  },
+  (table) => [
+    index('workflow_remote_sources_connection_idx').on(table.sourceConnectionId, table.workflowId),
+  ],
+);
+
 export const sourceItems = sqliteTable(
   'source_items',
   {

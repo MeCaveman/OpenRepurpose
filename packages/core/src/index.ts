@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   isPlatformError,
   validateSourcePollResult,
@@ -394,6 +394,7 @@ export interface JobRunnerOptions {
   readonly leaseDurationMs?: number;
   readonly maxRetryDelayMs?: number;
   readonly now?: () => Date;
+  readonly onJobSettled?: (job: Job) => Promise<void> | void;
   readonly pollIntervalMs?: number;
   readonly random?: () => number;
   readonly workerId?: string;
@@ -409,6 +410,7 @@ export class JobRunner {
   private readonly leaseDurationMs: number;
   private readonly maxRetryDelayMs: number;
   private readonly now: () => Date;
+  private readonly onJobSettled: ((job: Job) => Promise<void> | void) | undefined;
   private pollTimer: NodeJS.Timeout | undefined;
   private readonly pollIntervalMs: number;
   private readonly random: () => number;
@@ -427,6 +429,7 @@ export class JobRunner {
     this.baseRetryDelayMs = options.baseRetryDelayMs ?? 1_000;
     this.maxRetryDelayMs = options.maxRetryDelayMs ?? 60_000;
     this.now = options.now ?? (() => new Date());
+    this.onJobSettled = options.onJobSettled;
     this.random = options.random ?? Math.random;
     this.workerId = options.workerId ?? randomUUID();
     if (!Number.isInteger(this.concurrency) || this.concurrency < 1)
@@ -552,6 +555,14 @@ export class JobRunner {
       }
     } finally {
       clearInterval(heartbeat);
+      const settled = this.repository.findById(job.id);
+      if (settled !== undefined && settled.status !== 'running') {
+        try {
+          await this.onJobSettled?.(settled);
+        } catch {
+          // Recovery notification failures must not change an already-persisted job outcome.
+        }
+      }
     }
   }
 }
@@ -610,6 +621,7 @@ export interface Workflow {
   readonly failurePolicy: WorkflowFailurePolicy;
   readonly id: string;
   readonly name: string;
+  readonly remoteSource?: RemoteWorkflowSource;
   readonly sourceDirectory: string;
   readonly titleTemplate: string;
   readonly updatedAt: Date;
@@ -625,8 +637,28 @@ export interface WorkflowInput {
   readonly failurePolicy?: WorkflowFailurePolicy;
   readonly name: string;
   readonly privacy?: YouTubePrivacy;
-  readonly sourceDirectory: string;
+  readonly remoteSource?: RemoteWorkflowSource;
+  readonly sourceDirectory?: string;
   readonly titleTemplate: string;
+}
+
+export interface SourceWorkflowFilters {
+  readonly durationSecondsMax?: number;
+  readonly durationSecondsMin?: number;
+  readonly privacyStatuses?: readonly string[];
+  readonly publishedAfter?: string;
+  readonly titleContains?: string;
+  readonly titleExcludes?: string;
+  readonly titleRegex?: string;
+}
+
+/** Remote-source subscription captured with a workflow and versioned into each execution. */
+export interface RemoteWorkflowSource {
+  readonly connectionId: string;
+  readonly filters?: SourceWorkflowFilters;
+  readonly localOriginal?: LocalOriginalHints;
+  readonly retentionPolicy?: SourceRetentionPolicy;
+  readonly rightsConfirmed?: boolean;
 }
 
 export interface WorkflowRepository {
@@ -1364,7 +1396,409 @@ export function isOpenRepurposeManagedMedia(
   return ownership !== 'user_owned_original';
 }
 
-const templateVariables = new Set(['file.name', 'file.stem', 'media.duration', 'workflow.name']);
+export interface WorkflowExecutionPlan {
+  readonly descriptionTemplate: string;
+  readonly destinations: readonly WorkflowDestination[];
+  readonly failurePolicy: WorkflowFailurePolicy;
+  readonly id: string;
+  readonly name: string;
+  readonly titleTemplate: string;
+}
+
+export interface SourceWorkflowExecutionSnapshot {
+  readonly filters: {
+    readonly applied: SourceWorkflowFilters;
+    readonly matched: true;
+  };
+  readonly remoteSource: RemoteWorkflowSource;
+  readonly schemaVersion: 1;
+  readonly source: {
+    readonly externalId: string;
+    readonly metadata: Readonly<Record<string, SourceJsonValue>>;
+    readonly publishedAt?: string;
+    readonly sourceConnectionId: string;
+    readonly sourceItemId: string;
+  };
+  readonly workflow: WorkflowExecutionPlan;
+}
+
+export interface SourceWorkflowExecution {
+  readonly cleanupEligibleAt?: Date;
+  readonly cleanupStatus:
+    'not_eligible' | 'eligible' | 'scheduled' | 'running' | 'completed' | 'failed' | 'retained';
+  readonly completedAt?: Date;
+  readonly id: string;
+  readonly retentionPolicy: SourceRetentionPolicy;
+  readonly snapshot: SourceWorkflowExecutionSnapshot;
+  readonly sourceItemId: string;
+  readonly status:
+    'pending' | 'running' | 'waiting' | 'retrying' | 'succeeded' | 'failed' | 'cancelled';
+  readonly workflowKey: string;
+  readonly workflowVersion: string;
+}
+
+export interface SourceExecutionDestination extends SourceDestinationState {
+  readonly destinationId: WorkflowDestination['destinationId'];
+  readonly destinationKey: string;
+  readonly executionId: string;
+  readonly id: string;
+  readonly idempotencyKey: string;
+  readonly jobId?: string;
+  readonly lastErrorCode?: string;
+  readonly lastErrorMessage?: string;
+  readonly remoteId?: string;
+  readonly remoteUrl?: string;
+}
+
+export interface SourceWorkflowExecutionRepository {
+  attachDestinationJob(destinationId: string, job: Job, now: Date): SourceExecutionDestination;
+  create(input: {
+    readonly destinations: readonly {
+      readonly destinationId: WorkflowDestination['destinationId'];
+      readonly destinationKey: string;
+      readonly id: string;
+      readonly idempotencyKey: string;
+      readonly required: boolean;
+    }[];
+    readonly executionId: string;
+    readonly now: Date;
+    readonly retentionPolicy: SourceRetentionPolicy;
+    readonly snapshot: SourceWorkflowExecutionSnapshot;
+    readonly sourceItemId: string;
+    readonly workflowId: string;
+    readonly workflowKey: string;
+    readonly workflowVersion: string;
+  }): { readonly created: boolean; readonly execution: SourceWorkflowExecution };
+  find(id: string): SourceWorkflowExecution | undefined;
+  findSourceItem(id: string): RemoteSourceItem | undefined;
+  listArtifacts(executionId: string): readonly SourceMediaArtifact[];
+  listDestinations(executionId: string): readonly SourceExecutionDestination[];
+  listDueCleanup(now: Date): readonly SourceWorkflowExecution[];
+  listNeedingRun(): readonly SourceWorkflowExecution[];
+  markCleanupCompleted(executionId: string, now: Date): SourceWorkflowExecution;
+  markCleanupFailed(
+    executionId: string,
+    errorCode: string,
+    errorMessage: string,
+    now: Date,
+  ): SourceWorkflowExecution;
+  markCleanupRunning(executionId: string, now: Date): SourceWorkflowExecution;
+  markRunFailed(executionId: string, retryable: boolean, now: Date): SourceWorkflowExecution;
+  retryFailedDestinations(executionId: string, now: Date): number;
+}
+
+function sourceString(item: RemoteSourceItem, key: string): string | undefined {
+  const value = item.metadata[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function sourceNumber(item: RemoteSourceItem, key: string): number | undefined {
+  const value = item.metadata[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Filters are deterministic and evaluated before any media-resolution call. */
+export function sourceItemMatchesWorkflowFilters(
+  item: RemoteSourceItem,
+  filters: SourceWorkflowFilters = {},
+): boolean {
+  const title = sourceString(item, 'title') ?? '';
+  const normalizedTitle = title.toLocaleLowerCase();
+  if (
+    filters.titleContains !== undefined &&
+    !normalizedTitle.includes(filters.titleContains.toLocaleLowerCase())
+  )
+    return false;
+  if (
+    filters.titleExcludes !== undefined &&
+    normalizedTitle.includes(filters.titleExcludes.toLocaleLowerCase())
+  )
+    return false;
+  if (filters.titleRegex !== undefined && !new RegExp(filters.titleRegex, 'u').test(title))
+    return false;
+  if (
+    filters.publishedAfter !== undefined &&
+    (item.publishedAt === undefined ||
+      item.publishedAt.getTime() <= Date.parse(filters.publishedAfter))
+  )
+    return false;
+  const duration = sourceNumber(item, 'durationSeconds');
+  if (
+    filters.durationSecondsMin !== undefined &&
+    (duration === undefined || duration < filters.durationSecondsMin)
+  )
+    return false;
+  if (
+    filters.durationSecondsMax !== undefined &&
+    (duration === undefined || duration > filters.durationSecondsMax)
+  )
+    return false;
+  if (filters.privacyStatuses !== undefined) {
+    const privacy = sourceString(item, 'privacyStatus');
+    if (privacy === undefined || !filters.privacyStatuses.includes(privacy)) return false;
+  }
+  return true;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function sourceWorkflowVersion(workflow: Workflow): string {
+  return `sha256:${createHash('sha256')
+    .update(
+      canonicalJson({
+        name: workflow.name,
+        titleTemplate: workflow.titleTemplate,
+        descriptionTemplate: workflow.descriptionTemplate,
+        destinations: workflow.destinations,
+        failurePolicy: workflow.failurePolicy,
+        remoteSource: workflow.remoteSource,
+      }),
+    )
+    .digest('hex')}`;
+}
+
+function executionDestinationKey(destination: WorkflowDestination): string {
+  return `${destination.destinationId}:${destination.accountId}`;
+}
+
+/** Coordinates source intent, resolution, and the same destination-job path used by local media. */
+export class SourceWorkflowCoordinator {
+  public constructor(
+    private readonly workflows: WorkflowRepository,
+    private readonly executions: SourceWorkflowExecutionRepository,
+    private readonly resolution: MediaResolutionService,
+    private readonly workflowExecution: WorkflowService,
+    private readonly jobs: JobService,
+    private readonly cleanup: SourceMediaCleanupService,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  public observe(sourceItemId: string): readonly SourceWorkflowExecution[] {
+    const item = this.executions.findSourceItem(sourceItemId);
+    if (item === undefined)
+      throw new JobExecutionError('SOURCE_ITEM_NOT_FOUND', false, 'Source item not found.');
+    const output: SourceWorkflowExecution[] = [];
+    for (const workflow of this.workflows.list(true)) {
+      const remote = workflow.remoteSource;
+      if (
+        remote === undefined ||
+        remote.connectionId !== item.sourceConnectionId ||
+        !sourceItemMatchesWorkflowFilters(item, remote.filters)
+      )
+        continue;
+      const executionId = randomUUID();
+      const version = sourceWorkflowVersion(workflow);
+      const workflowPlan: WorkflowExecutionPlan = {
+        id: workflow.id,
+        name: workflow.name,
+        titleTemplate: workflow.titleTemplate,
+        descriptionTemplate: workflow.descriptionTemplate,
+        destinations: workflow.destinations,
+        failurePolicy: workflow.failurePolicy,
+      };
+      const snapshot: SourceWorkflowExecutionSnapshot = {
+        schemaVersion: 1,
+        source: {
+          sourceItemId: item.id,
+          sourceConnectionId: item.sourceConnectionId,
+          externalId: item.externalId,
+          metadata: item.metadata,
+          ...(item.publishedAt === undefined
+            ? {}
+            : { publishedAt: item.publishedAt.toISOString() }),
+        },
+        filters: { applied: remote.filters ?? {}, matched: true },
+        remoteSource: remote,
+        workflow: workflowPlan,
+      };
+      const created = this.executions.create({
+        executionId,
+        sourceItemId: item.id,
+        workflowId: workflow.id,
+        workflowKey: workflow.id,
+        workflowVersion: version,
+        snapshot,
+        retentionPolicy: remote.retentionPolicy ?? { kind: 'delete_after_success' },
+        now: this.now(),
+        destinations: workflow.destinations.map((destination) => {
+          const destinationKey = executionDestinationKey(destination);
+          return {
+            id: randomUUID(),
+            destinationId: destination.destinationId,
+            destinationKey,
+            required: true,
+            idempotencyKey: `source-execution:${executionId}:destination:${destinationKey}`,
+          };
+        }),
+      });
+      this.enqueueExecution(created.execution.id);
+      output.push(created.execution);
+    }
+    return output;
+  }
+
+  public async run(executionId: string, signal: AbortSignal): Promise<void> {
+    const execution = this.executions.find(executionId);
+    if (execution === undefined)
+      throw new JobExecutionError(
+        'SOURCE_EXECUTION_NOT_FOUND',
+        false,
+        'Source execution not found.',
+      );
+    const item = this.executions.findSourceItem(execution.sourceItemId);
+    if (item === undefined)
+      throw new JobExecutionError('SOURCE_ITEM_NOT_FOUND', false, 'Source item not found.');
+    let resolved: ResolvedSourceMedia;
+    try {
+      resolved = await this.resolution.resolve({
+        sourceItem: item,
+        executionId: execution.id,
+        jobScopeId: execution.id,
+        signal,
+        ...(execution.snapshot.remoteSource.localOriginal === undefined
+          ? {}
+          : { localOriginal: execution.snapshot.remoteSource.localOriginal }),
+        ...(execution.snapshot.remoteSource.rightsConfirmed === undefined
+          ? {}
+          : { rightsConfirmed: execution.snapshot.remoteSource.rightsConfirmed }),
+        ...(typeof item.metadata.fileExtension === 'string'
+          ? { outputExtension: item.metadata.fileExtension }
+          : {}),
+      });
+    } catch (error) {
+      if (error instanceof MediaResolutionError) {
+        this.executions.markRunFailed(execution.id, error.retryable, this.now());
+        throw new JobExecutionError(error.code, error.retryable, error.message);
+      }
+      throw error;
+    }
+    const unfinished = this.executions
+      .listDestinations(execution.id)
+      .filter(sourceDestinationNeedsWork);
+    const results = this.workflowExecution.executeSourceMedia(
+      execution.snapshot.workflow,
+      resolved.media,
+      execution.snapshot.source,
+      unfinished.map((destination) => ({
+        destinationKey: destination.destinationKey,
+        idempotencyKey: destination.idempotencyKey,
+      })),
+    );
+    for (const result of results.destinations) {
+      const destination = unfinished.find(
+        (candidate) => candidate.destinationKey === result.destinationKey,
+      );
+      if (destination !== undefined)
+        this.executions.attachDestinationJob(destination.id, result.job, this.now());
+    }
+  }
+
+  public async cleanupExecution(executionId: string): Promise<void> {
+    const execution = this.executions.find(executionId);
+    if (execution === undefined)
+      throw new JobExecutionError(
+        'SOURCE_EXECUTION_NOT_FOUND',
+        false,
+        'Source execution not found.',
+      );
+    if (execution.cleanupStatus === 'completed' || execution.cleanupStatus === 'retained') return;
+    this.executions.markCleanupRunning(executionId, this.now());
+    try {
+      for (const artifact of this.executions.listArtifacts(executionId))
+        await this.cleanup.cleanupArtifact(artifact.id);
+      this.executions.markCleanupCompleted(executionId, this.now());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Managed media cleanup failed.';
+      this.executions.markCleanupFailed(executionId, 'MEDIA_CLEANUP_FAILED', message, this.now());
+      throw new JobExecutionError('MEDIA_CLEANUP_FAILED', true, message);
+    }
+  }
+
+  public recover(): void {
+    for (const execution of this.executions.listNeedingRun()) this.enqueueExecution(execution.id);
+    for (const execution of this.executions.listDueCleanup(this.now()))
+      this.jobs.create({
+        type: 'source.execution.cleanup',
+        idempotencyKey: `source-execution:${execution.id}:cleanup`,
+        input: { executionId: execution.id },
+        maxAttempts: 3,
+      });
+  }
+
+  public retryFailedDestinations(executionId: string): number {
+    const retried = this.executions.retryFailedDestinations(executionId, this.now());
+    if (retried > 0) this.recover();
+    return retried;
+  }
+
+  private enqueueExecution(executionId: string): void {
+    this.jobs.create({
+      type: 'source.execution.run',
+      idempotencyKey: `source-execution:${executionId}:run`,
+      input: { executionId },
+      maxAttempts: 3,
+    });
+  }
+}
+
+function executionIdFromJobInput(input: JsonValue): string {
+  if (input === null || typeof input !== 'object' || Array.isArray(input))
+    throw new JobExecutionError('INVALID_SOURCE_JOB_INPUT', false, 'Invalid source job input.');
+  const record = input as { readonly [key: string]: JsonValue };
+  if (typeof record.executionId !== 'string' || record.executionId.trim().length === 0)
+    throw new JobExecutionError('INVALID_SOURCE_JOB_INPUT', false, 'Invalid source job input.');
+  return record.executionId;
+}
+
+export class SourceItemObservedJobHandler implements JobHandler {
+  public readonly type = 'source.item.observed';
+  public constructor(private readonly coordinator: SourceWorkflowCoordinator) {}
+  public async execute(input: JsonValue): Promise<void> {
+    if (input === null || typeof input !== 'object' || Array.isArray(input))
+      throw new JobExecutionError('INVALID_SOURCE_JOB_INPUT', false, 'Invalid source job input.');
+    const record = input as { readonly [key: string]: JsonValue };
+    if (typeof record.sourceItemId !== 'string')
+      throw new JobExecutionError('INVALID_SOURCE_JOB_INPUT', false, 'Invalid source job input.');
+    this.coordinator.observe(record.sourceItemId);
+  }
+}
+
+export class SourceExecutionJobHandler implements JobHandler {
+  public readonly type = 'source.execution.run';
+  public constructor(private readonly coordinator: SourceWorkflowCoordinator) {}
+  public execute(input: JsonValue, context: JobHandlerContext): Promise<void> {
+    return this.coordinator.run(executionIdFromJobInput(input), context.signal);
+  }
+}
+
+export class SourceCleanupJobHandler implements JobHandler {
+  public readonly type = 'source.execution.cleanup';
+  public constructor(private readonly coordinator: SourceWorkflowCoordinator) {}
+  public execute(input: JsonValue): Promise<void> {
+    return this.coordinator.cleanupExecution(executionIdFromJobInput(input));
+  }
+}
+
+const templateVariables = new Set([
+  'file.name',
+  'file.stem',
+  'media.duration',
+  'workflow.name',
+  'source.title',
+  'source.description',
+  'source.publishedAt',
+  'source.externalId',
+]);
 const templateToken = /{{\s*([^{}\s]+)\s*}}/g;
 
 export function validateTemplate(template: string): void {
@@ -1381,6 +1815,12 @@ export function validateTemplate(template: string): void {
 export interface WorkflowTemplateContext {
   readonly file: { readonly name: string; readonly stem: string };
   readonly media: { readonly duration: string };
+  readonly source?: {
+    readonly description: string;
+    readonly externalId: string;
+    readonly publishedAt: string;
+    readonly title: string;
+  };
   readonly workflow: { readonly name: string };
 }
 
@@ -1391,12 +1831,17 @@ export function renderTemplate(template: string, context: WorkflowTemplateContex
     'file.stem': context.file.stem,
     'media.duration': context.media.duration,
     'workflow.name': context.workflow.name,
+    'source.title': context.source?.title ?? '',
+    'source.description': context.source?.description ?? '',
+    'source.publishedAt': context.source?.publishedAt ?? '',
+    'source.externalId': context.source?.externalId ?? '',
   };
   return template.replace(templateToken, (_match, key: string) => values[key] ?? '');
 }
 
 export interface WorkflowDestinationJobResult extends EnqueueJobResult {
   readonly destinationId: WorkflowDestination['destinationId'];
+  readonly destinationKey: string;
 }
 
 export interface WorkflowExecutionResult {
@@ -1441,6 +1886,33 @@ export class WorkflowService {
   ): WorkflowExecutionResult | undefined {
     const workflow = this.workflows.findById(workflowId);
     if (workflow === undefined || !workflow.enabled) return undefined;
+    const plan: WorkflowExecutionPlan = {
+      id: workflow.id,
+      name: workflow.name,
+      titleTemplate: workflow.titleTemplate,
+      descriptionTemplate: workflow.descriptionTemplate,
+      destinations: workflow.destinations,
+      failurePolicy: workflow.failurePolicy,
+    };
+    return this.executeMedia(plan, media);
+  }
+
+  /** Executes an immutable remote-source plan through the normal destination job fan-out. */
+  public executeSourceMedia(
+    workflow: WorkflowExecutionPlan,
+    media: MediaAsset,
+    source: SourceWorkflowExecutionSnapshot['source'],
+    intents: readonly { readonly destinationKey: string; readonly idempotencyKey: string }[],
+  ): WorkflowExecutionResult {
+    return this.executeMedia(workflow, media, source, intents);
+  }
+
+  private executeMedia(
+    workflow: WorkflowExecutionPlan,
+    media: MediaAsset,
+    source?: SourceWorkflowExecutionSnapshot['source'],
+    intents?: readonly { readonly destinationKey: string; readonly idempotencyKey: string }[],
+  ): WorkflowExecutionResult {
     const name = media.path.replace(/^.*[\\/]/, '');
     const stem = name.replace(/\.[^.]*$/, '');
     const duration =
@@ -1449,101 +1921,149 @@ export class WorkflowService {
       file: { name, stem },
       media: { duration },
       workflow,
+      ...(source === undefined
+        ? {}
+        : {
+            source: {
+              title: typeof source.metadata.title === 'string' ? source.metadata.title : '',
+              description:
+                typeof source.metadata.description === 'string' ? source.metadata.description : '',
+              publishedAt: source.publishedAt ?? '',
+              externalId: source.externalId,
+            },
+          }),
     };
     const title = renderTemplate(workflow.titleTemplate, context).trim();
     if (title.length === 0) throw new Error('A workflow title template must render a title.');
     const description = renderTemplate(workflow.descriptionTemplate, context);
-    const destinations = workflow.destinations.map((destination): WorkflowDestinationJobResult => {
-      const common = {
-        accountId: destination.accountId,
-        mediaId: media.id,
-        workflow: { id: workflow.id, name: workflow.name },
-      };
-      const result =
-        destination.destinationId === 'youtube'
-          ? this.jobs.create({
-              type: 'youtube.upload',
-              idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
-              input: {
-                ...common,
-                metadata: {
-                  title,
-                  description,
-                  privacy: destination.privacy,
-                  ...(destination.category === undefined ? {} : { category: destination.category }),
-                },
-              },
-            })
-          : destination.destinationId === 'tiktok'
+    const destinationPlans = workflow.destinations
+      .map((destination) => ({ destination, destinationKey: executionDestinationKey(destination) }))
+      .filter(
+        ({ destinationKey }) =>
+          intents === undefined ||
+          intents.some((intent) => intent.destinationKey === destinationKey),
+      );
+    const destinations = destinationPlans.map(
+      ({ destination, destinationKey }): WorkflowDestinationJobResult => {
+        const common = {
+          accountId: destination.accountId,
+          mediaId: media.id,
+          workflow: { id: workflow.id, name: workflow.name },
+        };
+        const result =
+          destination.destinationId === 'youtube'
             ? this.jobs.create({
-                type: 'tiktok.direct-post',
-                idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
+                type: 'youtube.upload',
+                idempotencyKey: this.destinationIdempotencyKey(
+                  workflow,
+                  media,
+                  destination,
+                  intents,
+                ),
                 input: {
                   ...common,
                   metadata: {
-                    caption:
-                      destination.captionTemplate === undefined
-                        ? title
-                        : renderTemplate(destination.captionTemplate, context),
-                    privacyLevel: destination.privacyLevel,
-                    ...(destination.disableComment === undefined
+                    title,
+                    description,
+                    privacy: destination.privacy,
+                    ...(destination.category === undefined
                       ? {}
-                      : { disableComment: destination.disableComment }),
-                    ...(destination.disableDuet === undefined
-                      ? {}
-                      : { disableDuet: destination.disableDuet }),
-                    ...(destination.disableStitch === undefined
-                      ? {}
-                      : { disableStitch: destination.disableStitch }),
+                      : { category: destination.category }),
                   },
                 },
               })
-            : destination.destinationId === 'instagram'
+            : destination.destinationId === 'tiktok'
               ? this.jobs.create({
-                  type: 'instagram.reels.publish',
-                  idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
+                  type: 'tiktok.direct-post',
+                  idempotencyKey: this.destinationIdempotencyKey(
+                    workflow,
+                    media,
+                    destination,
+                    intents,
+                  ),
                   input: {
-                    mediaId: media.id,
-                    targetId: destination.accountId,
+                    ...common,
                     metadata: {
                       caption:
                         destination.captionTemplate === undefined
                           ? title
                           : renderTemplate(destination.captionTemplate, context),
-                      ...(destination.shareToFeed === undefined
+                      privacyLevel: destination.privacyLevel,
+                      ...(destination.disableComment === undefined
                         ? {}
-                        : { shareToFeed: destination.shareToFeed }),
+                        : { disableComment: destination.disableComment }),
+                      ...(destination.disableDuet === undefined
+                        ? {}
+                        : { disableDuet: destination.disableDuet }),
+                      ...(destination.disableStitch === undefined
+                        ? {}
+                        : { disableStitch: destination.disableStitch }),
                     },
                   },
                 })
-              : this.jobs.create({
-                  type: 'facebook.reels.publish',
-                  idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
-                  input: {
-                    mediaId: media.id,
-                    targetId: destination.accountId,
-                    metadata: {
-                      ...(destination.titleTemplate === undefined
-                        ? { title }
-                        : { title: renderTemplate(destination.titleTemplate, context) }),
-                      ...(destination.descriptionTemplate === undefined
-                        ? { description }
-                        : {
-                            description: renderTemplate(destination.descriptionTemplate, context),
-                          }),
+              : destination.destinationId === 'instagram'
+                ? this.jobs.create({
+                    type: 'instagram.reels.publish',
+                    idempotencyKey: this.destinationIdempotencyKey(
+                      workflow,
+                      media,
+                      destination,
+                      intents,
+                    ),
+                    input: {
+                      mediaId: media.id,
+                      targetId: destination.accountId,
+                      metadata: {
+                        caption:
+                          destination.captionTemplate === undefined
+                            ? title
+                            : renderTemplate(destination.captionTemplate, context),
+                        ...(destination.shareToFeed === undefined
+                          ? {}
+                          : { shareToFeed: destination.shareToFeed }),
+                      },
                     },
-                  },
-                });
-      return { destinationId: destination.destinationId, ...result };
-    });
+                  })
+                : this.jobs.create({
+                    type: 'facebook.reels.publish',
+                    idempotencyKey: this.destinationIdempotencyKey(
+                      workflow,
+                      media,
+                      destination,
+                      intents,
+                    ),
+                    input: {
+                      mediaId: media.id,
+                      targetId: destination.accountId,
+                      metadata: {
+                        ...(destination.titleTemplate === undefined
+                          ? { title }
+                          : { title: renderTemplate(destination.titleTemplate, context) }),
+                        ...(destination.descriptionTemplate === undefined
+                          ? { description }
+                          : {
+                              description: renderTemplate(destination.descriptionTemplate, context),
+                            }),
+                      },
+                    },
+                  });
+        return { destinationId: destination.destinationId, destinationKey, ...result };
+      },
+    );
     return { workflowId: workflow.id, failurePolicy: workflow.failurePolicy, destinations };
   }
 
   private destinationIdempotencyKey(
-    workflow: Workflow,
+    workflow: WorkflowExecutionPlan,
     media: MediaAsset,
     destination: WorkflowDestination,
+    intents?: readonly { readonly destinationKey: string; readonly idempotencyKey: string }[],
   ): string {
+    const destinationKey = executionDestinationKey(destination);
+    const intent = intents?.find((candidate) => candidate.destinationKey === destinationKey);
+    if (intents !== undefined && intent === undefined)
+      throw new Error(`Missing source destination intent: ${destinationKey}`);
+    if (intent !== undefined) return intent.idempotencyKey;
     return `workflow:${workflow.id}:media:${media.id}:${destination.destinationId}:${destination.accountId}`;
   }
 
@@ -1554,7 +2074,11 @@ export class WorkflowService {
     updatedAt: Date,
   ): Workflow {
     if (input.name.trim().length === 0) throw new Error('A workflow name is required.');
-    if (input.sourceDirectory.trim().length === 0) throw new Error('A watched folder is required.');
+    const sourceDirectory = input.sourceDirectory?.trim() ?? '';
+    if (input.remoteSource === undefined && sourceDirectory.length === 0)
+      throw new Error('A watched folder is required.');
+    if (input.remoteSource !== undefined && sourceDirectory.length > 0)
+      throw new Error('A workflow must use either a watched folder or a remote source.');
     if (input.titleTemplate.trim().length === 0) throw new Error('A title template is required.');
     validateTemplate(input.titleTemplate);
     validateTemplate(input.descriptionTemplate ?? '');
@@ -1576,17 +2100,60 @@ export class WorkflowService {
       ).size !== destinations.length
     )
       throw new Error('A workflow can contain each destination only once.');
+    const remoteSource =
+      input.remoteSource === undefined ? undefined : this.validateRemoteSource(input.remoteSource);
     return {
       id,
       name: input.name.trim(),
       enabled: input.enabled ?? true,
-      sourceDirectory: input.sourceDirectory.trim(),
+      sourceDirectory,
+      ...(remoteSource === undefined ? {} : { remoteSource }),
       titleTemplate: input.titleTemplate,
       descriptionTemplate: input.descriptionTemplate ?? '',
       destinations,
       failurePolicy: 'best_effort',
       createdAt,
       updatedAt,
+    };
+  }
+
+  private validateRemoteSource(source: RemoteWorkflowSource): RemoteWorkflowSource {
+    const connectionId = source.connectionId.trim();
+    if (connectionId.length === 0) throw new Error('A remote source connection is required.');
+    const filters = source.filters ?? {};
+    for (const [name, value] of [
+      ['durationSecondsMin', filters.durationSecondsMin],
+      ['durationSecondsMax', filters.durationSecondsMax],
+    ] as const)
+      if (value !== undefined && (!Number.isFinite(value) || value < 0))
+        throw new Error(`${name} must be a non-negative number.`);
+    if (
+      filters.durationSecondsMin !== undefined &&
+      filters.durationSecondsMax !== undefined &&
+      filters.durationSecondsMin > filters.durationSecondsMax
+    )
+      throw new Error('Minimum source duration cannot exceed maximum source duration.');
+    if (
+      filters.publishedAfter !== undefined &&
+      !Number.isFinite(Date.parse(filters.publishedAfter))
+    )
+      throw new Error('publishedAfter must be an RFC 3339 timestamp.');
+    if (filters.titleRegex !== undefined) {
+      try {
+        new RegExp(filters.titleRegex, 'u');
+      } catch {
+        throw new Error('Source title regex is invalid.');
+      }
+    }
+    const retentionPolicy = source.retentionPolicy ?? { kind: 'delete_after_success' as const };
+    if (retentionPolicy.kind === 'keep_for_duration')
+      retentionCleanupAt(retentionPolicy, new Date(0));
+    return {
+      connectionId,
+      ...(Object.keys(filters).length === 0 ? {} : { filters }),
+      retentionPolicy,
+      ...(source.localOriginal === undefined ? {} : { localOriginal: source.localOriginal }),
+      ...(source.rightsConfirmed === undefined ? {} : { rightsConfirmed: source.rightsConfirmed }),
     };
   }
 

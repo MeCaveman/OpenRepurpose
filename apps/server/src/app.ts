@@ -677,7 +677,8 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       const value = body as Record<string, unknown>;
       if (
         typeof value.name !== 'string' ||
-        typeof value.sourceDirectory !== 'string' ||
+        (typeof value.sourceDirectory !== 'string' &&
+          (typeof value.remoteSource !== 'object' || value.remoteSource === null)) ||
         typeof value.titleTemplate !== 'string' ||
         (typeof value.accountId !== 'string' && !Array.isArray(value.destinations))
       )

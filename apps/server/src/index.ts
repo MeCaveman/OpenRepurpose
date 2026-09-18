@@ -4,8 +4,16 @@ import {
   JobRunner,
   JobService,
   MediaImportService,
+  MediaResolutionService,
+  RegisteredLocalOriginalMatcher,
+  SourceCleanupJobHandler,
+  SourceExecutionJobHandler,
+  SourceItemObservedJobHandler,
+  SourceMediaCleanupService,
   SourcePollingRunner,
+  SourceWorkflowCoordinator,
   WorkflowService,
+  type JobHandler,
 } from '@openrepurpose/core';
 import {
   openDatabase,
@@ -17,12 +25,15 @@ import {
   SqliteMetaCredentialRepository,
   SqliteOAuthAuthorizationRequestRepository,
   SqliteSourceCursorRepository,
+  SqliteSourceMediaResolutionRepository,
   SqliteSourcePollingRepository,
+  SqliteSourceWorkflowExecutionRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
   FfprobeMediaProbe,
+  LocalManagedTemporaryStorage,
   LocalMediaFileInspector,
   WatchedFolderRunner,
 } from '@openrepurpose/media';
@@ -77,6 +88,37 @@ export async function startServer(): Promise<void> {
   );
   const jobService = new JobService(jobRepository);
   const workflowService = new WorkflowService(new SqliteWorkflowRepository(database), jobService);
+  const mediaImportService =
+    executables.ffprobe === undefined
+      ? undefined
+      : new MediaImportService(
+          new LocalMediaFileInspector(),
+          new FfprobeMediaProbe(executables.ffprobe),
+          mediaRepository,
+        );
+  const sourceExecutionRepository = new SqliteSourceWorkflowExecutionRepository(database);
+  const managedTemporaryStorage = new LocalManagedTemporaryStorage(config.paths.dataDirectory);
+  const sourceCoordinator =
+    mediaImportService === undefined
+      ? undefined
+      : new SourceWorkflowCoordinator(
+          new SqliteWorkflowRepository(database),
+          sourceExecutionRepository,
+          new MediaResolutionService(
+            new SqliteSourceMediaResolutionRepository(database),
+            new RegisteredLocalOriginalMatcher(mediaRepository),
+            [],
+            managedTemporaryStorage,
+            mediaImportService,
+            mediaRepository,
+          ),
+          workflowService,
+          jobService,
+          new SourceMediaCleanupService(
+            new SqliteSourceMediaResolutionRepository(database),
+            managedTemporaryStorage,
+          ),
+        );
   // The durable loop is intentionally server-owned, so polling continues with no browser session
   // or web UI open. The YouTube adapter performs detection/metadata only.
   const sourcePollingRunner = new SourcePollingRunner(
@@ -93,45 +135,44 @@ export async function startServer(): Promise<void> {
       },
     },
   );
-  const jobRunner = new JobRunner(
-    jobRepository,
-    [
-      new YouTubeUploadJobHandler(
-        mediaRepository,
-        new SqliteDestinationJobRepository(database),
-        youtubeOAuthService,
-      ),
-      new TikTokDirectPostJobHandler(
-        mediaRepository,
-        new SqliteDestinationJobRepository(database),
-        tiktokOAuthService,
-        secretStore,
-      ),
-      new InstagramReelsJobHandler(
-        mediaRepository,
-        new SqliteDestinationJobRepository(database),
-        new SqliteMetaCredentialRepository(database),
-        secretStore,
-      ),
-      new FacebookReelsJobHandler(
-        mediaRepository,
-        new SqliteDestinationJobRepository(database),
-        new SqliteMetaCredentialRepository(database),
-        secretStore,
-      ),
-    ],
-    config.jobRunner,
-  );
+  const jobHandlers: JobHandler[] = [
+    new YouTubeUploadJobHandler(
+      mediaRepository,
+      new SqliteDestinationJobRepository(database),
+      youtubeOAuthService,
+    ),
+    new TikTokDirectPostJobHandler(
+      mediaRepository,
+      new SqliteDestinationJobRepository(database),
+      tiktokOAuthService,
+      secretStore,
+    ),
+    new InstagramReelsJobHandler(
+      mediaRepository,
+      new SqliteDestinationJobRepository(database),
+      new SqliteMetaCredentialRepository(database),
+      secretStore,
+    ),
+    new FacebookReelsJobHandler(
+      mediaRepository,
+      new SqliteDestinationJobRepository(database),
+      new SqliteMetaCredentialRepository(database),
+      secretStore,
+    ),
+  ];
+  if (sourceCoordinator !== undefined)
+    jobHandlers.push(
+      new SourceItemObservedJobHandler(sourceCoordinator),
+      new SourceExecutionJobHandler(sourceCoordinator),
+      new SourceCleanupJobHandler(sourceCoordinator),
+    );
+  const jobRunner = new JobRunner(jobRepository, jobHandlers, {
+    ...config.jobRunner,
+    ...(sourceCoordinator === undefined ? {} : { onJobSettled: () => sourceCoordinator.recover() }),
+  });
+  sourceCoordinator?.recover();
   jobRunner.start();
   sourcePollingRunner.start();
-  const mediaImportService =
-    executables.ffprobe === undefined
-      ? undefined
-      : new MediaImportService(
-          new LocalMediaFileInspector(),
-          new FfprobeMediaProbe(executables.ffprobe),
-          mediaRepository,
-        );
   const watchedFolderRunner =
     mediaImportService === undefined
       ? undefined

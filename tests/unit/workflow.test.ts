@@ -6,6 +6,7 @@ import {
   MediaImportService,
   WorkflowService,
   renderTemplate,
+  sourceItemMatchesWorkflowFilters,
   validateTemplate,
 } from '@openrepurpose/core';
 import {
@@ -25,12 +26,40 @@ describe('watched-folder workflows', () => {
   it('validates and renders only the documented template variables', () => {
     expect(() => validateTemplate('{{unknown.value}}')).toThrow('Unknown template variable');
     expect(
-      renderTemplate('{{file.stem}} — {{workflow.name}}', {
+      renderTemplate('{{file.stem}} — {{workflow.name}} — {{source.title}}', {
         file: { name: 'clip.mp4', stem: 'clip' },
         media: { duration: '4.2' },
+        source: {
+          title: 'Remote title',
+          description: 'Remote description',
+          publishedAt: '2026-09-18T00:00:00.000Z',
+          externalId: 'video-1',
+        },
         workflow: { name: 'Daily' },
       }),
-    ).toBe('clip — Daily');
+    ).toBe('clip — Daily — Remote title');
+    expect(
+      sourceItemMatchesWorkflowFilters(
+        {
+          id: 'item-1',
+          sourceConnectionId: 'source-1',
+          externalId: 'video-1',
+          dedupeKey: 'video-1',
+          metadata: { title: 'Weekly Short', durationSeconds: 42, privacyStatus: 'public' },
+          publishedAt: new Date('2026-09-18T00:00:00.000Z'),
+          firstObservedAt: new Date(0),
+          lastObservedAt: new Date(0),
+          updatedAt: new Date(0),
+        },
+        {
+          titleContains: 'weekly',
+          titleRegex: 'Short$',
+          durationSecondsMax: 60,
+          privacyStatuses: ['public'],
+          publishedAfter: '2026-09-17T00:00:00.000Z',
+        },
+      ),
+    ).toBe(true);
   });
   it('settles a growing file, imports once, and snapshots workflow metadata into the existing upload job', async () => {
     temporary = createTemporaryDatabase();

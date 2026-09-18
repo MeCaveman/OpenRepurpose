@@ -27,6 +27,11 @@ import type {
   SourceMediaOwnership,
   SourceMediaResolution,
   SourceMediaResolutionRepository,
+  SourceExecutionDestination,
+  SourceRetentionPolicy,
+  SourceWorkflowExecution,
+  SourceWorkflowExecutionRepository,
+  SourceWorkflowExecutionSnapshot,
   MetaCredential,
   MetaCredentialRepository,
   MetaCredentialStatus,
@@ -46,6 +51,7 @@ import type {
   Workflow,
   WorkflowDestination,
   WorkflowRepository,
+  RemoteWorkflowSource,
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
 import type { Migration } from './migrations/types.js';
@@ -70,6 +76,7 @@ export {
   sourceMediaArtifacts,
   sourceMediaResolutions,
   sourceWorkflowExecutions,
+  workflowRemoteSources,
   workflows,
   workflowDestinations,
 } from './schema.js';
@@ -245,6 +252,15 @@ interface RawWorkflowDestinationRow {
   readonly destination_id: WorkflowDestination['destinationId'];
 }
 
+interface RawWorkflowRemoteSourceRow {
+  readonly filters_json: string;
+  readonly local_original_json: string | null;
+  readonly retention_duration_seconds: number | null;
+  readonly retention_policy: SourceRetentionPolicy['kind'];
+  readonly rights_confirmed: number;
+  readonly source_connection_id: string;
+}
+
 function workflowDestinationFromRow(row: RawWorkflowDestinationRow): WorkflowDestination {
   const configuration = JSON.parse(row.configuration_json) as Record<string, unknown>;
   if (row.destination_id === 'youtube') {
@@ -307,6 +323,7 @@ function workflowDestinationFromRow(row: RawWorkflowDestinationRow): WorkflowDes
 function workflowFromRow(
   row: RawWorkflowRow,
   destinations: readonly WorkflowDestination[],
+  remoteSource?: RemoteWorkflowSource,
 ): Workflow {
   return {
     id: row.id,
@@ -316,6 +333,7 @@ function workflowFromRow(
     titleTemplate: row.title_template,
     descriptionTemplate: row.description_template,
     destinations,
+    ...(remoteSource === undefined ? {} : { remoteSource }),
     failurePolicy: row.failure_policy,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
@@ -338,7 +356,9 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
   public findById(id: string): Workflow | undefined {
     const row = this.database.client.prepare('SELECT * FROM workflows WHERE id = ?').get(id) as
       RawWorkflowRow | undefined;
-    return row === undefined ? undefined : workflowFromRow(row, this.destinations(id));
+    return row === undefined
+      ? undefined
+      : workflowFromRow(row, this.destinations(id), this.remoteSource(id));
   }
   public list(enabled?: boolean): readonly Workflow[] {
     const statement =
@@ -350,7 +370,9 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     const rows = (enabled === undefined
       ? statement.all()
       : statement.all(enabled ? 1 : 0)) as unknown as RawWorkflowRow[];
-    return rows.map((row) => workflowFromRow(row, this.destinations(row.id)));
+    return rows.map((row) =>
+      workflowFromRow(row, this.destinations(row.id), this.remoteSource(row.id)),
+    );
   }
   public update(workflow: Workflow): Workflow | undefined {
     const result = this.write(workflow, true);
@@ -402,6 +424,32 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
             JSON.stringify(configuration),
           );
         });
+        client
+          .prepare('DELETE FROM workflow_remote_sources WHERE workflow_id = ?')
+          .run(workflow.id);
+        if (workflow.remoteSource !== undefined) {
+          const retention = workflow.remoteSource.retentionPolicy ?? {
+            kind: 'delete_after_success' as const,
+          };
+          client
+            .prepare(
+              `INSERT INTO workflow_remote_sources (
+                workflow_id, source_connection_id, filters_json, retention_policy,
+                retention_duration_seconds, rights_confirmed, local_original_json
+              ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              workflow.id,
+              workflow.remoteSource.connectionId,
+              JSON.stringify(workflow.remoteSource.filters ?? {}),
+              retention.kind,
+              retention.kind === 'keep_for_duration' ? retention.durationSeconds : null,
+              workflow.remoteSource.rightsConfirmed === true ? 1 : 0,
+              workflow.remoteSource.localOriginal === undefined
+                ? null
+                : JSON.stringify(workflow.remoteSource.localOriginal),
+            );
+        }
       }
       client.exec('COMMIT;');
       return changed;
@@ -420,6 +468,31 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         )
         .all(workflowId) as unknown as RawWorkflowDestinationRow[]
     ).map(workflowDestinationFromRow);
+  }
+
+  private remoteSource(workflowId: string): RemoteWorkflowSource | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM workflow_remote_sources WHERE workflow_id = ?')
+      .get(workflowId) as RawWorkflowRemoteSourceRow | undefined;
+    if (row === undefined) return undefined;
+    const retentionPolicy: SourceRetentionPolicy =
+      row.retention_policy === 'keep_for_duration'
+        ? { kind: 'keep_for_duration', durationSeconds: row.retention_duration_seconds! }
+        : { kind: row.retention_policy };
+    const filters = JSON.parse(row.filters_json) as NonNullable<RemoteWorkflowSource['filters']>;
+    return {
+      connectionId: row.source_connection_id,
+      retentionPolicy,
+      ...(Object.keys(filters).length === 0 ? {} : { filters }),
+      ...(row.local_original_json === null
+        ? {}
+        : {
+            localOriginal: JSON.parse(row.local_original_json) as NonNullable<
+              RemoteWorkflowSource['localOriginal']
+            >,
+          }),
+      ...(row.rights_confirmed === 1 ? { rightsConfirmed: true } : {}),
+    };
   }
 }
 
@@ -962,6 +1035,380 @@ export class SqliteSourceMediaResolutionRepository implements SourceMediaResolut
     const artifact = this.findArtifact(id);
     if (artifact === undefined) throw new Error('Source media artifact checkpoint is missing.');
     return artifact;
+  }
+}
+
+interface RawSourceWorkflowExecutionRow {
+  readonly cleanup_eligible_at: number | null;
+  readonly cleanup_status: SourceWorkflowExecution['cleanupStatus'];
+  readonly completed_at: number | null;
+  readonly id: string;
+  readonly retention_duration_seconds: number | null;
+  readonly retention_policy: SourceRetentionPolicy['kind'];
+  readonly snapshot_json: string;
+  readonly source_item_id: string;
+  readonly status: SourceWorkflowExecution['status'];
+  readonly workflow_key: string;
+  readonly workflow_version: string;
+}
+
+interface RawSourceExecutionDestinationRow {
+  readonly destination_id: SourceExecutionDestination['destinationId'];
+  readonly destination_key: string;
+  readonly execution_id: string;
+  readonly id: string;
+  readonly idempotency_key: string;
+  readonly job_id: string | null;
+  readonly last_error_code: string | null;
+  readonly last_error_message: string | null;
+  readonly remote_id: string | null;
+  readonly remote_url: string | null;
+  readonly required: number;
+  readonly status: SourceExecutionDestination['status'];
+}
+
+function sourceWorkflowExecutionFromRow(
+  row: RawSourceWorkflowExecutionRow,
+): SourceWorkflowExecution {
+  const retentionPolicy: SourceRetentionPolicy =
+    row.retention_policy === 'keep_for_duration'
+      ? { kind: 'keep_for_duration', durationSeconds: row.retention_duration_seconds! }
+      : { kind: row.retention_policy };
+  return {
+    id: row.id,
+    sourceItemId: row.source_item_id,
+    workflowKey: row.workflow_key,
+    workflowVersion: row.workflow_version,
+    status: row.status,
+    snapshot: JSON.parse(row.snapshot_json) as SourceWorkflowExecutionSnapshot,
+    retentionPolicy,
+    cleanupStatus: row.cleanup_status,
+    ...(row.cleanup_eligible_at === null
+      ? {}
+      : { cleanupEligibleAt: new Date(row.cleanup_eligible_at) }),
+    ...(row.completed_at === null ? {} : { completedAt: new Date(row.completed_at) }),
+  };
+}
+
+function sourceExecutionDestinationFromRow(
+  row: RawSourceExecutionDestinationRow,
+): SourceExecutionDestination {
+  return {
+    id: row.id,
+    executionId: row.execution_id,
+    destinationKey: row.destination_key,
+    destinationId: row.destination_id,
+    required: row.required === 1,
+    idempotencyKey: row.idempotency_key,
+    status: row.status,
+    ...(row.job_id === null ? {} : { jobId: row.job_id }),
+    ...(row.remote_id === null ? {} : { remoteId: row.remote_id }),
+    ...(row.remote_url === null ? {} : { remoteUrl: row.remote_url }),
+    ...(row.last_error_code === null ? {} : { lastErrorCode: row.last_error_code }),
+    ...(row.last_error_message === null ? {} : { lastErrorMessage: row.last_error_message }),
+  };
+}
+
+/** Durable source execution orchestration over the existing job and destination checkpoints. */
+export class SqliteSourceWorkflowExecutionRepository implements SourceWorkflowExecutionRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public create(input: {
+    readonly destinations: readonly {
+      readonly destinationId: WorkflowDestination['destinationId'];
+      readonly destinationKey: string;
+      readonly id: string;
+      readonly idempotencyKey: string;
+      readonly required: boolean;
+    }[];
+    readonly executionId: string;
+    readonly now: Date;
+    readonly retentionPolicy: SourceRetentionPolicy;
+    readonly snapshot: SourceWorkflowExecutionSnapshot;
+    readonly sourceItemId: string;
+    readonly workflowId: string;
+    readonly workflowKey: string;
+    readonly workflowVersion: string;
+  }): { readonly created: boolean; readonly execution: SourceWorkflowExecution } {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const existing = client
+        .prepare(
+          `SELECT * FROM source_workflow_executions
+           WHERE source_item_id = ? AND workflow_key = ? AND workflow_version = ?`,
+        )
+        .get(input.sourceItemId, input.workflowKey, input.workflowVersion) as
+        RawSourceWorkflowExecutionRow | undefined;
+      if (existing !== undefined) {
+        client.exec('COMMIT;');
+        return { created: false, execution: sourceWorkflowExecutionFromRow(existing) };
+      }
+      const duration =
+        input.retentionPolicy.kind === 'keep_for_duration'
+          ? input.retentionPolicy.durationSeconds
+          : null;
+      client
+        .prepare(
+          `INSERT INTO source_workflow_executions (
+            id, source_item_id, workflow_id, workflow_key, workflow_version, status, snapshot_json,
+            retention_policy, retention_duration_seconds, cleanup_status, cleanup_eligible_at,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, 'not_eligible', NULL, ?, ?)`,
+        )
+        .run(
+          input.executionId,
+          input.sourceItemId,
+          input.workflowId,
+          input.workflowKey,
+          input.workflowVersion,
+          JSON.stringify(input.snapshot),
+          input.retentionPolicy.kind,
+          duration,
+          input.now.getTime(),
+          input.now.getTime(),
+        );
+      const insertDestination = client.prepare(
+        `INSERT INTO source_execution_destinations (
+          id, execution_id, destination_key, destination_id, required, job_id, idempotency_key,
+          status, attempt_count, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, 'pending', 0, ?, ?)`,
+      );
+      for (const destination of input.destinations)
+        insertDestination.run(
+          destination.id,
+          input.executionId,
+          destination.destinationKey,
+          destination.destinationId,
+          destination.required ? 1 : 0,
+          destination.idempotencyKey,
+          input.now.getTime(),
+          input.now.getTime(),
+        );
+      client
+        .prepare(
+          `UPDATE source_items SET lifecycle_status = 'queued', updated_at = ?
+           WHERE id = ? AND lifecycle_status = 'observed'`,
+        )
+        .run(input.now.getTime(), input.sourceItemId);
+      const row = client
+        .prepare('SELECT * FROM source_workflow_executions WHERE id = ?')
+        .get(input.executionId) as unknown as RawSourceWorkflowExecutionRow;
+      client.exec('COMMIT;');
+      return { created: true, execution: sourceWorkflowExecutionFromRow(row) };
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  public find(id: string): SourceWorkflowExecution | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM source_workflow_executions WHERE id = ?')
+      .get(id) as RawSourceWorkflowExecutionRow | undefined;
+    return row === undefined ? undefined : sourceWorkflowExecutionFromRow(row);
+  }
+
+  public findSourceItem(id: string): RemoteSourceItem | undefined {
+    const row = this.database.client.prepare('SELECT * FROM source_items WHERE id = ?').get(id) as
+      RawRemoteSourceItemRow | undefined;
+    return row === undefined ? undefined : remoteSourceItemFromRow(row);
+  }
+
+  public listDestinations(executionId: string): readonly SourceExecutionDestination[] {
+    return (
+      this.database.client
+        .prepare(
+          'SELECT * FROM source_execution_destinations WHERE execution_id = ? ORDER BY created_at, id',
+        )
+        .all(executionId) as unknown as RawSourceExecutionDestinationRow[]
+    ).map(sourceExecutionDestinationFromRow);
+  }
+
+  public attachDestinationJob(
+    destinationId: string,
+    job: Job,
+    now: Date,
+  ): SourceExecutionDestination {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      client
+        .prepare(
+          `UPDATE source_execution_destinations SET job_id = ?, status = ?,
+           attempt_count = ?, last_error_code = ?, last_error_message = ?,
+           completed_at = CASE WHEN ? = 'succeeded' THEN ? ELSE NULL END, updated_at = ?
+           WHERE id = ? AND status <> 'succeeded'`,
+        )
+        .run(
+          job.id,
+          job.status,
+          job.attemptCount,
+          job.lastErrorCode ?? null,
+          job.lastErrorMessage ?? null,
+          job.status,
+          job.completedAt?.getTime() ?? null,
+          now.getTime(),
+          destinationId,
+        );
+      client
+        .prepare(
+          `UPDATE source_workflow_executions SET status = 'running', updated_at = ?
+           WHERE id = (SELECT execution_id FROM source_execution_destinations WHERE id = ?)
+             AND status <> 'succeeded'`,
+        )
+        .run(now.getTime(), destinationId);
+      client
+        .prepare(
+          `UPDATE source_items SET lifecycle_status = 'publishing', updated_at = ?
+           WHERE id = (
+             SELECT source_item_id FROM source_workflow_executions WHERE id = (
+               SELECT execution_id FROM source_execution_destinations WHERE id = ?
+             )
+           ) AND lifecycle_status NOT IN ('cleanup_pending', 'completed')`,
+        )
+        .run(now.getTime(), destinationId);
+      const row = client
+        .prepare('SELECT * FROM source_execution_destinations WHERE id = ?')
+        .get(destinationId) as unknown as RawSourceExecutionDestinationRow;
+      client.exec('COMMIT;');
+      return sourceExecutionDestinationFromRow(row);
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  public listNeedingRun(): readonly SourceWorkflowExecution[] {
+    return this.listBy(
+      `SELECT * FROM source_workflow_executions WHERE status = 'pending' ORDER BY created_at, id`,
+    );
+  }
+
+  public listDueCleanup(now: Date): readonly SourceWorkflowExecution[] {
+    return this.listBy(
+      `SELECT * FROM source_workflow_executions
+       WHERE cleanup_status IN ('eligible', 'failed') AND cleanup_eligible_at <= ?
+       ORDER BY cleanup_eligible_at, id`,
+      now.getTime(),
+    );
+  }
+
+  public listArtifacts(executionId: string): readonly SourceMediaArtifact[] {
+    return (
+      this.database.client
+        .prepare('SELECT * FROM source_media_artifacts WHERE execution_id = ? ORDER BY id')
+        .all(executionId) as unknown as RawSourceMediaArtifactRow[]
+    ).map(sourceMediaArtifactFromRow);
+  }
+
+  public markCleanupRunning(executionId: string, now: Date): SourceWorkflowExecution {
+    this.database.client
+      .prepare(
+        `UPDATE source_workflow_executions SET cleanup_status = 'running', updated_at = ?
+         WHERE id = ? AND cleanup_status IN ('eligible', 'scheduled', 'failed', 'running')`,
+      )
+      .run(now.getTime(), executionId);
+    return this.require(executionId);
+  }
+
+  public markCleanupCompleted(executionId: string, now: Date): SourceWorkflowExecution {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      client
+        .prepare(
+          `UPDATE source_workflow_executions SET cleanup_status = 'completed',
+           cleanup_error_code = NULL, cleanup_error_message = NULL, updated_at = ? WHERE id = ?`,
+        )
+        .run(now.getTime(), executionId);
+      client
+        .prepare(
+          `UPDATE source_items SET lifecycle_status = 'completed', completed_at = ?, updated_at = ?
+           WHERE id = (SELECT source_item_id FROM source_workflow_executions WHERE id = ?)
+             AND NOT EXISTS (
+               SELECT 1 FROM source_workflow_executions
+               WHERE source_item_id = source_items.id
+                 AND cleanup_status NOT IN ('completed', 'retained')
+             )`,
+        )
+        .run(now.getTime(), now.getTime(), executionId);
+      client.exec('COMMIT;');
+      return this.require(executionId);
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  public markCleanupFailed(
+    executionId: string,
+    errorCode: string,
+    errorMessage: string,
+    now: Date,
+  ): SourceWorkflowExecution {
+    this.database.client
+      .prepare(
+        `UPDATE source_workflow_executions SET cleanup_status = 'failed', cleanup_error_code = ?,
+         cleanup_error_message = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(errorCode, errorMessage, now.getTime(), executionId);
+    return this.require(executionId);
+  }
+
+  public markRunFailed(
+    executionId: string,
+    retryable: boolean,
+    now: Date,
+  ): SourceWorkflowExecution {
+    this.database.client
+      .prepare('UPDATE source_workflow_executions SET status = ?, updated_at = ? WHERE id = ?')
+      .run(retryable ? 'retrying' : 'failed', now.getTime(), executionId);
+    return this.require(executionId);
+  }
+
+  public retryFailedDestinations(executionId: string, now: Date): number {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const rows = client
+        .prepare(
+          `SELECT job_id FROM source_execution_destinations
+           WHERE execution_id = ? AND status = 'failed' AND job_id IS NOT NULL`,
+        )
+        .all(executionId) as unknown as { job_id: string }[];
+      for (const row of rows)
+        client
+          .prepare(
+            `UPDATE jobs SET status = 'pending', available_at = ?,
+             max_attempts = max(max_attempts, attempt_count + 3), completed_at = NULL,
+             last_error_code = NULL, last_error_message = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(now.getTime(), now.getTime(), row.job_id);
+      if (rows.length > 0)
+        client
+          .prepare(
+            `UPDATE source_workflow_executions SET status = 'retrying', updated_at = ? WHERE id = ?`,
+          )
+          .run(now.getTime(), executionId);
+      client.exec('COMMIT;');
+      return rows.length;
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  private listBy(sql: string, ...values: readonly number[]): readonly SourceWorkflowExecution[] {
+    return (
+      this.database.client.prepare(sql).all(...values) as unknown as RawSourceWorkflowExecutionRow[]
+    ).map(sourceWorkflowExecutionFromRow);
+  }
+
+  private require(id: string): SourceWorkflowExecution {
+    const execution = this.find(id);
+    if (execution === undefined) throw new Error('Source workflow execution not found.');
+    return execution;
   }
 }
 
