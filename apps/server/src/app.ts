@@ -8,6 +8,7 @@ import type { ApplicationConfig } from '@openrepurpose/shared';
 import { isPlatformError, REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
 import type { YouTubeOAuthService } from '@openrepurpose/youtube';
 import type { TikTokOAuthService } from '@openrepurpose/tiktok';
+import type { MetaOAuthService } from '@openrepurpose/meta';
 import type {
   JobService,
   JobStatus,
@@ -39,6 +40,7 @@ export interface BuildServerOptions {
   readonly loggerDestination?: LoggerDestination;
   readonly mediaImportService?: MediaImportService;
   readonly mediaRepository?: MediaRepository;
+  readonly metaOAuthService?: MetaOAuthService;
   readonly sessionKey: Buffer;
   readonly staticRoot?: false | string;
   readonly tiktokOAuthService?: TikTokOAuthService;
@@ -224,10 +226,15 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     async () => ({ service: 'openrepurpose', status: 'ok', version: '0.1.0' }),
   );
 
-  if (options.youtubeOAuthService !== undefined || options.tiktokOAuthService !== undefined) {
+  if (
+    options.youtubeOAuthService !== undefined ||
+    options.tiktokOAuthService !== undefined ||
+    options.metaOAuthService !== undefined
+  ) {
     const youtube = options.youtubeOAuthService;
     const tiktok = options.tiktokOAuthService;
-    const accounts = youtube ?? tiktok!;
+    const meta = options.metaOAuthService;
+    const accounts = youtube ?? tiktok;
     const safePlatformFailure = (error: unknown, reply: FastifyReply) => {
       if (!isPlatformError(error)) throw error;
       return reply
@@ -238,13 +245,17 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         });
     };
     server.get('/api/accounts', async () => ({
-      accounts: accounts.listAccounts(),
+      accounts: accounts?.listAccounts() ?? [],
       youtube: await youtube?.credentialStatus(),
       tiktok: await tiktok?.credentialStatus(),
+      meta: await meta?.credentialStatus(),
+      metaCredentials: meta?.listCredentials() ?? [],
+      metaTargets: meta?.listTargets() ?? [],
     }));
     server.get('/api/setup', async () => ({
       youtube: await youtube?.credentialStatus(),
       tiktok: await tiktok?.credentialStatus(),
+      meta: await meta?.credentialStatus(),
     }));
     if (youtube !== undefined) {
       server.post<{
@@ -374,8 +385,90 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         },
       );
     }
+    if (meta !== undefined) {
+      server.post<{ Body: { clientId?: unknown; clientSecret?: unknown } }>(
+        '/api/accounts/meta/credentials',
+        async (request, reply) => {
+          if (
+            typeof request.body?.clientId !== 'string' ||
+            typeof request.body.clientSecret !== 'string'
+          )
+            return reply.code(400).send({
+              error: 'A Meta app ID and app secret are required.',
+              code: 'INVALID_META_CREDENTIALS',
+            });
+          try {
+            await meta.configureCredentials({
+              clientId: request.body.clientId,
+              clientSecret: request.body.clientSecret,
+            });
+            return { meta: await meta.credentialStatus() };
+          } catch (error) {
+            return safePlatformFailure(error, reply);
+          }
+        },
+      );
+      server.post('/api/accounts/meta/oauth/start', async (request, reply) => {
+        try {
+          const binding = request.session.get('csrfToken');
+          if (typeof binding !== 'string')
+            return reply.code(403).send({
+              error: 'A local browser session is required.',
+              code: 'META_OAUTH_SESSION_REQUIRED',
+            });
+          return await meta.beginAuthorization(binding);
+        } catch (error) {
+          return safePlatformFailure(error, reply);
+        }
+      });
+      server.get<{ Querystring: { code?: string; error?: string; state?: string } }>(
+        '/api/accounts/meta/oauth/callback',
+        async (request, reply) => {
+          const destination = new URL('/accounts', options.config.appUrl);
+          try {
+            const binding = request.session.get('csrfToken');
+            await meta.completeAuthorization({
+              ...request.query,
+              ...(typeof binding === 'string' ? { browserBinding: binding } : {}),
+            });
+            destination.searchParams.set('meta', 'connected');
+          } catch (error) {
+            destination.searchParams.set('meta', 'error');
+            destination.searchParams.set(
+              'code',
+              isPlatformError(error) ? error.code : 'META_OAUTH_CALLBACK_FAILED',
+            );
+          }
+          return reply.redirect(destination.toString());
+        },
+      );
+      server.post<{ Params: { id: string } }>(
+        '/api/accounts/meta/:id/discover',
+        async (request, reply) => {
+          try {
+            return { targets: await meta.discoverTargets(request.params.id) };
+          } catch (error) {
+            return safePlatformFailure(error, reply);
+          }
+        },
+      );
+      server.patch<{ Params: { id: string }; Body: { enabled?: unknown } }>(
+        '/api/accounts/meta/targets/:id',
+        async (request, reply) => {
+          if (typeof request.body?.enabled !== 'boolean')
+            return reply
+              .code(400)
+              .send({ error: 'A target enabled state is required.', code: 'INVALID_META_TARGET' });
+          return meta.setTargetEnabled(request.params.id, request.body.enabled)
+            ? { updated: true }
+            : reply
+                .code(404)
+                .send({ error: 'Meta target not found.', code: 'META_TARGET_NOT_FOUND' });
+        },
+      );
+    }
     server.delete<{ Params: { id: string } }>('/api/accounts/:id', async (request, reply) => {
-      const existing = accounts.listAccounts().find((account) => account.id === request.params.id);
+      const existing = accounts?.listAccounts().find((account) => account.id === request.params.id);
       const account =
         existing?.provider === 'youtube'
           ? await youtube?.removeAccount(request.params.id)

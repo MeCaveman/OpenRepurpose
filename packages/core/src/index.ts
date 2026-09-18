@@ -44,11 +44,13 @@ export interface MediaRepository {
   list(): readonly MediaAsset[];
 }
 
-export type AccountProvider = 'tiktok' | 'youtube';
+export type AccountProvider = 'meta' | 'tiktok' | 'youtube';
 export type AccountStatus = 'connected' | 'reauthorization_required';
 export type AccountCapability =
   | 'tiktok.identity.read'
   | 'tiktok.video.publish'
+  | 'meta.identity.read'
+  | 'meta.pages.read'
   | 'youtube.identity.read'
   | 'youtube.video.upload';
 
@@ -99,6 +101,50 @@ export interface OAuthAuthorizationRequestRepository {
   consumeByStateHash(stateHash: string, bindingHash: string): OAuthAuthorizationRequest | undefined;
   create(request: OAuthAuthorizationRequest): void;
   deleteExpired(now: Date): readonly OAuthAuthorizationRequest[];
+}
+
+/** Meta keeps the authorizing person separate from the Page/Instagram targets they can publish to. */
+export type MetaCredentialStatus = 'connected' | 'reauthorization_required';
+export type MetaTargetKind = 'facebook_page' | 'instagram_professional';
+export type MetaTargetAvailability = 'available' | 'blocked';
+
+export interface MetaCredential {
+  readonly connectedAt: Date;
+  readonly displayName: string;
+  readonly externalId: string;
+  readonly id: string;
+  readonly scopes: readonly string[];
+  readonly status: MetaCredentialStatus;
+  readonly tokenExpiresAt: Date;
+  readonly updatedAt: Date;
+}
+
+export interface MetaPublishTarget {
+  readonly availability: MetaTargetAvailability;
+  readonly blocker?: string;
+  readonly credentialId: string;
+  readonly displayName: string;
+  readonly externalId: string;
+  readonly id: string;
+  readonly kind: MetaTargetKind;
+  readonly pageId: string;
+  readonly username?: string;
+  readonly enabled: boolean;
+  readonly updatedAt: Date;
+}
+
+export type UpsertMetaCredentialInput = MetaCredential;
+export type UpsertMetaPublishTargetInput = MetaPublishTarget;
+
+export interface MetaCredentialRepository {
+  findCredential(id: string): MetaCredential | undefined;
+  listCredentials(): readonly MetaCredential[];
+  listTargets(credentialId?: string): readonly MetaPublishTarget[];
+  removeCredential(id: string): MetaCredential | undefined;
+  setCredentialStatus(id: string, status: MetaCredentialStatus, updatedAt: Date): boolean;
+  setTargetEnabled(id: string, enabled: boolean, updatedAt: Date): boolean;
+  upsertCredential(input: UpsertMetaCredentialInput): MetaCredential;
+  upsertTarget(input: UpsertMetaPublishTargetInput): MetaPublishTarget;
 }
 
 export interface ImportMediaResult {

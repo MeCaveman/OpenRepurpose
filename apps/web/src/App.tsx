@@ -96,6 +96,24 @@ type TikTokCredentialStatus = {
   flow: 'desktop' | 'web';
   redirectUri: string;
 };
+type MetaCredentialStatus = { configured: boolean; redirectUri: string };
+type MetaCredentialItem = {
+  id: string;
+  displayName: string;
+  externalId: string;
+  status: string;
+  tokenExpiresAt: string;
+};
+type MetaTargetItem = {
+  id: string;
+  credentialId: string;
+  kind: string;
+  displayName: string;
+  username?: string;
+  enabled: boolean;
+  availability: string;
+  blocker?: string;
+};
 type TikTokAccountCapabilities = {
   accountId: string;
   audit: { status: 'not_exposed_by_tiktok'; unauditedClientsPrivateOnly: true };
@@ -150,6 +168,11 @@ export function App() {
   const [tiktokStatus, setTikTokStatus] = useState<TikTokCredentialStatus>();
   const [tiktokClientKey, setTikTokClientKey] = useState('');
   const [tiktokClientSecret, setTikTokClientSecret] = useState('');
+  const [metaStatus, setMetaStatus] = useState<MetaCredentialStatus>();
+  const [metaClientId, setMetaClientId] = useState('');
+  const [metaClientSecret, setMetaClientSecret] = useState('');
+  const [metaCredentials, setMetaCredentials] = useState<readonly MetaCredentialItem[]>([]);
+  const [metaTargets, setMetaTargets] = useState<readonly MetaTargetItem[]>([]);
   const [tiktokCapabilities, setTikTokCapabilities] = useState<
     Readonly<Record<string, TikTokCapabilityView>>
   >({});
@@ -182,10 +205,16 @@ export function App() {
       accounts: readonly AccountItem[];
       tiktok: TikTokCredentialStatus;
       youtube: YouTubeCredentialStatus;
+      meta?: MetaCredentialStatus;
+      metaCredentials?: readonly MetaCredentialItem[];
+      metaTargets?: readonly MetaTargetItem[];
     };
     setAccounts(body.accounts);
     setYoutubeStatus(body.youtube);
     setTikTokStatus(body.tiktok);
+    setMetaStatus(body.meta);
+    setMetaCredentials(body.metaCredentials ?? []);
+    setMetaTargets(body.metaTargets ?? []);
     const views = await Promise.all(
       body.accounts
         .filter((account) => account.provider === 'tiktok')
@@ -383,6 +412,55 @@ export function App() {
       );
     }
   };
+  const saveMetaCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    try {
+      const response = await fetch('/api/accounts/meta/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await csrfToken() },
+        body: JSON.stringify({ clientId: metaClientId, clientSecret: metaClientSecret }),
+      });
+      if (!response.ok)
+        throw new Error(
+          ((await response.json()) as { error?: string }).error ??
+            'Meta credentials could not be saved.',
+        );
+      setMetaClientId('');
+      setMetaClientSecret('');
+      await loadAccounts();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Meta credentials could not be saved.');
+    }
+  };
+  const connectMeta = async () => {
+    try {
+      const response = await fetch('/api/accounts/meta/oauth/start', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': await csrfToken() },
+      });
+      const body = (await response.json()) as { authorizationUrl?: string; error?: string };
+      if (!response.ok || body.authorizationUrl === undefined)
+        throw new Error(body.error ?? 'Meta authorization could not be started.');
+      window.location.assign(body.authorizationUrl);
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : 'Meta authorization could not be started.',
+      );
+    }
+  };
+  const setMetaTarget = async (target: MetaTargetItem, enabled: boolean) => {
+    try {
+      const response = await fetch(`/api/accounts/meta/targets/${encodeURIComponent(target.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await csrfToken() },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) throw new Error('Meta target could not be updated.');
+      await loadAccounts();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Meta target could not be updated.');
+    }
+  };
   const saveTikTokCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(undefined);
@@ -501,6 +579,12 @@ export function App() {
                       TikTok connection failed. Check the credential setup and granted scopes.
                     </p>
                   )}
+                  {new URLSearchParams(window.location.search).get('meta') === 'connected' && (
+                    <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-200">
+                      Meta connected successfully. Available Pages and linked Instagram professional
+                      accounts were discovered.
+                    </p>
+                  )}
                   {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
                   <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
                     <h2 className="font-semibold">Google OAuth credentials</h2>
@@ -551,6 +635,98 @@ export function App() {
                     <p className="mt-4 break-all text-xs text-slate-500">
                       Callback: {youtubeStatus?.redirectUri ?? 'Loading…'}
                     </p>
+                  </section>
+                  <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
+                    <h2 className="font-semibold">Meta app and publishing targets</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-400">
+                      Connect one Meta identity, then independently enable its Facebook Pages and
+                      linked Instagram professional accounts. App secrets and tokens remain
+                      encrypted locally.
+                    </p>
+                    <form className="mt-5 grid gap-3" onSubmit={saveMetaCredentials}>
+                      <label className="grid gap-1 text-sm" htmlFor="meta-client-id">
+                        <span className="text-slate-300">Meta app ID</span>
+                        <input
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="meta-client-id"
+                          onChange={(event) => setMetaClientId(event.target.value)}
+                          required
+                          value={metaClientId}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm" htmlFor="meta-client-secret">
+                        <span className="text-slate-300">Meta app secret</span>
+                        <input
+                          autoComplete="new-password"
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="meta-client-secret"
+                          onChange={(event) => setMetaClientSecret(event.target.value)}
+                          required
+                          type="password"
+                          value={metaClientSecret}
+                        />
+                      </label>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
+                          type="submit"
+                        >
+                          Save Meta credentials
+                        </button>
+                        <button
+                          className="rounded-lg border border-cyan-300/30 px-4 py-2 text-sm text-cyan-200 disabled:opacity-40"
+                          disabled={metaStatus?.configured !== true}
+                          onClick={() => void connectMeta()}
+                          type="button"
+                        >
+                          Connect Meta
+                        </button>
+                      </div>
+                    </form>
+                    <p className="mt-4 break-all text-xs text-slate-500">
+                      Callback: {metaStatus?.redirectUri ?? 'Loading…'}
+                    </p>
+                    {metaCredentials.map((credential) => (
+                      <div
+                        className="mt-4 rounded-lg border border-white/10 p-4"
+                        key={credential.id}
+                      >
+                        <p className="font-medium">
+                          {credential.displayName}{' '}
+                          <span className="text-xs text-slate-500">
+                            Meta identity · {credential.status}
+                          </span>
+                        </p>
+                        {metaTargets
+                          .filter((target) => target.credentialId === credential.id)
+                          .map((target) => (
+                            <label className="mt-3 flex items-start gap-3 text-sm" key={target.id}>
+                              <input
+                                checked={target.enabled}
+                                disabled={target.availability !== 'available'}
+                                onChange={(event) =>
+                                  void setMetaTarget(target, event.target.checked)
+                                }
+                                type="checkbox"
+                              />
+                              <span>
+                                <span className="font-medium">{target.displayName}</span>{' '}
+                                <span className="text-xs uppercase text-slate-500">
+                                  {target.kind === 'facebook_page'
+                                    ? 'Facebook Page'
+                                    : 'Instagram professional'}
+                                </span>
+                                {target.username !== undefined && (
+                                  <span className="block text-slate-400">@{target.username}</span>
+                                )}
+                                {target.blocker !== undefined && (
+                                  <span className="block text-amber-200">{target.blocker}</span>
+                                )}
+                              </span>
+                            </label>
+                          ))}
+                      </div>
+                    ))}
                   </section>
                   <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
                     <div className="flex flex-wrap items-start justify-between gap-3">

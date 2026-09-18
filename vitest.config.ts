@@ -4,6 +4,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
+      '@openrepurpose/meta': fileURLToPath(
+        new URL('./integrations/meta/src/index.ts', import.meta.url),
+      ),
       '@openrepurpose/tiktok': fileURLToPath(
         new URL('./integrations/tiktok/src/index.ts', import.meta.url),
       ),

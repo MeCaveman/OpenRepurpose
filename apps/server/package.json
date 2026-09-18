@@ -19,6 +19,7 @@
     "@openrepurpose/db": "workspace:*",
     "@openrepurpose/media": "workspace:*",
     "@openrepurpose/local-secrets": "workspace:*",
+    "@openrepurpose/meta": "workspace:*",
     "@openrepurpose/platform-sdk": "workspace:*",
     "@openrepurpose/tiktok": "workspace:*",
     "@openrepurpose/youtube": "workspace:*",

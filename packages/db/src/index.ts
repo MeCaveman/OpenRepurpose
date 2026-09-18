@@ -22,6 +22,12 @@ import type {
   JsonValue,
   MediaAsset,
   MediaRepository,
+  MetaCredential,
+  MetaCredentialRepository,
+  MetaCredentialStatus,
+  MetaPublishTarget,
+  MetaTargetAvailability,
+  MetaTargetKind,
   OAuthAuthorizationRequest,
   OAuthAuthorizationRequestRepository,
   UpsertConnectedAccountInput,
@@ -33,7 +39,7 @@ import type {
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
 import type { Migration } from './migrations/types.js';
-import { mediaAssets, settings } from './schema.js';
+import { mediaAssets, metaCredentials, metaPublishTargets, settings } from './schema.js';
 
 export { migrations } from './migrations/index.js';
 export type { Migration } from './migrations/index.js';
@@ -44,6 +50,8 @@ export {
   jobs,
   mediaAssets,
   oauthAuthorizationRequests,
+  metaCredentials,
+  metaPublishTargets,
   settings,
   sourceCursors,
   workflows,
@@ -443,6 +451,194 @@ function accountFromRow(row: RawAccountRow): ConnectedAccount {
     connectedAt: new Date(row.connected_at),
     updatedAt: new Date(row.updated_at),
   };
+}
+
+interface RawMetaCredentialRow {
+  readonly connected_at: number;
+  readonly display_name: string;
+  readonly external_id: string;
+  readonly id: string;
+  readonly scopes_json: string;
+  readonly status: MetaCredentialStatus;
+  readonly token_expires_at: number;
+  readonly updated_at: number;
+}
+
+interface RawMetaTargetRow {
+  readonly availability: MetaTargetAvailability;
+  readonly blocker: string | null;
+  readonly credential_id: string;
+  readonly display_name: string;
+  readonly enabled: number;
+  readonly external_id: string;
+  readonly id: string;
+  readonly kind: MetaTargetKind;
+  readonly page_id: string;
+  readonly updated_at: number;
+  readonly username: string | null;
+}
+
+function metaCredentialFromRow(row: RawMetaCredentialRow): MetaCredential {
+  return {
+    id: row.id,
+    externalId: row.external_id,
+    displayName: row.display_name,
+    status: row.status,
+    scopes: JSON.parse(row.scopes_json) as string[],
+    tokenExpiresAt: new Date(row.token_expires_at),
+    connectedAt: new Date(row.connected_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+function metaTargetFromRow(row: RawMetaTargetRow): MetaPublishTarget {
+  return {
+    id: row.id,
+    credentialId: row.credential_id,
+    kind: row.kind,
+    externalId: row.external_id,
+    pageId: row.page_id,
+    displayName: row.display_name,
+    ...(row.username === null ? {} : { username: row.username }),
+    enabled: row.enabled === 1,
+    availability: row.availability,
+    ...(row.blocker === null ? {} : { blocker: row.blocker }),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+/** Durable Meta identities and their separately selectable publishing targets. */
+export class SqliteMetaCredentialRepository implements MetaCredentialRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+  public findCredential(id: string): MetaCredential | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM meta_credentials WHERE id = ?')
+      .get(id) as RawMetaCredentialRow | undefined;
+    return row === undefined ? undefined : metaCredentialFromRow(row);
+  }
+  public listCredentials(): readonly MetaCredential[] {
+    return (
+      this.database.client
+        .prepare('SELECT * FROM meta_credentials ORDER BY connected_at DESC, id DESC')
+        .all() as unknown as RawMetaCredentialRow[]
+    ).map(metaCredentialFromRow);
+  }
+  public listTargets(credentialId?: string): readonly MetaPublishTarget[] {
+    const statement =
+      credentialId === undefined
+        ? this.database.client.prepare(
+            'SELECT * FROM meta_publish_targets ORDER BY display_name, id',
+          )
+        : this.database.client.prepare(
+            'SELECT * FROM meta_publish_targets WHERE credential_id = ? ORDER BY display_name, id',
+          );
+    const rows = (credentialId === undefined
+      ? statement.all()
+      : statement.all(credentialId)) as unknown as RawMetaTargetRow[];
+    return rows.map(metaTargetFromRow);
+  }
+  public removeCredential(id: string): MetaCredential | undefined {
+    const existing = this.findCredential(id);
+    if (existing !== undefined)
+      this.database.client.prepare('DELETE FROM meta_credentials WHERE id = ?').run(id);
+    return existing;
+  }
+  public setCredentialStatus(id: string, status: MetaCredentialStatus, updatedAt: Date): boolean {
+    return (
+      Number(
+        this.database.client
+          .prepare('UPDATE meta_credentials SET status = ?, updated_at = ? WHERE id = ?')
+          .run(status, updatedAt.getTime(), id).changes,
+      ) === 1
+    );
+  }
+  public setTargetEnabled(id: string, enabled: boolean, updatedAt: Date): boolean {
+    return (
+      Number(
+        this.database.client
+          .prepare('UPDATE meta_publish_targets SET enabled = ?, updated_at = ? WHERE id = ?')
+          .run(enabled ? 1 : 0, updatedAt.getTime(), id).changes,
+      ) === 1
+    );
+  }
+  public upsertCredential(input: MetaCredential): MetaCredential {
+    const existing = this.database.client
+      .prepare('SELECT id, connected_at FROM meta_credentials WHERE external_id = ?')
+      .get(input.externalId) as { id: string; connected_at: number } | undefined;
+    const id = existing?.id ?? input.id;
+    const connectedAt =
+      existing === undefined ? input.connectedAt : new Date(existing.connected_at);
+    this.database.db
+      .insert(metaCredentials)
+      .values({
+        id,
+        externalId: input.externalId,
+        displayName: input.displayName,
+        status: input.status,
+        scopesJson: JSON.stringify(input.scopes),
+        tokenExpiresAt: input.tokenExpiresAt,
+        connectedAt,
+        updatedAt: input.updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: metaCredentials.externalId,
+        set: {
+          displayName: input.displayName,
+          status: input.status,
+          scopesJson: JSON.stringify(input.scopes),
+          tokenExpiresAt: input.tokenExpiresAt,
+          updatedAt: input.updatedAt,
+        },
+      })
+      .run();
+    return this.findCredential(id)!;
+  }
+  public upsertTarget(input: MetaPublishTarget): MetaPublishTarget {
+    const existing = this.database.client
+      .prepare(
+        'SELECT id, enabled FROM meta_publish_targets WHERE credential_id = ? AND kind = ? AND external_id = ?',
+      )
+      .get(input.credentialId, input.kind, input.externalId) as
+      { id: string; enabled: number } | undefined;
+    const id = existing?.id ?? input.id;
+    const enabled = existing === undefined ? input.enabled : existing.enabled === 1;
+    this.database.db
+      .insert(metaPublishTargets)
+      .values({
+        id,
+        credentialId: input.credentialId,
+        kind: input.kind,
+        externalId: input.externalId,
+        pageId: input.pageId,
+        displayName: input.displayName,
+        username: input.username ?? null,
+        enabled,
+        availability: input.availability,
+        blocker: input.blocker ?? null,
+        updatedAt: input.updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: [
+          metaPublishTargets.credentialId,
+          metaPublishTargets.kind,
+          metaPublishTargets.externalId,
+        ],
+        set: {
+          pageId: input.pageId,
+          displayName: input.displayName,
+          username: input.username ?? null,
+          availability: input.availability,
+          blocker: input.blocker ?? null,
+          updatedAt: input.updatedAt,
+        },
+      })
+      .run();
+    const row = this.database.client
+      .prepare('SELECT * FROM meta_publish_targets WHERE id = ?')
+      .get(id) as RawMetaTargetRow | undefined;
+    if (row === undefined) throw new Error('Meta target could not be persisted.');
+    return metaTargetFromRow(row);
+  }
 }
 
 /** SQLite account metadata repository. Secret values are deliberately stored elsewhere. */

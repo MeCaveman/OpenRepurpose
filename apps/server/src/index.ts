@@ -8,6 +8,7 @@ import {
   SqliteDestinationJobRepository,
   SqliteJobRepository,
   SqliteMediaRepository,
+  SqliteMetaCredentialRepository,
   SqliteOAuthAuthorizationRequestRepository,
   SqliteSourceCursorRepository,
   SqliteWorkflowRepository,
@@ -23,6 +24,7 @@ import { redactLogText } from '@openrepurpose/platform-sdk';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
 import { YouTubeOAuthService, YouTubeUploadJobHandler } from '@openrepurpose/youtube';
 import { TikTokDirectPostJobHandler, TikTokOAuthService } from '@openrepurpose/tiktok';
+import { MetaOAuthService } from '@openrepurpose/meta';
 import { assertLocalOnly, buildServer } from './app.js';
 import { loadOrCreateSessionKey } from './session-key.js';
 
@@ -48,6 +50,12 @@ export async function startServer(): Promise<void> {
   );
   const tiktokOAuthService = new TikTokOAuthService(
     accountRepository,
+    authorizationRequestRepository,
+    secretStore,
+    config.appUrl,
+  );
+  const metaOAuthService = new MetaOAuthService(
+    new SqliteMetaCredentialRepository(database),
     authorizationRequestRepository,
     secretStore,
     config.appUrl,
@@ -99,6 +107,7 @@ export async function startServer(): Promise<void> {
     mediaRepository,
     workflowService,
     tiktokOAuthService,
+    metaOAuthService,
     youtubeOAuthService,
     ...(mediaImportService === undefined ? {} : { mediaImportService }),
   });

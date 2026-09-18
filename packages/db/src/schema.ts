@@ -97,7 +97,7 @@ export const oauthAuthorizationRequests = sqliteTable(
   'oauth_authorization_requests',
   {
     id: text('id').primaryKey(),
-    provider: text('provider', { enum: ['youtube', 'tiktok'] }).notNull(),
+    provider: text('provider', { enum: ['youtube', 'tiktok', 'meta'] }).notNull(),
     stateHash: text('state_hash').notNull().unique(),
     bindingHash: text('binding_hash').notNull(),
     redirectUri: text('redirect_uri').notNull(),
@@ -105,6 +105,48 @@ export const oauthAuthorizationRequests = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('oauth_authorization_requests_expires_at_idx').on(table.expiresAt)],
+);
+
+export const metaCredentials = sqliteTable(
+  'meta_credentials',
+  {
+    id: text('id').primaryKey(),
+    externalId: text('external_id').notNull().unique(),
+    displayName: text('display_name').notNull(),
+    status: text('status', { enum: ['connected', 'reauthorization_required'] }).notNull(),
+    scopesJson: text('scopes_json').notNull(),
+    tokenExpiresAt: integer('token_expires_at', { mode: 'timestamp_ms' }).notNull(),
+    connectedAt: integer('connected_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('meta_credentials_status_idx').on(table.status)],
+);
+
+export const metaPublishTargets = sqliteTable(
+  'meta_publish_targets',
+  {
+    id: text('id').primaryKey(),
+    credentialId: text('credential_id')
+      .notNull()
+      .references(() => metaCredentials.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['facebook_page', 'instagram_professional'] }).notNull(),
+    externalId: text('external_id').notNull(),
+    pageId: text('page_id').notNull(),
+    displayName: text('display_name').notNull(),
+    username: text('username'),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    availability: text('availability', { enum: ['available', 'blocked'] }).notNull(),
+    blocker: text('blocker'),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('meta_targets_credential_kind_external_idx').on(
+      table.credentialId,
+      table.kind,
+      table.externalId,
+    ),
+    index('meta_targets_credential_idx').on(table.credentialId),
+  ],
 );
 
 export const destinationJobRecords = sqliteTable(

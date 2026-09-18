@@ -242,6 +242,9 @@ importers:
       '@openrepurpose/media':
         specifier: workspace:*
         version: link:../../packages/media
+      '@openrepurpose/meta':
+        specifier: workspace:*
+        version: link:../../integrations/meta
       '@openrepurpose/platform-sdk':
         specifier: workspace:*
         version: link:../../packages/platform-sdk
@@ -295,6 +298,19 @@ importers:
       vite:
         specifier: 8.3.0
         version: 8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)
+
+  integrations/meta:
+    dependencies:
+      '@openrepurpose/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@openrepurpose/platform-sdk':
+        specifier: workspace:*
+        version: link:../../packages/platform-sdk
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.5
+        version: 24.13.5
 
   integrations/tiktok:
     dependencies:
