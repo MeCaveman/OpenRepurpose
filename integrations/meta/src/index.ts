@@ -91,6 +91,14 @@ export function instagramUploadUriReference(jobId: string): SecretReference {
     scope: 'application',
   };
 }
+/** Facebook's Page Reels upload URL can resume an in-progress upload and is secret material. */
+export function facebookReelsUploadUriReference(jobId: string): SecretReference {
+  return {
+    name: 'facebook-reels-upload-uri',
+    ownerId: `facebook-reels-upload:${jobId}`,
+    scope: 'application',
+  };
+}
 const defaults: MetaEndpoints = {
   authorization: 'https://www.facebook.com/v26.0/dialog/oauth',
   graph: 'https://graph.facebook.com/v26.0',
@@ -936,6 +944,466 @@ export class InstagramReelsJobHandler implements JobHandler {
       uploadedBytes: checkpoint.uploadedBytes,
       ...(remoteUrl === undefined ? {} : { remoteUrl }),
     });
+  }
+
+  private save(record: Omit<DestinationJobRecord, 'updatedAt'>): DestinationJobRecord {
+    return this.checkpoints.save({ ...record, updatedAt: this.now() });
+  }
+}
+
+export const FACEBOOK_REELS_JOB_TYPE = 'facebook.reels.publish';
+
+export interface FacebookReelsJobInput {
+  readonly mediaId: string;
+  readonly targetId: string;
+  readonly metadata?: { readonly description?: string; readonly title?: string };
+}
+
+export interface FacebookReelsJobHandlerOptions {
+  readonly endpoints?: Partial<FacebookReelsEndpoints>;
+  readonly http?: MetaHttpClient;
+  readonly now?: () => Date;
+}
+
+export interface FacebookReelsEndpoints {
+  readonly graph: string;
+}
+
+const defaultFacebookReelsEndpoints: FacebookReelsEndpoints = {
+  graph: 'https://graph.facebook.com/v26.0',
+};
+
+function facebookJobInput(value: JsonValue): FacebookReelsJobInput {
+  const input = object(value);
+  if (!input || typeof input.mediaId !== 'string' || typeof input.targetId !== 'string')
+    throw new JobExecutionError(
+      'FACEBOOK_REELS_INPUT_INVALID',
+      false,
+      'The Facebook Reels publish job is invalid.',
+    );
+  const metadata = object(input.metadata);
+  if (
+    metadata !== undefined &&
+    ((metadata.description !== undefined && typeof metadata.description !== 'string') ||
+      (metadata.title !== undefined && typeof metadata.title !== 'string'))
+  )
+    throw new JobExecutionError(
+      'FACEBOOK_REELS_INPUT_INVALID',
+      false,
+      'The Facebook Reels publish options are invalid.',
+    );
+  return {
+    mediaId: input.mediaId,
+    targetId: input.targetId,
+    ...(metadata === undefined
+      ? {}
+      : {
+          metadata: {
+            ...(typeof metadata.description === 'string'
+              ? { description: metadata.description }
+              : {}),
+            ...(typeof metadata.title === 'string' ? { title: metadata.title } : {}),
+          },
+        }),
+  };
+}
+
+function facebookGraphFailure(
+  response: Response,
+  value: Record<string, unknown> | undefined,
+  phase: string,
+): JobExecutionError {
+  const error = object(value?.error);
+  const remoteCode = typeof error?.code === 'number' ? String(error.code) : 'REQUEST_FAILED';
+  const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+  const permission =
+    response.status === 401 ||
+    response.status === 403 ||
+    remoteCode === '10' ||
+    remoteCode === '190';
+  return new JobExecutionError(
+    `FACEBOOK_REELS_${phase}_${permission ? 'PERMISSION_DENIED' : remoteCode}`,
+    retryable,
+    permission
+      ? 'Facebook rejected this Page or its publishing permission. Reconnect Meta and verify the Page content role.'
+      : retryable
+        ? 'Facebook is temporarily unavailable. The publish job will retry.'
+        : 'Facebook rejected the Reels publish request.',
+    retryAfterMs(response),
+  );
+}
+
+function facebookUploadUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'rupload.facebook.com';
+  } catch {
+    return false;
+  }
+}
+
+function statusValue(value: Record<string, unknown> | undefined): string {
+  const status = object(value?.status);
+  const candidate = status?.video_status ?? value?.video_status ?? value?.status;
+  return typeof candidate === 'string' ? candidate.toLowerCase() : '';
+}
+
+/** The documented Page Reels session supports byte-offset recovery via `bytes_transfered`. */
+function transferredBytes(value: Record<string, unknown> | undefined): number | undefined {
+  const status = object(value?.status);
+  const candidate =
+    status?.bytes_transfered ??
+    value?.bytes_transfered ??
+    // Accept the correctly spelled variant too: Meta has used both spellings in API material.
+    status?.bytes_transferred ??
+    value?.bytes_transferred;
+  return typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0
+    ? Math.floor(candidate)
+    : undefined;
+}
+
+/** Facebook Page Reels transport: stream locally, recover a confirmed server offset, then reconcile publication. */
+export class FacebookReelsJobHandler implements JobHandler {
+  public readonly type = FACEBOOK_REELS_JOB_TYPE;
+  private readonly endpoints: FacebookReelsEndpoints;
+  private readonly http: MetaHttpClient;
+  private readonly now: () => Date;
+
+  public constructor(
+    private readonly media: MediaRepository,
+    private readonly checkpoints: DestinationJobRepository,
+    private readonly targets: MetaCredentialRepository,
+    private readonly secrets: SecretStore,
+    options: FacebookReelsJobHandlerOptions = {},
+  ) {
+    this.endpoints = { ...defaultFacebookReelsEndpoints, ...options.endpoints };
+    this.http = options.http ?? fetch;
+    this.now = options.now ?? (() => new Date());
+  }
+
+  public async execute(value: JsonValue, context: JobHandlerContext): Promise<void> {
+    const input = facebookJobInput(value);
+    const asset = this.media.list().find((candidate) => candidate.id === input.mediaId);
+    if (asset === undefined || asset.state !== 'available')
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_MEDIA_UNAVAILABLE',
+        false,
+        'The selected media file is unavailable.',
+      );
+    this.validateMedia(asset);
+    const target = this.targets.listTargets().find((candidate) => candidate.id === input.targetId);
+    if (
+      target === undefined ||
+      target.kind !== 'facebook_page' ||
+      !target.enabled ||
+      target.availability !== 'available'
+    )
+      throw new JobExecutionError(
+        'FACEBOOK_PAGE_TARGET_UNAVAILABLE',
+        false,
+        'This Facebook Page is not enabled for publishing. Reconnect Meta and verify its CREATE_CONTENT task.',
+      );
+    if (this.targets.findCredential(target.credentialId)?.status !== 'connected')
+      throw new JobExecutionError(
+        'FACEBOOK_REAUTHORIZATION_REQUIRED',
+        false,
+        'Reconnect the Meta account to continue publishing to Facebook.',
+      );
+    const accessToken = await this.secrets.get(metaPageTokenReference(target.id));
+    if (!accessToken)
+      throw new JobExecutionError(
+        'FACEBOOK_PAGE_TOKEN_MISSING',
+        false,
+        'Reconnect the Meta account to restore the Page publishing token.',
+      );
+
+    let checkpoint =
+      this.checkpoints.find(context.jobId) ??
+      this.save({
+        destinationId: 'facebook',
+        jobId: context.jobId,
+        remoteStatus: 'validating',
+        uploadedBytes: 0,
+      });
+    if (!checkpoint.remoteId)
+      checkpoint = await this.start(
+        input,
+        target.externalId,
+        accessToken,
+        checkpoint,
+        context.jobId,
+      );
+    if (checkpoint.remoteStatus === 'published') return;
+
+    if (context.attemptNumber > 1 && checkpoint.uploadedBytes < asset.sizeBytes)
+      checkpoint = await this.recoverOffset(checkpoint, accessToken, asset.sizeBytes, context);
+    if (checkpoint.uploadedBytes < asset.sizeBytes) {
+      await this.upload(asset, accessToken, checkpoint, context);
+      checkpoint = this.save({
+        ...checkpoint,
+        remoteStatus: 'uploaded',
+        uploadedBytes: asset.sizeBytes,
+      });
+    }
+    if (!['verifying', 'processing', 'publishing'].includes(checkpoint.remoteStatus)) {
+      checkpoint = this.save({ ...checkpoint, remoteStatus: 'publishing' });
+      await this.finish(input, target.externalId, accessToken, checkpoint, context);
+      checkpoint = this.save({ ...checkpoint, remoteStatus: 'verifying' });
+    }
+    await this.reconcile(checkpoint, accessToken, context);
+  }
+
+  private validateMedia(asset: MediaAsset): void {
+    if (!asset.path.toLowerCase().endsWith('.mp4') || asset.sizeBytes <= 0)
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_MEDIA_INVALID',
+        false,
+        'Facebook Reels requires a non-empty MP4 video.',
+      );
+    const duration = asset.metadata.durationSeconds;
+    if (duration !== undefined && (duration < 3 || duration > 90))
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_DURATION_INVALID',
+        false,
+        'Facebook Reels must be between 3 and 90 seconds long.',
+      );
+    const frameRate = asset.metadata.frameRate;
+    if (frameRate !== undefined && (frameRate < 24 || frameRate > 60))
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_FRAME_RATE_INVALID',
+        false,
+        'Facebook Reels requires a frame rate from 24 to 60 FPS.',
+      );
+    const { height, width } = asset.metadata;
+    if ((width !== undefined && width < 540) || (height !== undefined && height < 960))
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_DIMENSIONS_INVALID',
+        false,
+        'Facebook Reels requires video at least 540 by 960 pixels.',
+      );
+    if (width !== undefined && height !== undefined && Math.abs(width / height - 9 / 16) > 0.01)
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_ASPECT_RATIO_INVALID',
+        false,
+        'Facebook Reels requires a 9:16 video.',
+      );
+  }
+
+  private async start(
+    input: FacebookReelsJobInput,
+    pageId: string,
+    accessToken: string,
+    checkpoint: DestinationJobRecord,
+    jobId: string,
+  ): Promise<DestinationJobRecord> {
+    const form = new URLSearchParams({ access_token: accessToken, upload_phase: 'start' });
+    if (input.metadata?.description !== undefined)
+      form.set('description', input.metadata.description);
+    if (input.metadata?.title !== undefined) form.set('title', input.metadata.title);
+    let response: Response;
+    try {
+      response = await this.http(
+        `${this.endpoints.graph}/${encodeURIComponent(pageId)}/video_reels`,
+        {
+          body: form,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          method: 'POST',
+        },
+      );
+    } catch {
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_START_NETWORK_ERROR',
+        true,
+        'Facebook could not be reached before starting the Reel upload.',
+      );
+    }
+    const result = await responseBody(response);
+    if (!response.ok) throw facebookGraphFailure(response, result, 'START');
+    const videoId = typeof result?.video_id === 'string' ? result.video_id : undefined;
+    const uploadUrl = typeof result?.upload_url === 'string' ? result.upload_url : undefined;
+    if (!videoId || !uploadUrl || !facebookUploadUrl(uploadUrl))
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_START_RESPONSE_INVALID',
+        true,
+        'Facebook returned an invalid Reel upload session.',
+      );
+    const saved = this.save({ ...checkpoint, remoteId: videoId, remoteStatus: 'uploading' });
+    await this.secrets.set(facebookReelsUploadUriReference(jobId), uploadUrl);
+    return saved;
+  }
+
+  private async recoverOffset(
+    checkpoint: DestinationJobRecord,
+    accessToken: string,
+    sizeBytes: number,
+    context: JobHandlerContext,
+  ): Promise<DestinationJobRecord> {
+    const result = await this.status(checkpoint, accessToken, context);
+    const transferred = transferredBytes(result);
+    if (transferred === undefined)
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_UPLOAD_OFFSET_MISSING',
+        true,
+        'Facebook did not confirm the uploaded byte offset yet.',
+      );
+    return this.save({
+      ...checkpoint,
+      remoteStatus: 'uploading',
+      uploadedBytes: Math.min(transferred, sizeBytes),
+    });
+  }
+
+  private async upload(
+    asset: MediaAsset,
+    accessToken: string,
+    checkpoint: DestinationJobRecord,
+    context: JobHandlerContext,
+  ): Promise<void> {
+    const uploadUrl = await this.secrets.get(facebookReelsUploadUriReference(context.jobId));
+    if (!uploadUrl || !facebookUploadUrl(uploadUrl))
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_UPLOAD_URL_MISSING',
+        false,
+        'Reconnect Facebook and start a new publish job; the upload session is unavailable.',
+      );
+    let response: Response;
+    try {
+      response = await this.http(uploadUrl, {
+        body: createReadStream(asset.path, { start: checkpoint.uploadedBytes }),
+        duplex: 'half',
+        headers: {
+          Authorization: `OAuth ${accessToken}`,
+          'Content-Type': 'application/octet-stream',
+          file_size: String(asset.sizeBytes),
+          offset: String(checkpoint.uploadedBytes),
+        },
+        method: 'POST',
+        signal: context.signal,
+      } as RequestInit);
+    } catch {
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_UPLOAD_NETWORK_ERROR',
+        true,
+        'Facebook upload was interrupted and will resume from the confirmed server offset.',
+      );
+    }
+    const result = await responseBody(response);
+    if (!response.ok) throw facebookGraphFailure(response, result, 'UPLOAD');
+  }
+
+  private async finish(
+    input: FacebookReelsJobInput,
+    pageId: string,
+    accessToken: string,
+    checkpoint: DestinationJobRecord,
+    context: JobHandlerContext,
+  ): Promise<void> {
+    if (!checkpoint.remoteId)
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_VIDEO_ID_MISSING',
+        true,
+        'Facebook Reel finalization is not available yet.',
+      );
+    const form = new URLSearchParams({
+      access_token: accessToken,
+      upload_phase: 'finish',
+      video_id: checkpoint.remoteId,
+      video_state: 'PUBLISHED',
+    });
+    if (input.metadata?.description !== undefined)
+      form.set('description', input.metadata.description);
+    if (input.metadata?.title !== undefined) form.set('title', input.metadata.title);
+    let response: Response;
+    try {
+      response = await this.http(
+        `${this.endpoints.graph}/${encodeURIComponent(pageId)}/video_reels`,
+        {
+          body: form,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          method: 'POST',
+          signal: context.signal,
+        },
+      );
+    } catch {
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_FINISH_RECOVERY_AMBIGUOUS',
+        false,
+        'Facebook did not confirm whether the Reel was finalized. It will not be finalized again automatically.',
+      );
+    }
+    const result = await responseBody(response);
+    if (!response.ok) throw facebookGraphFailure(response, result, 'FINISH');
+  }
+
+  private async reconcile(
+    checkpoint: DestinationJobRecord,
+    accessToken: string,
+    context: JobHandlerContext,
+  ): Promise<void> {
+    const result = await this.status(checkpoint, accessToken, context);
+    const state = statusValue(result);
+    if (state === 'published') {
+      const remoteUrl =
+        typeof result?.permalink_url === 'string' ? result.permalink_url : undefined;
+      this.save({
+        ...checkpoint,
+        remoteStatus: 'published',
+        ...(remoteUrl === undefined ? {} : { remoteUrl }),
+      });
+      await this.secrets.delete(facebookReelsUploadUriReference(context.jobId));
+      return;
+    }
+    if (['uploading', 'processing', 'publishing', 'ready'].includes(state)) {
+      this.save({ ...checkpoint, remoteStatus: state });
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_PROCESSING',
+        true,
+        'Facebook is still processing the Reel.',
+        60_000,
+      );
+    }
+    if (['error', 'failed'].includes(state)) {
+      this.save({ ...checkpoint, remoteStatus: 'failed' });
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_PROCESSING_FAILED',
+        false,
+        'Facebook could not process this Reel. Check the video format and try again.',
+      );
+    }
+    throw new JobExecutionError(
+      'FACEBOOK_REELS_STATUS_INVALID',
+      true,
+      'Facebook returned an unknown Reel status.',
+    );
+  }
+
+  private async status(
+    checkpoint: DestinationJobRecord,
+    accessToken: string,
+    context: JobHandlerContext,
+  ): Promise<Record<string, unknown> | undefined> {
+    if (!checkpoint.remoteId)
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_VIDEO_ID_MISSING',
+        true,
+        'Facebook Reel status is not available yet.',
+      );
+    const url = new URL(`${this.endpoints.graph}/${encodeURIComponent(checkpoint.remoteId)}`);
+    url.searchParams.set('fields', 'status,permalink_url');
+    url.searchParams.set('access_token', accessToken);
+    let response: Response;
+    try {
+      response = await this.http(url, { signal: context.signal });
+    } catch {
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_STATUS_NETWORK_ERROR',
+        true,
+        'Facebook Reel status could not be loaded.',
+      );
+    }
+    const result = await responseBody(response);
+    if (!response.ok) throw facebookGraphFailure(response, result, 'STATUS');
+    return result;
   }
 
   private save(record: Omit<DestinationJobRecord, 'updatedAt'>): DestinationJobRecord {
