@@ -339,6 +339,10 @@ importers:
         version: 24.13.5
 
   packages/core:
+    dependencies:
+      '@openrepurpose/platform-sdk':
+        specifier: workspace:*
+        version: link:../platform-sdk
     devDependencies:
       '@types/node':
         specifier: 24.13.5

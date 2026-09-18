@@ -1,4 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import {
+  isPlatformError,
+  validateSourcePollResult,
+  type SourceAdapterContext,
+  type SourceItemObservation,
+  type SourceJsonValue,
+  type SourceRegistry,
+} from '@openrepurpose/platform-sdk';
+export type { SourceItemObservation, SourceJsonValue } from '@openrepurpose/platform-sdk';
 
 export type MediaAssetState = 'available' | 'missing';
 
@@ -635,6 +644,247 @@ export interface SourceCursor {
 export interface SourceCursorRepository {
   find(workflowId: string, sourceKey: string): SourceCursor | undefined;
   save(cursor: SourceCursor): SourceCursor;
+}
+
+export type SourceConnectionStatus = 'active' | 'paused' | 'authorization_failed';
+
+/** Persistent configuration and polling checkpoint for one remote source. */
+export interface SourceConnection {
+  readonly adapterId: string;
+  readonly configuration: Readonly<Record<string, SourceJsonValue>>;
+  readonly consecutivePollFailures: number;
+  readonly createdAt: Date;
+  readonly cursor: string | null;
+  readonly displayName: string;
+  readonly externalSourceId: string;
+  readonly id: string;
+  readonly lastPollAt?: Date;
+  readonly lastPollErrorCode?: string;
+  readonly lastPollErrorMessage?: string;
+  readonly lastSuccessfulPollAt?: Date;
+  readonly nextPollAt?: Date;
+  readonly status: SourceConnectionStatus;
+  readonly updatedAt: Date;
+}
+
+/** A durable observation; media resolution and workflow execution are deliberately later stages. */
+export interface RemoteSourceItem {
+  readonly dedupeKey: string;
+  readonly eventId?: string;
+  readonly externalId: string;
+  readonly firstObservedAt: Date;
+  readonly id: string;
+  readonly lastObservedAt: Date;
+  readonly metadata: Readonly<Record<string, SourceJsonValue>>;
+  readonly publishedAt?: Date;
+  readonly sourceConnectionId: string;
+  readonly updatedAt: Date;
+}
+
+export interface SourcePollingRepository {
+  listDue(now: Date): readonly SourceConnection[];
+  recordPollFailure(input: {
+    readonly connectionId: string;
+    readonly errorCode: string;
+    readonly errorMessage: string;
+    readonly nextPollAt?: Date;
+    readonly now: Date;
+    readonly pauseForAuthorization: boolean;
+  }): SourceConnection | undefined;
+  recordPollSuccess(input: {
+    readonly connectionId: string;
+    readonly cursor: string | null;
+    readonly nextPollAt: Date;
+    readonly now: Date;
+  }): SourceConnection | undefined;
+  upsertObservedItem(input: {
+    readonly connectionId: string;
+    readonly item: SourceItemObservation;
+    readonly now: Date;
+  }): { readonly created: boolean; readonly item: RemoteSourceItem };
+}
+
+export interface SourcePollingRunnerOptions {
+  readonly authFailurePauseThreshold?: number;
+  readonly errorRetryBaseMs?: number;
+  readonly intervalMs?: number;
+  readonly maxErrorRetryMs?: number;
+  readonly maxPagesPerPoll?: number;
+  readonly now?: () => Date;
+  readonly pollIntervalMs?: number;
+  readonly random?: () => number;
+  readonly sourceContext: Omit<SourceAdapterContext, 'signal'>;
+}
+
+/**
+ * Headless, durable remote-source detection loop. It writes observations and a normal handoff job
+ * before advancing the cursor; media resolution and publishing are intentionally out of scope.
+ */
+export class SourcePollingRunner {
+  private readonly activeConnectionIds = new Set<string>();
+  private readonly activeControllers = new Set<AbortController>();
+  private readonly authFailurePauseThreshold: number;
+  private readonly errorRetryBaseMs: number;
+  private readonly intervalMs: number;
+  private readonly maxErrorRetryMs: number;
+  private readonly maxPagesPerPoll: number;
+  private readonly now: () => Date;
+  private readonly pollIntervalMs: number;
+  private readonly random: () => number;
+  private started = false;
+  private stopping = false;
+  private timer: NodeJS.Timeout | undefined;
+
+  public constructor(
+    private readonly repository: SourcePollingRepository,
+    private readonly registry: SourceRegistry,
+    private readonly jobs: JobService,
+    options: SourcePollingRunnerOptions,
+  ) {
+    this.intervalMs = options.intervalMs ?? 60_000;
+    this.pollIntervalMs = options.pollIntervalMs ?? 1_000;
+    this.errorRetryBaseMs = options.errorRetryBaseMs ?? 30_000;
+    this.maxErrorRetryMs = options.maxErrorRetryMs ?? 15 * 60_000;
+    this.maxPagesPerPoll = options.maxPagesPerPoll ?? 10;
+    this.authFailurePauseThreshold = options.authFailurePauseThreshold ?? 3;
+    this.now = options.now ?? (() => new Date());
+    this.random = options.random ?? Math.random;
+    this.sourceContext = options.sourceContext;
+    if (this.intervalMs < 60_000) throw new Error('Source polling must be at least every minute.');
+    if (this.pollIntervalMs < 25) throw new Error('Source polling checks must be at least 25ms.');
+    if (this.errorRetryBaseMs < 1_000 || this.maxErrorRetryMs < this.errorRetryBaseMs)
+      throw new Error('Source poll retry delays are invalid.');
+    if (!Number.isInteger(this.maxPagesPerPoll) || this.maxPagesPerPoll < 1)
+      throw new Error('Source poll page limit must be a positive integer.');
+    if (!Number.isInteger(this.authFailurePauseThreshold) || this.authFailurePauseThreshold < 1)
+      throw new Error('Source auth failure pause threshold must be a positive integer.');
+  }
+
+  private readonly sourceContext: Omit<SourceAdapterContext, 'signal'>;
+
+  public start(): void {
+    if (this.started) return;
+    this.started = true;
+    this.stopping = false;
+    void this.runOnce();
+    this.timer = setInterval(() => void this.runOnce(), this.pollIntervalMs);
+  }
+
+  public async stop(): Promise<void> {
+    if (!this.started) return;
+    this.stopping = true;
+    if (this.timer !== undefined) clearInterval(this.timer);
+    this.timer = undefined;
+    for (const controller of this.activeControllers) controller.abort();
+    while (this.activeConnectionIds.size > 0)
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    this.started = false;
+  }
+
+  public async runOnce(): Promise<void> {
+    if (this.stopping) return;
+    const due = this.repository.listDue(this.now());
+    await Promise.all(
+      due.map(async (connection) => {
+        if (this.activeConnectionIds.has(connection.id)) return;
+        this.activeConnectionIds.add(connection.id);
+        try {
+          await this.pollConnection(connection);
+        } finally {
+          this.activeConnectionIds.delete(connection.id);
+        }
+      }),
+    );
+  }
+
+  private async pollConnection(connection: SourceConnection): Promise<void> {
+    const adapter = this.registry.get(connection.adapterId);
+    const now = this.now();
+    if (adapter === undefined) {
+      this.repository.recordPollFailure({
+        connectionId: connection.id,
+        errorCode: 'SOURCE_ADAPTER_UNAVAILABLE',
+        errorMessage: 'The configured source adapter is unavailable.',
+        nextPollAt: this.retryAt(connection, now),
+        now,
+        pauseForAuthorization: false,
+      });
+      return;
+    }
+    const controller = new AbortController();
+    this.activeControllers.add(controller);
+    try {
+      let cursor = connection.cursor;
+      for (let page = 0; page < this.maxPagesPerPoll; page += 1) {
+        const result = await adapter.poll(
+          { connectionExternalId: connection.externalSourceId, cursor },
+          { ...this.sourceContext, signal: controller.signal },
+        );
+        validateSourcePollResult(result);
+        for (const item of result.items) {
+          const persisted = this.repository.upsertObservedItem({
+            connectionId: connection.id,
+            item,
+            now: this.now(),
+          });
+          this.jobs.create({
+            type: 'source.item.observed',
+            idempotencyKey: `source-item:${persisted.item.id}:observed`,
+            input: { sourceConnectionId: connection.id, sourceItemId: persisted.item.id },
+          });
+        }
+        cursor = result.cursor;
+        if (!result.hasMore) {
+          this.repository.recordPollSuccess({
+            connectionId: connection.id,
+            cursor,
+            nextPollAt: this.nextPollAt(this.now()),
+            now: this.now(),
+          });
+          return;
+        }
+      }
+      throw new Error('SOURCE_POLL_PAGE_LIMIT_REACHED');
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      const isAuthFailure =
+        isPlatformError(error) &&
+        (error.category === 'authentication' || error.category === 'authorization');
+      const code = isPlatformError(error) ? error.code : 'SOURCE_POLL_FAILED';
+      const message = isPlatformError(error)
+        ? error.publicMessage
+        : 'The source could not be polled. Please try again later.';
+      const pauseForAuthorization =
+        isAuthFailure && connection.consecutivePollFailures + 1 >= this.authFailurePauseThreshold;
+      this.repository.recordPollFailure({
+        connectionId: connection.id,
+        errorCode: code,
+        errorMessage: message,
+        ...(pauseForAuthorization ? {} : { nextPollAt: this.retryAt(connection, this.now()) }),
+        now: this.now(),
+        pauseForAuthorization,
+      });
+      this.sourceContext.logger.warn(
+        { adapterId: connection.adapterId, connectionId: connection.id, errorCode: code },
+        'Source poll failed',
+      );
+    } finally {
+      this.activeControllers.delete(controller);
+    }
+  }
+
+  private nextPollAt(now: Date): Date {
+    // Jitter only adds delay, so configured platform-minimum intervals are never violated.
+    return new Date(
+      now.getTime() + this.intervalMs + Math.floor(this.intervalMs * this.random() * 0.2),
+    );
+  }
+
+  private retryAt(connection: SourceConnection, now: Date): Date {
+    const exponent = Math.min(connection.consecutivePollFailures, 8);
+    const delay = Math.min(this.errorRetryBaseMs * 2 ** exponent, this.maxErrorRetryMs);
+    return new Date(now.getTime() + delay + Math.floor(delay * this.random() * 0.2));
+  }
 }
 
 export type SourceItemLifecycleState =

@@ -33,6 +33,11 @@ import type {
   UpsertConnectedAccountInput,
   SourceCursor,
   SourceCursorRepository,
+  SourceConnection,
+  SourcePollingRepository,
+  RemoteSourceItem,
+  SourceItemObservation,
+  SourceJsonValue,
   Workflow,
   WorkflowDestination,
   WorkflowRepository,
@@ -455,6 +460,213 @@ export class SqliteSourceCursorRepository implements SourceCursorRepository {
         cursor.mediaId ?? null,
       );
     return cursor;
+  }
+}
+
+interface RawSourceConnectionRow {
+  readonly adapter_id: string;
+  readonly configuration_json: string;
+  readonly consecutive_poll_failures: number;
+  readonly created_at: number;
+  readonly cursor_json: string | null;
+  readonly display_name: string;
+  readonly external_source_id: string;
+  readonly id: string;
+  readonly last_poll_at: number | null;
+  readonly last_poll_error_code: string | null;
+  readonly last_poll_error_message: string | null;
+  readonly last_successful_poll_at: number | null;
+  readonly next_poll_at: number | null;
+  readonly status: SourceConnection['status'];
+  readonly updated_at: number;
+}
+
+interface RawRemoteSourceItemRow {
+  readonly dedupe_key: string;
+  readonly event_id: string | null;
+  readonly external_id: string;
+  readonly first_observed_at: number;
+  readonly id: string;
+  readonly last_observed_at: number;
+  readonly metadata_json: string;
+  readonly published_at: number | null;
+  readonly source_connection_id: string;
+  readonly updated_at: number;
+}
+
+function sourceConnectionFromRow(row: RawSourceConnectionRow): SourceConnection {
+  return {
+    id: row.id,
+    adapterId: row.adapter_id,
+    externalSourceId: row.external_source_id,
+    displayName: row.display_name,
+    configuration: JSON.parse(row.configuration_json) as Record<string, SourceJsonValue>,
+    cursor: row.cursor_json,
+    status: row.status,
+    consecutivePollFailures: row.consecutive_poll_failures,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    ...(row.last_poll_at === null ? {} : { lastPollAt: new Date(row.last_poll_at) }),
+    ...(row.last_successful_poll_at === null
+      ? {}
+      : { lastSuccessfulPollAt: new Date(row.last_successful_poll_at) }),
+    ...(row.last_poll_error_code === null ? {} : { lastPollErrorCode: row.last_poll_error_code }),
+    ...(row.last_poll_error_message === null
+      ? {}
+      : { lastPollErrorMessage: row.last_poll_error_message }),
+    ...(row.next_poll_at === null ? {} : { nextPollAt: new Date(row.next_poll_at) }),
+  };
+}
+
+function remoteSourceItemFromRow(row: RawRemoteSourceItemRow): RemoteSourceItem {
+  return {
+    id: row.id,
+    sourceConnectionId: row.source_connection_id,
+    externalId: row.external_id,
+    dedupeKey: row.dedupe_key,
+    metadata: JSON.parse(row.metadata_json) as Record<string, SourceJsonValue>,
+    firstObservedAt: new Date(row.first_observed_at),
+    lastObservedAt: new Date(row.last_observed_at),
+    updatedAt: new Date(row.updated_at),
+    ...(row.event_id === null ? {} : { eventId: row.event_id }),
+    ...(row.published_at === null ? {} : { publishedAt: new Date(row.published_at) }),
+  };
+}
+
+/** Durable poll state and item dedupe. Workflow work is enqueued by the application runner. */
+export class SqliteSourcePollingRepository implements SourcePollingRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public listDue(now: Date): readonly SourceConnection[] {
+    return (
+      this.database.client
+        .prepare(
+          `SELECT * FROM source_connections
+           WHERE status = 'active' AND (next_poll_at IS NULL OR next_poll_at <= ?)
+           ORDER BY COALESCE(next_poll_at, created_at) ASC, id ASC`,
+        )
+        .all(now.getTime()) as unknown as RawSourceConnectionRow[]
+    ).map(sourceConnectionFromRow);
+  }
+
+  public recordPollFailure(input: {
+    readonly connectionId: string;
+    readonly errorCode: string;
+    readonly errorMessage: string;
+    readonly nextPollAt?: Date;
+    readonly now: Date;
+    readonly pauseForAuthorization: boolean;
+  }): SourceConnection | undefined {
+    const status = input.pauseForAuthorization ? 'authorization_failed' : 'active';
+    this.database.client
+      .prepare(
+        `UPDATE source_connections SET status = ?, last_poll_at = ?, last_poll_error_code = ?,
+         last_poll_error_message = ?, consecutive_poll_failures = consecutive_poll_failures + 1,
+         next_poll_at = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        status,
+        input.now.getTime(),
+        input.errorCode,
+        input.errorMessage,
+        input.nextPollAt?.getTime() ?? null,
+        input.now.getTime(),
+        input.connectionId,
+      );
+    return this.connection(input.connectionId);
+  }
+
+  public recordPollSuccess(input: {
+    readonly connectionId: string;
+    readonly cursor: string | null;
+    readonly nextPollAt: Date;
+    readonly now: Date;
+  }): SourceConnection | undefined {
+    this.database.client
+      .prepare(
+        `UPDATE source_connections SET cursor_json = ?, last_poll_at = ?, last_successful_poll_at = ?,
+         last_poll_error_code = NULL, last_poll_error_message = NULL, consecutive_poll_failures = 0,
+         next_poll_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
+      )
+      .run(
+        input.cursor,
+        input.now.getTime(),
+        input.now.getTime(),
+        input.nextPollAt.getTime(),
+        input.now.getTime(),
+        input.connectionId,
+      );
+    return this.connection(input.connectionId);
+  }
+
+  public upsertObservedItem(input: {
+    readonly connectionId: string;
+    readonly item: SourceItemObservation;
+    readonly now: Date;
+  }): { readonly created: boolean; readonly item: RemoteSourceItem } {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const existing = client
+        .prepare('SELECT * FROM source_items WHERE source_connection_id = ? AND external_id = ?')
+        .get(input.connectionId, input.item.externalId) as RawRemoteSourceItemRow | undefined;
+      if (existing === undefined) {
+        const id = randomUUID();
+        client
+          .prepare(
+            `INSERT INTO source_items (
+              id, source_connection_id, external_id, dedupe_key, event_id, published_at,
+              first_observed_at, last_observed_at, metadata_json, lifecycle_status,
+              resolution_status, linked_media_id, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'observed', 'unresolved', NULL, NULL, ?)`,
+          )
+          .run(
+            id,
+            input.connectionId,
+            input.item.externalId,
+            input.item.externalId,
+            input.item.eventId ?? null,
+            input.item.publishedAt === undefined ? null : Date.parse(input.item.publishedAt),
+            input.now.getTime(),
+            input.now.getTime(),
+            JSON.stringify(input.item.metadata),
+            input.now.getTime(),
+          );
+        const row = client
+          .prepare('SELECT * FROM source_items WHERE id = ?')
+          .get(id) as unknown as RawRemoteSourceItemRow;
+        client.exec('COMMIT;');
+        return { created: true, item: remoteSourceItemFromRow(row) };
+      }
+      client
+        .prepare(
+          `UPDATE source_items SET event_id = ?, published_at = ?, metadata_json = ?,
+           last_observed_at = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          input.item.eventId ?? null,
+          input.item.publishedAt === undefined ? null : Date.parse(input.item.publishedAt),
+          JSON.stringify(input.item.metadata),
+          input.now.getTime(),
+          input.now.getTime(),
+          existing.id,
+        );
+      const row = client
+        .prepare('SELECT * FROM source_items WHERE id = ?')
+        .get(existing.id) as unknown as RawRemoteSourceItemRow;
+      client.exec('COMMIT;');
+      return { created: false, item: remoteSourceItemFromRow(row) };
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  private connection(id: string): SourceConnection | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM source_connections WHERE id = ?')
+      .get(id) as RawSourceConnectionRow | undefined;
+    return row === undefined ? undefined : sourceConnectionFromRow(row);
   }
 }
 

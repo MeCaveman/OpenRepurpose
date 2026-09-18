@@ -1,6 +1,12 @@
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { JobRunner, JobService, MediaImportService, WorkflowService } from '@openrepurpose/core';
+import {
+  JobRunner,
+  JobService,
+  MediaImportService,
+  SourcePollingRunner,
+  WorkflowService,
+} from '@openrepurpose/core';
 import {
   openDatabase,
   runMigrations,
@@ -11,6 +17,7 @@ import {
   SqliteMetaCredentialRepository,
   SqliteOAuthAuthorizationRequestRepository,
   SqliteSourceCursorRepository,
+  SqliteSourcePollingRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
 import {
@@ -20,7 +27,7 @@ import {
   WatchedFolderRunner,
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
-import { redactLogText } from '@openrepurpose/platform-sdk';
+import { createRedactingLogger, redactLogText, SourceRegistry } from '@openrepurpose/platform-sdk';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
 import { YouTubeOAuthService, YouTubeUploadJobHandler } from '@openrepurpose/youtube';
 import { TikTokDirectPostJobHandler, TikTokOAuthService } from '@openrepurpose/tiktok';
@@ -66,6 +73,22 @@ export async function startServer(): Promise<void> {
   );
   const jobService = new JobService(jobRepository);
   const workflowService = new WorkflowService(new SqliteWorkflowRepository(database), jobService);
+  // Source adapters register here in later packets. The durable loop is intentionally server-owned,
+  // so polling continues with no browser session or web UI open.
+  const sourcePollingRunner = new SourcePollingRunner(
+    new SqliteSourcePollingRepository(database),
+    new SourceRegistry(),
+    jobService,
+    {
+      sourceContext: {
+        logger: createRedactingLogger({
+          subsystem: 'source-polling',
+          write: (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`),
+        }),
+        secretStore,
+      },
+    },
+  );
   const jobRunner = new JobRunner(
     jobRepository,
     [
@@ -96,6 +119,7 @@ export async function startServer(): Promise<void> {
     config.jobRunner,
   );
   jobRunner.start();
+  sourcePollingRunner.start();
   const mediaImportService =
     executables.ffprobe === undefined
       ? undefined
@@ -131,6 +155,7 @@ export async function startServer(): Promise<void> {
   const close = () => {
     closing ??= (async () => {
       await jobRunner.stop();
+      await sourcePollingRunner.stop();
       watchedFolderRunner?.stop();
       await server.close();
       database.close();
@@ -143,6 +168,7 @@ export async function startServer(): Promise<void> {
     await server.listen({ host: config.bindHost, port: config.port });
   } catch (error) {
     await jobRunner.stop();
+    await sourcePollingRunner.stop();
     watchedFolderRunner?.stop();
     database.close();
     throw error;
