@@ -99,6 +99,7 @@ type TikTokCredentialStatus = {
 type MetaCredentialStatus = { configured: boolean; redirectUri: string };
 type MetaCredentialItem = {
   id: string;
+  scopes: readonly string[];
   displayName: string;
   externalId: string;
   status: string;
@@ -113,6 +114,20 @@ type MetaTargetItem = {
   enabled: boolean;
   availability: string;
   blocker?: string;
+  pageId: string;
+};
+type WorkflowItem = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  sourceDirectory: string;
+  titleTemplate: string;
+  destinations: readonly WorkflowDestinationItem[];
+};
+type WorkflowDestinationItem = {
+  accountId: string;
+  destinationId: string;
+  [key: string]: unknown;
 };
 type TikTokAccountCapabilities = {
   accountId: string;
@@ -173,6 +188,11 @@ export function App() {
   const [metaClientSecret, setMetaClientSecret] = useState('');
   const [metaCredentials, setMetaCredentials] = useState<readonly MetaCredentialItem[]>([]);
   const [metaTargets, setMetaTargets] = useState<readonly MetaTargetItem[]>([]);
+  const [workflows, setWorkflows] = useState<readonly WorkflowItem[]>([]);
+  const [workflowName, setWorkflowName] = useState('');
+  const [workflowSourceDirectory, setWorkflowSourceDirectory] = useState('');
+  const [workflowTitleTemplate, setWorkflowTitleTemplate] = useState('{{file.stem}}');
+  const [workflowDestination, setWorkflowDestination] = useState('');
   const [tiktokCapabilities, setTikTokCapabilities] = useState<
     Readonly<Record<string, TikTokCapabilityView>>
   >({});
@@ -246,6 +266,12 @@ export function App() {
     setYoutubeStatus(body.youtube);
     setTikTokStatus(body.tiktok);
   };
+  const loadWorkflows = async () => {
+    const response = await fetch('/api/workflows');
+    if (!response.ok) throw new Error('Workflow list is unavailable.');
+    const body = (await response.json()) as { workflows: readonly WorkflowItem[] };
+    setWorkflows(body.workflows);
+  };
   const showAttempts = async (jobId: string) => {
     const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
     if (!response.ok) throw new Error('Job attempt history is unavailable.');
@@ -272,6 +298,10 @@ export function App() {
     if (pathname === '/setup')
       void loadSetup().catch((failure: unknown) =>
         setError(failure instanceof Error ? failure.message : 'Could not load setup status.'),
+      );
+    if (pathname === '/workflows')
+      void Promise.all([loadAccounts(), loadWorkflows()]).catch((failure: unknown) =>
+        setError(failure instanceof Error ? failure.message : 'Could not load workflows.'),
       );
   }, [pathname]);
   const navigate = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
@@ -367,6 +397,44 @@ export function App() {
       setError(failure instanceof Error ? failure.message : 'The TikTok post could not be queued.');
     }
   };
+  const createWorkflow = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError(undefined);
+    const [destinationId, accountId] = workflowDestination.split(':', 2);
+    if (destinationId === undefined || accountId === undefined) {
+      setError('Choose an available publishing target.');
+      return;
+    }
+    try {
+      const destination =
+        destinationId === 'youtube'
+          ? { accountId, destinationId: 'youtube', privacy: 'private' }
+          : destinationId === 'tiktok'
+            ? { accountId, destinationId: 'tiktok', privacyLevel: 'SELF_ONLY' }
+            : destinationId === 'instagram'
+              ? { accountId, destinationId: 'instagram' }
+              : { accountId, destinationId: 'facebook' };
+      const response = await fetch('/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await csrfToken() },
+        body: JSON.stringify({
+          name: workflowName,
+          sourceDirectory: workflowSourceDirectory,
+          titleTemplate: workflowTitleTemplate,
+          destinations: [destination],
+          enabled: true,
+        }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? 'The workflow could not be saved.');
+      setWorkflowName('');
+      setWorkflowSourceDirectory('');
+      setWorkflowDestination('');
+      await loadWorkflows();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'The workflow could not be saved.');
+    }
+  };
   const csrfToken = async () => {
     const response = await fetch('/api/session');
     if (!response.ok) throw new Error('The local session could not be created.');
@@ -459,6 +527,22 @@ export function App() {
       await loadAccounts();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Meta target could not be updated.');
+    }
+  };
+  const rediscoverMetaTargets = async (credentialId: string) => {
+    try {
+      const response = await fetch(
+        `/api/accounts/meta/${encodeURIComponent(credentialId)}/discover`,
+        {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': await csrfToken() },
+        },
+      );
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? 'Meta targets could not be refreshed.');
+      await loadAccounts();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Meta targets could not be refreshed.');
     }
   };
   const saveTikTokCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -697,34 +781,82 @@ export function App() {
                             Meta identity · {credential.status}
                           </span>
                         </p>
+                        <p className="mt-2 text-xs text-slate-400">
+                          Credential identity: {credential.externalId} · granted permissions:{' '}
+                          {credential.scopes.length === 0
+                            ? 'none reported'
+                            : credential.scopes.join(', ')}
+                        </p>
+                        {credential.status !== 'connected' && (
+                          <p className="mt-2 text-sm text-amber-200">
+                            Permission blocker: reconnect this Meta identity before publishing.
+                          </p>
+                        )}
+                        <button
+                          className="mt-3 rounded-lg border border-cyan-300/30 px-3 py-1.5 text-xs text-cyan-200"
+                          onClick={() => void rediscoverMetaTargets(credential.id)}
+                          type="button"
+                        >
+                          Refresh available targets
+                        </button>
                         {metaTargets
                           .filter((target) => target.credentialId === credential.id)
+                          .sort(
+                            (left, right) =>
+                              left.kind.localeCompare(right.kind) ||
+                              left.displayName.localeCompare(right.displayName),
+                          )
                           .map((target) => (
-                            <label className="mt-3 flex items-start gap-3 text-sm" key={target.id}>
-                              <input
-                                checked={target.enabled}
-                                disabled={target.availability !== 'available'}
-                                onChange={(event) =>
-                                  void setMetaTarget(target, event.target.checked)
-                                }
-                                type="checkbox"
-                              />
-                              <span>
-                                <span className="font-medium">{target.displayName}</span>{' '}
-                                <span className="text-xs uppercase text-slate-500">
-                                  {target.kind === 'facebook_page'
-                                    ? 'Facebook Page'
-                                    : 'Instagram professional'}
+                            <div
+                              className="mt-3 rounded-lg border border-white/10 p-3"
+                              key={target.id}
+                            >
+                              <label className="flex items-start gap-3 text-sm">
+                                <input
+                                  checked={target.enabled}
+                                  disabled={target.availability !== 'available'}
+                                  onChange={(event) =>
+                                    void setMetaTarget(target, event.target.checked)
+                                  }
+                                  type="checkbox"
+                                />
+                                <span>
+                                  <span className="font-medium">{target.displayName}</span>{' '}
+                                  <span className="text-xs uppercase text-slate-500">
+                                    {target.kind === 'facebook_page'
+                                      ? 'Facebook Page target'
+                                      : 'Instagram professional target'}
+                                  </span>
+                                  {target.username !== undefined && (
+                                    <span className="block text-slate-400">@{target.username}</span>
+                                  )}
+                                  <span
+                                    className={
+                                      target.availability === 'available'
+                                        ? 'block text-emerald-200'
+                                        : 'block text-amber-200'
+                                    }
+                                  >
+                                    {target.availability === 'available'
+                                      ? 'Available for publishing'
+                                      : 'Unavailable'}
+                                  </span>
+                                  {target.blocker !== undefined && (
+                                    <span className="block text-amber-200">
+                                      Permission/review blocker: {target.blocker}
+                                    </span>
+                                  )}
                                 </span>
-                                {target.username !== undefined && (
-                                  <span className="block text-slate-400">@{target.username}</span>
-                                )}
-                                {target.blocker !== undefined && (
-                                  <span className="block text-amber-200">{target.blocker}</span>
-                                )}
-                              </span>
-                            </label>
+                              </label>
+                            </div>
                           ))}
+                        {metaTargets.filter((target) => target.credentialId === credential.id)
+                          .length === 0 && (
+                          <p className="mt-3 text-sm text-amber-200">
+                            No Page or linked Instagram professional targets are available. Check
+                            Meta app review, Page roles, and account eligibility.
+                          </p>
+                        )}
                       </div>
                     ))}
                   </section>
@@ -894,6 +1026,138 @@ export function App() {
                     Google may limit uploads from unverified API projects. OpenRepurpose shows
                     granted capabilities but cannot override Google audit or visibility rules.
                   </p>
+                </div>
+              ) : pathname === '/workflows' ? (
+                <div className="space-y-6">
+                  {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
+                  <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
+                    <h2 className="font-semibold">Create a watched-folder workflow</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-400">
+                      Select one exact account or Meta publish target. A Meta credential identity is
+                      not itself a publish target.
+                    </p>
+                    <form className="mt-5 grid gap-3" onSubmit={createWorkflow}>
+                      <label className="grid gap-1 text-sm" htmlFor="workflow-name">
+                        <span className="text-slate-300">Workflow name</span>
+                        <input
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="workflow-name"
+                          onChange={(event) => setWorkflowName(event.target.value)}
+                          required
+                          value={workflowName}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm" htmlFor="workflow-source">
+                        <span className="text-slate-300">Watched folder</span>
+                        <input
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="workflow-source"
+                          onChange={(event) => setWorkflowSourceDirectory(event.target.value)}
+                          placeholder="C:\\Media\\watched"
+                          required
+                          value={workflowSourceDirectory}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm" htmlFor="workflow-title">
+                        <span className="text-slate-300">Title template</span>
+                        <input
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="workflow-title"
+                          onChange={(event) => setWorkflowTitleTemplate(event.target.value)}
+                          required
+                          value={workflowTitleTemplate}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm" htmlFor="workflow-target">
+                        <span className="text-slate-300">Exact publish target</span>
+                        <select
+                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+                          id="workflow-target"
+                          onChange={(event) => setWorkflowDestination(event.target.value)}
+                          required
+                          value={workflowDestination}
+                        >
+                          <option value="">Select an available target</option>
+                          {accounts
+                            .filter((account) => account.status === 'connected')
+                            .map((account) => (
+                              <option
+                                key={`${account.provider}:${account.id}`}
+                                value={`${account.provider}:${account.id}`}
+                              >
+                                {account.displayName} · {account.provider}
+                              </option>
+                            ))}
+                          {metaTargets.map((target) => (
+                            <option
+                              disabled={target.availability !== 'available' || !target.enabled}
+                              key={`${target.kind}:${target.id}`}
+                              value={`${target.kind === 'instagram_professional' ? 'instagram' : 'facebook'}:${target.id}`}
+                            >
+                              {target.displayName} ·{' '}
+                              {target.kind === 'instagram_professional'
+                                ? 'Instagram'
+                                : 'Facebook Page'}
+                              {target.availability !== 'available'
+                                ? ' · unavailable'
+                                : !target.enabled
+                                  ? ' · disabled'
+                                  : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {workflowDestination.includes(':') &&
+                        workflowDestination.split(':')[0] !== 'youtube' &&
+                        workflowDestination.split(':')[0] !== 'tiktok' && (
+                          <p className="text-xs text-slate-400">
+                            This selection stores the exact Meta target ID. If it becomes
+                            unavailable later, the workflow will surface that target’s blocker
+                            instead of silently switching accounts.
+                          </p>
+                        )}
+                      <button
+                        className="w-fit rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
+                        type="submit"
+                      >
+                        Save workflow
+                      </button>
+                    </form>
+                  </section>
+                  <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
+                    <h2 className="font-semibold">Saved workflows</h2>
+                    <div className="mt-3 grid gap-3">
+                      {workflows.map((workflow) => (
+                        <article
+                          className="rounded-lg border border-white/10 p-4"
+                          key={workflow.id}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h3 className="font-medium">{workflow.name}</h3>
+                              <p className="mt-1 text-xs text-slate-400">
+                                {workflow.sourceDirectory} ·{' '}
+                                {workflow.enabled ? 'enabled' : 'disabled'}
+                              </p>
+                            </div>
+                            <span className="text-xs text-cyan-200">
+                              {workflow.destinations
+                                .map(
+                                  (destination) =>
+                                    `${destination.destinationId}:${destination.accountId}`,
+                                )
+                                .join(', ')}
+                            </span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                    {workflows.length === 0 && (
+                      <p className="mt-3 text-sm text-slate-400">
+                        No workflows have been saved yet.
+                      </p>
+                    )}
+                  </section>
                 </div>
               ) : pathname === '/setup' ? (
                 <div className="space-y-4">

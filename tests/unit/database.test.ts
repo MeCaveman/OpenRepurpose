@@ -36,6 +36,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0007_tiktok_oauth' },
       { id: '0008_workflow_destinations' },
       { id: '0009_meta_credentials_targets' },
+      { id: '0010_meta_workflow_destinations' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {

@@ -7,6 +7,7 @@ import { workflowsMigration } from './0006_workflows.js';
 import { tiktokOAuthMigration } from './0007_tiktok_oauth.js';
 import { workflowDestinationsMigration } from './0008_workflow_destinations.js';
 import { metaCredentialsTargetsMigration } from './0009_meta_credentials_targets.js';
+import { metaWorkflowDestinationsMigration } from './0010_meta_workflow_destinations.js';
 import type { Migration } from './types.js';
 
 /** Ordered, immutable migration ledger. Never alter a released migration's SQL. */
@@ -20,5 +21,6 @@ export const migrations: readonly Migration[] = [
   tiktokOAuthMigration,
   workflowDestinationsMigration,
   metaCredentialsTargetsMigration,
+  metaWorkflowDestinationsMigration,
 ];
 export type { Migration } from './types.js';

@@ -561,7 +561,27 @@ export interface TikTokWorkflowDestination {
   readonly privacyLevel: TikTokWorkflowPrivacy;
 }
 
-export type WorkflowDestination = YouTubeWorkflowDestination | TikTokWorkflowDestination;
+export interface InstagramWorkflowDestination {
+  /** Meta publish target ID, not the authorizing credential ID. */
+  readonly accountId: string;
+  readonly captionTemplate?: string;
+  readonly destinationId: 'instagram';
+  readonly shareToFeed?: boolean;
+}
+
+export interface FacebookWorkflowDestination {
+  /** Meta Page target ID, not the authorizing credential ID. */
+  readonly accountId: string;
+  readonly destinationId: 'facebook';
+  readonly titleTemplate?: string;
+  readonly descriptionTemplate?: string;
+}
+
+export type WorkflowDestination =
+  | YouTubeWorkflowDestination
+  | TikTokWorkflowDestination
+  | InstagramWorkflowDestination
+  | FacebookWorkflowDestination;
 
 /** A durable source definition whose destinations execute as independent best-effort jobs. */
 export interface Workflow {
@@ -726,29 +746,66 @@ export class WorkflowService {
                 },
               },
             })
-          : this.jobs.create({
-              type: 'tiktok.direct-post',
-              idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
-              input: {
-                ...common,
-                metadata: {
-                  caption:
-                    destination.captionTemplate === undefined
-                      ? title
-                      : renderTemplate(destination.captionTemplate, context),
-                  privacyLevel: destination.privacyLevel,
-                  ...(destination.disableComment === undefined
-                    ? {}
-                    : { disableComment: destination.disableComment }),
-                  ...(destination.disableDuet === undefined
-                    ? {}
-                    : { disableDuet: destination.disableDuet }),
-                  ...(destination.disableStitch === undefined
-                    ? {}
-                    : { disableStitch: destination.disableStitch }),
+          : destination.destinationId === 'tiktok'
+            ? this.jobs.create({
+                type: 'tiktok.direct-post',
+                idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
+                input: {
+                  ...common,
+                  metadata: {
+                    caption:
+                      destination.captionTemplate === undefined
+                        ? title
+                        : renderTemplate(destination.captionTemplate, context),
+                    privacyLevel: destination.privacyLevel,
+                    ...(destination.disableComment === undefined
+                      ? {}
+                      : { disableComment: destination.disableComment }),
+                    ...(destination.disableDuet === undefined
+                      ? {}
+                      : { disableDuet: destination.disableDuet }),
+                    ...(destination.disableStitch === undefined
+                      ? {}
+                      : { disableStitch: destination.disableStitch }),
+                  },
                 },
-              },
-            });
+              })
+            : destination.destinationId === 'instagram'
+              ? this.jobs.create({
+                  type: 'instagram.reels.publish',
+                  idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
+                  input: {
+                    mediaId: media.id,
+                    targetId: destination.accountId,
+                    metadata: {
+                      caption:
+                        destination.captionTemplate === undefined
+                          ? title
+                          : renderTemplate(destination.captionTemplate, context),
+                      ...(destination.shareToFeed === undefined
+                        ? {}
+                        : { shareToFeed: destination.shareToFeed }),
+                    },
+                  },
+                })
+              : this.jobs.create({
+                  type: 'facebook.reels.publish',
+                  idempotencyKey: this.destinationIdempotencyKey(workflow, media, destination),
+                  input: {
+                    mediaId: media.id,
+                    targetId: destination.accountId,
+                    metadata: {
+                      ...(destination.titleTemplate === undefined
+                        ? { title }
+                        : { title: renderTemplate(destination.titleTemplate, context) }),
+                      ...(destination.descriptionTemplate === undefined
+                        ? { description }
+                        : {
+                            description: renderTemplate(destination.descriptionTemplate, context),
+                          }),
+                    },
+                  },
+                });
       return { destinationId: destination.destinationId, ...result };
     });
     return { workflowId: workflow.id, failurePolicy: workflow.failurePolicy, destinations };
@@ -786,8 +843,9 @@ export class WorkflowService {
         : input.destinations.map((destination) => this.validateDestination(destination));
     if (destinations.length === 0) throw new Error('At least one destination is required.');
     if (
-      new Set(destinations.map((destination) => destination.destinationId)).size !==
-      destinations.length
+      new Set(
+        destinations.map((destination) => `${destination.destinationId}:${destination.accountId}`),
+      ).size !== destinations.length
     )
       throw new Error('A workflow can contain each destination only once.');
     return {
@@ -829,6 +887,32 @@ export class WorkflowService {
         accountId,
         privacy: destination.privacy,
         ...(category === undefined || category === '' ? {} : { category }),
+      };
+    }
+    if (destination.destinationId === 'instagram') {
+      if (destination.captionTemplate !== undefined) validateTemplate(destination.captionTemplate);
+      return {
+        destinationId: 'instagram',
+        accountId,
+        ...(destination.captionTemplate === undefined
+          ? {}
+          : { captionTemplate: destination.captionTemplate }),
+        ...(destination.shareToFeed === undefined ? {} : { shareToFeed: destination.shareToFeed }),
+      };
+    }
+    if (destination.destinationId === 'facebook') {
+      if (destination.titleTemplate !== undefined) validateTemplate(destination.titleTemplate);
+      if (destination.descriptionTemplate !== undefined)
+        validateTemplate(destination.descriptionTemplate);
+      return {
+        destinationId: 'facebook',
+        accountId,
+        ...(destination.titleTemplate === undefined
+          ? {}
+          : { titleTemplate: destination.titleTemplate }),
+        ...(destination.descriptionTemplate === undefined
+          ? {}
+          : { descriptionTemplate: destination.descriptionTemplate }),
       };
     }
     if (

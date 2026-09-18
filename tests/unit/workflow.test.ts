@@ -198,6 +198,50 @@ describe('watched-folder workflows', () => {
     });
   });
 
+  it('stores exact Meta target IDs and fans out to the corresponding Reel job types', () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    const jobs = new JobService(new SqliteJobRepository(database), () => new Date(1_000));
+    const workflows = new WorkflowService(
+      new SqliteWorkflowRepository(database),
+      jobs,
+      () => new Date(1_000),
+    );
+    const workflow = workflows.create({
+      name: 'Meta targets',
+      sourceDirectory: 'C:\\Media',
+      titleTemplate: '{{file.stem}}',
+      destinations: [
+        { destinationId: 'instagram', accountId: 'instagram-target-1', shareToFeed: true },
+        { destinationId: 'facebook', accountId: 'facebook-page-2' },
+      ],
+    });
+    const media = {
+      id: 'media-meta',
+      path: 'C:\\Media\\clip.mp4',
+      fingerprint: 'sha256:meta',
+      sizeBytes: 10,
+      modifiedAt: new Date(0),
+      createdAt: new Date(0),
+      state: 'available' as const,
+      metadata: { hasAudio: true },
+    };
+
+    expect(workflows.executeWatchedMedia(workflow.id, media)?.destinations).toEqual([
+      expect.objectContaining({ destinationId: 'instagram', created: true }),
+      expect.objectContaining({ destinationId: 'facebook', created: true }),
+    ]);
+    expect(jobs.list().map((job) => [job.type, job.input])).toEqual(
+      expect.arrayContaining([
+        ['instagram.reels.publish', expect.objectContaining({ targetId: 'instagram-target-1' })],
+        ['facebook.reels.publish', expect.objectContaining({ targetId: 'facebook-page-2' })],
+      ]),
+    );
+    expect(new SqliteWorkflowRepository(database).findById(workflow.id)?.destinations).toEqual(
+      workflow.destinations,
+    );
+  });
+
   it('rejects rollback semantics because remote publishes cannot be made atomic', () => {
     temporary = createTemporaryDatabase();
     const workflows = new WorkflowService(

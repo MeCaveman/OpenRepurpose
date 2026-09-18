@@ -238,6 +238,30 @@ function workflowDestinationFromRow(row: RawWorkflowDestinationRow): WorkflowDes
       ...(typeof configuration.category === 'string' ? { category: configuration.category } : {}),
     };
   }
+  if (row.destination_id === 'instagram') {
+    return {
+      destinationId: 'instagram',
+      accountId: row.account_id,
+      ...(typeof configuration.captionTemplate === 'string'
+        ? { captionTemplate: configuration.captionTemplate }
+        : {}),
+      ...(typeof configuration.shareToFeed === 'boolean'
+        ? { shareToFeed: configuration.shareToFeed }
+        : {}),
+    };
+  }
+  if (row.destination_id === 'facebook') {
+    return {
+      destinationId: 'facebook',
+      accountId: row.account_id,
+      ...(typeof configuration.titleTemplate === 'string'
+        ? { titleTemplate: configuration.titleTemplate }
+        : {}),
+      ...(typeof configuration.descriptionTemplate === 'string'
+        ? { descriptionTemplate: configuration.descriptionTemplate }
+        : {}),
+    };
+  }
   return {
     destinationId: 'tiktok',
     accountId: row.account_id,

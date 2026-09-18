@@ -190,10 +190,11 @@ export const workflowDestinations = sqliteTable(
     workflowId: text('workflow_id')
       .notNull()
       .references(() => workflows.id, { onDelete: 'cascade' }),
-    destinationId: text('destination_id', { enum: ['youtube', 'tiktok'] }).notNull(),
-    accountId: text('account_id')
-      .notNull()
-      .references(() => accounts.id),
+    destinationId: text('destination_id', {
+      enum: ['youtube', 'tiktok', 'instagram', 'facebook'],
+    }).notNull(),
+    /** Legacy account IDs and Meta publish-target IDs share this selector column. */
+    accountId: text('account_id').notNull(),
     position: integer('position').notNull(),
     configurationJson: text('configuration_json').notNull(),
   },
@@ -201,6 +202,7 @@ export const workflowDestinations = sqliteTable(
     uniqueIndex('workflow_destinations_workflow_destination_idx').on(
       table.workflowId,
       table.destinationId,
+      table.accountId,
     ),
     uniqueIndex('workflow_destinations_workflow_position_idx').on(table.workflowId, table.position),
     index('workflow_destinations_account_idx').on(table.accountId),
