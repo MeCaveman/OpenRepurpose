@@ -1,4 +1,9 @@
 import { useEffect, useState } from 'react';
+import {
+  WorkflowEditor,
+  type WorkflowEditorValue,
+  type WorkflowDefinitionView,
+} from './components/WorkflowEditor';
 
 const pages: Readonly<
   Record<string, { readonly description: string; readonly eyebrow: string; readonly title: string }>
@@ -133,6 +138,7 @@ type WorkflowItem = {
   };
   titleTemplate: string;
   destinations: readonly WorkflowDestinationItem[];
+  definition?: WorkflowDefinitionView;
 };
 type SourceItem = {
   id: string;
@@ -224,14 +230,6 @@ export function App() {
   const [sourceAccountId, setSourceAccountId] = useState('');
   const [sourceChannelId, setSourceChannelId] = useState('');
   const [sourceName, setSourceName] = useState('');
-  const [workflowName, setWorkflowName] = useState('');
-  const [workflowSourceDirectory, setWorkflowSourceDirectory] = useState('');
-  const [workflowRemoteSourceId, setWorkflowRemoteSourceId] = useState('');
-  const [workflowRetention, setWorkflowRetention] = useState('delete_after_success');
-  const [workflowRetentionHours, setWorkflowRetentionHours] = useState('24');
-  const [workflowRightsConfirmed, setWorkflowRightsConfirmed] = useState(false);
-  const [workflowTitleTemplate, setWorkflowTitleTemplate] = useState('{{file.stem}}');
-  const [workflowDestination, setWorkflowDestination] = useState('');
   const [tiktokCapabilities, setTikTokCapabilities] = useState<
     Readonly<Record<string, TikTokCapabilityView>>
   >({});
@@ -454,53 +452,16 @@ export function App() {
       setError(failure instanceof Error ? failure.message : 'The TikTok post could not be queued.');
     }
   };
-  const createWorkflow = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const createWorkflow = async (value: WorkflowEditorValue) => {
     setError(undefined);
-    const [destinationId, accountId] = workflowDestination.split(':', 2);
-    if (destinationId === undefined || accountId === undefined) {
-      setError('Choose an available publishing target.');
-      return;
-    }
     try {
-      const destination =
-        destinationId === 'youtube'
-          ? { accountId, destinationId: 'youtube', privacy: 'private' }
-          : destinationId === 'tiktok'
-            ? { accountId, destinationId: 'tiktok', privacyLevel: 'SELF_ONLY' }
-            : destinationId === 'instagram'
-              ? { accountId, destinationId: 'instagram' }
-              : { accountId, destinationId: 'facebook' };
       const response = await fetch('/api/workflows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await csrfToken() },
-        body: JSON.stringify({
-          name: workflowName,
-          ...(workflowRemoteSourceId.length === 0
-            ? { sourceDirectory: workflowSourceDirectory }
-            : {
-                remoteSource: {
-                  connectionId: workflowRemoteSourceId,
-                  retentionPolicy: {
-                    kind: workflowRetention,
-                    ...(workflowRetention === 'keep_for_duration'
-                      ? { durationSeconds: Number(workflowRetentionHours) * 60 * 60 }
-                      : {}),
-                  },
-                  rightsConfirmed: workflowRightsConfirmed,
-                },
-              }),
-          titleTemplate: workflowTitleTemplate,
-          destinations: [destination],
-          enabled: true,
-        }),
+        body: JSON.stringify(value),
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? 'The workflow could not be saved.');
-      setWorkflowName('');
-      setWorkflowSourceDirectory('');
-      setWorkflowRemoteSourceId('');
-      setWorkflowDestination('');
       await loadWorkflows();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'The workflow could not be saved.');
@@ -1253,153 +1214,12 @@ export function App() {
                       Select one exact account or Meta publish target. A Meta credential identity is
                       not itself a publish target.
                     </p>
-                    <form className="mt-5 grid gap-3" onSubmit={createWorkflow}>
-                      <label className="grid gap-1 text-sm" htmlFor="workflow-name">
-                        <span className="text-slate-300">Workflow name</span>
-                        <input
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="workflow-name"
-                          onChange={(event) => setWorkflowName(event.target.value)}
-                          required
-                          value={workflowName}
-                        />
-                      </label>
-                      <label className="grid gap-1 text-sm" htmlFor="workflow-remote-source">
-                        <span className="text-slate-300">Remote source (optional)</span>
-                        <select
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="workflow-remote-source"
-                          value={workflowRemoteSourceId}
-                          onChange={(event) => setWorkflowRemoteSourceId(event.target.value)}
-                        >
-                          <option value="">Use watched folder</option>
-                          {sources
-                            .filter((source) => source.status === 'active')
-                            .map((source) => (
-                              <option key={source.id} value={source.id}>
-                                {source.displayName}
-                              </option>
-                            ))}
-                        </select>
-                      </label>
-                      {workflowRemoteSourceId.length > 0 && (
-                        <>
-                          <label className="grid gap-1 text-sm">
-                            <span className="text-slate-300">Temporary media retention</span>
-                            <select
-                              className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                              value={workflowRetention}
-                              onChange={(event) => setWorkflowRetention(event.target.value)}
-                            >
-                              <option value="delete_after_success">
-                                Delete after all required destinations succeed
-                              </option>
-                              <option value="keep_for_duration">Keep for a duration</option>
-                              <option value="keep_forever">Keep forever</option>
-                            </select>
-                          </label>
-                          {workflowRetention === 'keep_for_duration' && (
-                            <label className="grid gap-1 text-sm">
-                              <span className="text-slate-300">Keep for hours</span>
-                              <input
-                                className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                                min="1"
-                                onChange={(event) => setWorkflowRetentionHours(event.target.value)}
-                                required
-                                type="number"
-                                value={workflowRetentionHours}
-                              />
-                            </label>
-                          )}
-                          <label className="flex items-start gap-2 text-sm text-amber-100">
-                            <input
-                              checked={workflowRightsConfirmed}
-                              onChange={(event) => setWorkflowRightsConfirmed(event.target.checked)}
-                              type="checkbox"
-                            />
-                            <span>
-                              I own this source media or am authorized to reuse it. Automatic
-                              resolution may be unavailable; protected content is never bypassed.
-                            </span>
-                          </label>
-                        </>
-                      )}
-                      <label className="grid gap-1 text-sm" htmlFor="workflow-source">
-                        <span className="text-slate-300">Watched folder</span>
-                        <input
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="workflow-source"
-                          onChange={(event) => setWorkflowSourceDirectory(event.target.value)}
-                          placeholder="C:\\Media\\watched"
-                          required={workflowRemoteSourceId.length === 0}
-                          value={workflowSourceDirectory}
-                        />
-                      </label>
-                      <label className="grid gap-1 text-sm" htmlFor="workflow-title">
-                        <span className="text-slate-300">Title template</span>
-                        <input
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="workflow-title"
-                          onChange={(event) => setWorkflowTitleTemplate(event.target.value)}
-                          required
-                          value={workflowTitleTemplate}
-                        />
-                      </label>
-                      <label className="grid gap-1 text-sm" htmlFor="workflow-target">
-                        <span className="text-slate-300">Exact publish target</span>
-                        <select
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="workflow-target"
-                          onChange={(event) => setWorkflowDestination(event.target.value)}
-                          required
-                          value={workflowDestination}
-                        >
-                          <option value="">Select an available target</option>
-                          {accounts
-                            .filter((account) => account.status === 'connected')
-                            .map((account) => (
-                              <option
-                                key={`${account.provider}:${account.id}`}
-                                value={`${account.provider}:${account.id}`}
-                              >
-                                {account.displayName} · {account.provider}
-                              </option>
-                            ))}
-                          {metaTargets.map((target) => (
-                            <option
-                              disabled={target.availability !== 'available' || !target.enabled}
-                              key={`${target.kind}:${target.id}`}
-                              value={`${target.kind === 'instagram_professional' ? 'instagram' : 'facebook'}:${target.id}`}
-                            >
-                              {target.displayName} ·{' '}
-                              {target.kind === 'instagram_professional'
-                                ? 'Instagram'
-                                : 'Facebook Page'}
-                              {target.availability !== 'available'
-                                ? ' · unavailable'
-                                : !target.enabled
-                                  ? ' · disabled'
-                                  : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      {workflowDestination.includes(':') &&
-                        workflowDestination.split(':')[0] !== 'youtube' &&
-                        workflowDestination.split(':')[0] !== 'tiktok' && (
-                          <p className="text-xs text-slate-400">
-                            This selection stores the exact Meta target ID. If it becomes
-                            unavailable later, the workflow will surface that target’s blocker
-                            instead of silently switching accounts.
-                          </p>
-                        )}
-                      <button
-                        className="w-fit rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
-                        type="submit"
-                      >
-                        Save workflow
-                      </button>
-                    </form>
+                    <WorkflowEditor
+                      accounts={accounts}
+                      metaTargets={metaTargets}
+                      onSubmit={createWorkflow}
+                      sources={sources}
+                    />
                   </section>
                   <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
                     <h2 className="font-semibold">Saved workflows</h2>
@@ -1413,17 +1233,32 @@ export function App() {
                             <div>
                               <h3 className="font-medium">{workflow.name}</h3>
                               <p className="mt-1 text-xs text-slate-400">
-                                {workflow.sourceDirectory} ·{' '}
-                                {workflow.enabled ? 'enabled' : 'disabled'}
+                                {workflow.sourceDirectory ||
+                                  workflow.remoteSource?.connectionId ||
+                                  'remote source'}{' '}
+                                · {workflow.enabled ? 'enabled' : 'disabled'}
                               </p>
                             </div>
                             <span className="text-xs text-cyan-200">
-                              {workflow.destinations
-                                .map(
-                                  (destination) =>
-                                    `${destination.destinationId}:${destination.accountId}`,
+                              {workflow.definition?.steps
+                                .map((step) =>
+                                  step.kind === 'source'
+                                    ? 'Source'
+                                    : step.kind === 'filter'
+                                      ? 'Filter'
+                                      : step.kind === 'transform'
+                                        ? 'Transform'
+                                        : step.kind === 'schedule'
+                                          ? `Schedule (${step.scheduleId})`
+                                          : `Destination (${step.destination.destinationId})`,
                                 )
-                                .join(', ')}
+                                .join(' → ') ??
+                                workflow.destinations
+                                  .map(
+                                    (destination) =>
+                                      `${destination.destinationId}:${destination.accountId}`,
+                                  )
+                                  .join(', ')}
                             </span>
                           </div>
                         </article>
