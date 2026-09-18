@@ -21,6 +21,16 @@ describe('Meta credential and publish-target service', () => {
   it('keeps identity separate from discovered Page and Instagram targets and refreshes an expired token', async () => {
     temporary = createTemporaryDatabase();
     let refreshed = false;
+    let discoveredPages: readonly Record<string, unknown>[] = [
+      {
+        id: 'page-1',
+        name: 'Creator Page',
+        tasks: ['CREATE_CONTENT'],
+        access_token: 'page-token',
+        instagram_business_account: { id: 'ig-1', username: 'creator' },
+      },
+      { id: 'page-2', name: 'No publish role', tasks: [] },
+    ];
     const http = async (input: string | URL): Promise<Response> => {
       const url = new URL(input.toString());
       if (url.pathname.endsWith('/oauth/access_token'))
@@ -35,24 +45,15 @@ describe('Meta credential and publish-target service', () => {
             (permission) => ({ permission, status: 'granted' }),
           ),
         });
-      if (url.pathname.endsWith('/me/accounts'))
-        return json({
-          data: [
-            {
-              id: 'page-1',
-              name: 'Creator Page',
-              tasks: ['CREATE_CONTENT'],
-              instagram_business_account: { id: 'ig-1', username: 'creator' },
-            },
-            { id: 'page-2', name: 'No publish role', tasks: [] },
-          ],
-        });
+      if (url.pathname.endsWith('/me/accounts')) return json({ data: discoveredPages });
       throw new Error(`Unexpected ${url}`);
     };
+    const secrets = new InMemorySecretStore();
+    const credentials = new SqliteMetaCredentialRepository(temporary.database);
     const service = new MetaOAuthService(
-      new SqliteMetaCredentialRepository(temporary.database),
+      credentials,
       new SqliteOAuthAuthorizationRequestRepository(temporary.database),
-      new InMemorySecretStore(),
+      secrets,
       new URL('http://127.0.0.1:3000'),
       { http, now: () => new Date('2026-09-18T10:00:00.000Z') },
     );
@@ -87,7 +88,22 @@ describe('Meta credential and publish-target service', () => {
     );
     refreshed = true;
     expect(await service.refreshAccessToken(credential.id)).toBe('renewed-token');
-    expect(service.setTargetEnabled(service.listTargets()[0]!.id, false)).toBe(true);
-    expect(service.listTargets()[0]!.enabled).toBe(false);
+    const pageTarget = service.listTargets().find((target) => target.externalId === 'page-1')!;
+    expect(service.setTargetEnabled(pageTarget.id, false)).toBe(true);
+    expect(credentials.listTargets().find((target) => target.id === pageTarget.id)?.enabled).toBe(
+      false,
+    );
+
+    discoveredPages = [];
+    await service.discoverTargets(credential.id);
+    expect(credentials.listTargets(credential.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ availability: 'blocked', enabled: false, externalId: 'page-1' }),
+        expect.objectContaining({ availability: 'blocked', enabled: false, externalId: 'ig-1' }),
+      ]),
+    );
+    expect(
+      await secrets.get({ name: 'meta-page-token', ownerId: pageTarget.id, scope: 'account' }),
+    ).toBeUndefined();
   });
 });

@@ -140,6 +140,7 @@ export interface MetaCredentialRepository {
   findCredential(id: string): MetaCredential | undefined;
   listCredentials(): readonly MetaCredential[];
   listTargets(credentialId?: string): readonly MetaPublishTarget[];
+  markTargetUnavailable(id: string, blocker: string, updatedAt: Date): boolean;
   removeCredential(id: string): MetaCredential | undefined;
   setCredentialStatus(id: string, status: MetaCredentialStatus, updatedAt: Date): boolean;
   setTargetEnabled(id: string, enabled: boolean, updatedAt: Date): boolean;

@@ -281,6 +281,7 @@ export class MetaOAuthService {
   }
   public async discoverTargets(credentialId: string): Promise<readonly MetaPublishTarget[]> {
     const token = await this.usableToken(credentialId);
+    const previousTargets = this.credentials.listTargets(credentialId);
     const url = new URL(`${this.endpoints.graph}/me/accounts`);
     url.searchParams.set(
       'fields',
@@ -358,6 +359,16 @@ export class MetaOAuthService {
         if (typeof raw.access_token === 'string')
           await this.secrets.set(metaPageTokenReference(instagramTarget.id), raw.access_token);
       }
+    }
+    const discoveredIds = new Set(targets.map((target) => target.id));
+    for (const target of previousTargets) {
+      if (discoveredIds.has(target.id)) continue;
+      this.credentials.markTargetUnavailable(
+        target.id,
+        'Meta no longer returns this target for the connected identity. Reconnect Meta and verify the Page or Instagram account relationship.',
+        now,
+      );
+      await this.secrets.delete(metaPageTokenReference(target.id));
     }
     return targets;
   }
@@ -556,19 +567,18 @@ function graphFailure(
   const error = object(value?.error);
   const remoteCode = typeof error?.code === 'number' ? String(error.code) : 'REQUEST_FAILED';
   const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-  const permission =
-    response.status === 401 ||
-    response.status === 403 ||
-    remoteCode === '10' ||
-    remoteCode === '190';
+  const tokenRevoked = response.status === 401 || remoteCode === '190';
+  const permission = response.status === 403 || remoteCode === '10';
   return new JobExecutionError(
-    `INSTAGRAM_${phase}_${permission ? 'PERMISSION_DENIED' : remoteCode}`,
+    `INSTAGRAM_${phase}_${tokenRevoked ? 'TOKEN_REVOKED' : permission ? 'PERMISSION_DENIED' : remoteCode}`,
     retryable,
-    permission
-      ? 'Instagram rejected this target or its publishing permission. Reconnect the Meta account and verify the linked Page role.'
-      : retryable
-        ? 'Instagram is temporarily unavailable. The publish job will retry.'
-        : 'Instagram rejected the Reels publish request.',
+    tokenRevoked
+      ? 'Meta revoked this access token. Reconnect the Meta account before publishing to Instagram.'
+      : permission
+        ? 'Instagram rejected this target or its publishing permission. Reconnect the Meta account and verify the linked Page role.'
+        : retryable
+          ? 'Instagram is temporarily unavailable. The publish job will retry.'
+          : 'Instagram rejected the Reels publish request.',
     retryAfterMs(response),
   );
 }
@@ -642,6 +652,14 @@ export class InstagramReelsJobHandler implements JobHandler {
         false,
         'Reconnect the Meta account to continue publishing to Instagram.',
       );
+    if (credential.tokenExpiresAt <= this.now()) {
+      this.targets.setCredentialStatus(credential.id, 'reauthorization_required', this.now());
+      throw new JobExecutionError(
+        'INSTAGRAM_TOKEN_EXPIRED',
+        false,
+        'The Meta access token expired. Reconnect the Meta account before publishing to Instagram.',
+      );
+    }
     const accessToken = await this.secrets.get(metaPageTokenReference(target.id));
     if (!accessToken)
       throw new JobExecutionError(
@@ -650,68 +668,84 @@ export class InstagramReelsJobHandler implements JobHandler {
         'Reconnect the Meta account to restore the linked Page publishing token.',
       );
 
-    let checkpoint =
-      this.checkpoints.find(context.jobId) ??
-      this.save({
-        destinationId: 'instagram',
-        jobId: context.jobId,
-        remoteStatus: 'validating',
-        uploadedBytes: 0,
-      });
-    if (checkpoint.remoteId === undefined)
-      checkpoint = await this.createContainer(
-        input,
-        target.externalId,
-        accessToken,
-        checkpoint,
-        context.jobId,
-      );
-    if (checkpoint.uploadedBytes < asset.sizeBytes) {
-      if (context.attemptNumber > 1 && checkpoint.remoteStatus !== 'upload_retryable')
-        throw new JobExecutionError(
-          'INSTAGRAM_UPLOAD_RECOVERY_AMBIGUOUS',
-          false,
-          'Instagram does not provide a confirmed upload offset for this interrupted transfer. The container will not be replayed automatically.',
+    try {
+      let checkpoint =
+        this.checkpoints.find(context.jobId) ??
+        this.save({
+          destinationId: 'instagram',
+          jobId: context.jobId,
+          remoteStatus: 'validating',
+          uploadedBytes: 0,
+        });
+      if (checkpoint.remoteId === undefined)
+        checkpoint = await this.createContainer(
+          input,
+          target.externalId,
+          accessToken,
+          checkpoint,
+          context.jobId,
         );
-      await this.upload(asset, accessToken, checkpoint, context);
-      checkpoint = this.save({
-        ...checkpoint,
-        remoteStatus: 'remote_processing',
-        uploadedBytes: asset.sizeBytes,
-      });
-      await this.secrets.delete(instagramUploadUriReference(context.jobId));
+      if (checkpoint.uploadedBytes < asset.sizeBytes) {
+        if (context.attemptNumber > 1 && checkpoint.remoteStatus !== 'upload_retryable')
+          throw new JobExecutionError(
+            'INSTAGRAM_UPLOAD_RECOVERY_AMBIGUOUS',
+            false,
+            'Instagram does not provide a confirmed upload offset for this interrupted transfer. The container will not be replayed automatically.',
+          );
+        await this.upload(asset, accessToken, checkpoint, context);
+        checkpoint = this.save({
+          ...checkpoint,
+          remoteStatus: 'remote_processing',
+          uploadedBytes: asset.sizeBytes,
+        });
+        await this.secrets.delete(instagramUploadUriReference(context.jobId));
+      }
+      const status = await this.containerStatus(checkpoint, accessToken, context);
+      if (status === 'IN_PROGRESS')
+        throw new JobExecutionError(
+          'INSTAGRAM_CONTAINER_PROCESSING',
+          true,
+          'Instagram is still processing the Reel container.',
+          60_000,
+        );
+      if (status === 'ERROR' || status === 'EXPIRED') {
+        this.save({ ...checkpoint, remoteStatus: 'failed' });
+        throw new JobExecutionError(
+          `INSTAGRAM_CONTAINER_${status}`,
+          false,
+          status === 'EXPIRED'
+            ? 'The Instagram Reel container expired before it could be published.'
+            : 'Instagram could not process this Reel. Check the video format and try again.',
+        );
+      }
+      if (status === 'PUBLISHED') {
+        this.save({ ...checkpoint, remoteStatus: 'published' });
+        return;
+      }
+      if (status !== 'FINISHED')
+        throw new JobExecutionError(
+          'INSTAGRAM_CONTAINER_STATUS_INVALID',
+          true,
+          'Instagram returned an unknown Reel container status.',
+        );
+      if (checkpoint.remoteStatus === 'publishing')
+        throw new JobExecutionError(
+          'INSTAGRAM_PUBLISH_RECOVERY_AMBIGUOUS',
+          false,
+          'Instagram did not confirm whether the Reel was published before restart. It will not be published again automatically.',
+        );
+      if (checkpoint.remoteStatus === 'published' && checkpoint.remoteId !== undefined) return;
+      checkpoint = this.save({ ...checkpoint, remoteStatus: 'publishing' });
+      await this.publish(target.externalId, accessToken, checkpoint, context);
+    } catch (error) {
+      if (error instanceof JobExecutionError) {
+        if (error.code.endsWith('_TOKEN_REVOKED'))
+          this.targets.setCredentialStatus(credential.id, 'reauthorization_required', this.now());
+        if (error.code.endsWith('_PERMISSION_DENIED'))
+          this.targets.markTargetUnavailable(target.id, error.publicMessage, this.now());
+      }
+      throw error;
     }
-    const status = await this.containerStatus(checkpoint, accessToken, context);
-    if (status === 'IN_PROGRESS')
-      throw new JobExecutionError(
-        'INSTAGRAM_CONTAINER_PROCESSING',
-        true,
-        'Instagram is still processing the Reel container.',
-        60_000,
-      );
-    if (status === 'ERROR' || status === 'EXPIRED') {
-      this.save({ ...checkpoint, remoteStatus: 'failed' });
-      throw new JobExecutionError(
-        `INSTAGRAM_CONTAINER_${status}`,
-        false,
-        status === 'EXPIRED'
-          ? 'The Instagram Reel container expired before it could be published.'
-          : 'Instagram could not process this Reel. Check the video format and try again.',
-      );
-    }
-    if (status === 'PUBLISHED') {
-      this.save({ ...checkpoint, remoteStatus: 'published' });
-      return;
-    }
-    if (status !== 'FINISHED')
-      throw new JobExecutionError(
-        'INSTAGRAM_CONTAINER_STATUS_INVALID',
-        true,
-        'Instagram returned an unknown Reel container status.',
-      );
-    if (checkpoint.remoteStatus === 'published' && checkpoint.remoteId !== undefined) return;
-    checkpoint = this.save({ ...checkpoint, remoteStatus: 'publishing' });
-    await this.publish(target.externalId, accessToken, checkpoint, context);
   }
 
   private validateMedia(asset: MediaAsset, input: InstagramReelsJobInput): void {
@@ -1016,19 +1050,18 @@ function facebookGraphFailure(
   const error = object(value?.error);
   const remoteCode = typeof error?.code === 'number' ? String(error.code) : 'REQUEST_FAILED';
   const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-  const permission =
-    response.status === 401 ||
-    response.status === 403 ||
-    remoteCode === '10' ||
-    remoteCode === '190';
+  const tokenRevoked = response.status === 401 || remoteCode === '190';
+  const permission = response.status === 403 || remoteCode === '10';
   return new JobExecutionError(
-    `FACEBOOK_REELS_${phase}_${permission ? 'PERMISSION_DENIED' : remoteCode}`,
+    `FACEBOOK_REELS_${phase}_${tokenRevoked ? 'TOKEN_REVOKED' : permission ? 'PERMISSION_DENIED' : remoteCode}`,
     retryable,
-    permission
-      ? 'Facebook rejected this Page or its publishing permission. Reconnect Meta and verify the Page content role.'
-      : retryable
-        ? 'Facebook is temporarily unavailable. The publish job will retry.'
-        : 'Facebook rejected the Reels publish request.',
+    tokenRevoked
+      ? 'Meta revoked this access token. Reconnect the Meta account before publishing to Facebook.'
+      : permission
+        ? 'Facebook rejected this Page or its publishing permission. Reconnect Meta and verify the Page content role.'
+        : retryable
+          ? 'Facebook is temporarily unavailable. The publish job will retry.'
+          : 'Facebook rejected the Reels publish request.',
     retryAfterMs(response),
   );
 }
@@ -1103,12 +1136,21 @@ export class FacebookReelsJobHandler implements JobHandler {
         false,
         'This Facebook Page is not enabled for publishing. Reconnect Meta and verify its CREATE_CONTENT task.',
       );
-    if (this.targets.findCredential(target.credentialId)?.status !== 'connected')
+    const credential = this.targets.findCredential(target.credentialId);
+    if (credential?.status !== 'connected')
       throw new JobExecutionError(
         'FACEBOOK_REAUTHORIZATION_REQUIRED',
         false,
         'Reconnect the Meta account to continue publishing to Facebook.',
       );
+    if (credential.tokenExpiresAt <= this.now()) {
+      this.targets.setCredentialStatus(credential.id, 'reauthorization_required', this.now());
+      throw new JobExecutionError(
+        'FACEBOOK_REELS_TOKEN_EXPIRED',
+        false,
+        'The Meta access token expired. Reconnect the Meta account before publishing to Facebook.',
+      );
+    }
     const accessToken = await this.secrets.get(metaPageTokenReference(target.id));
     if (!accessToken)
       throw new JobExecutionError(
@@ -1117,40 +1159,50 @@ export class FacebookReelsJobHandler implements JobHandler {
         'Reconnect the Meta account to restore the Page publishing token.',
       );
 
-    let checkpoint =
-      this.checkpoints.find(context.jobId) ??
-      this.save({
-        destinationId: 'facebook',
-        jobId: context.jobId,
-        remoteStatus: 'validating',
-        uploadedBytes: 0,
-      });
-    if (!checkpoint.remoteId)
-      checkpoint = await this.start(
-        input,
-        target.externalId,
-        accessToken,
-        checkpoint,
-        context.jobId,
-      );
-    if (checkpoint.remoteStatus === 'published') return;
+    try {
+      let checkpoint =
+        this.checkpoints.find(context.jobId) ??
+        this.save({
+          destinationId: 'facebook',
+          jobId: context.jobId,
+          remoteStatus: 'validating',
+          uploadedBytes: 0,
+        });
+      if (!checkpoint.remoteId)
+        checkpoint = await this.start(
+          input,
+          target.externalId,
+          accessToken,
+          checkpoint,
+          context.jobId,
+        );
+      if (checkpoint.remoteStatus === 'published') return;
 
-    if (context.attemptNumber > 1 && checkpoint.uploadedBytes < asset.sizeBytes)
-      checkpoint = await this.recoverOffset(checkpoint, accessToken, asset.sizeBytes, context);
-    if (checkpoint.uploadedBytes < asset.sizeBytes) {
-      await this.upload(asset, accessToken, checkpoint, context);
-      checkpoint = this.save({
-        ...checkpoint,
-        remoteStatus: 'uploaded',
-        uploadedBytes: asset.sizeBytes,
-      });
+      if (context.attemptNumber > 1 && checkpoint.uploadedBytes < asset.sizeBytes)
+        checkpoint = await this.recoverOffset(checkpoint, accessToken, asset.sizeBytes, context);
+      if (checkpoint.uploadedBytes < asset.sizeBytes) {
+        await this.upload(asset, accessToken, checkpoint, context);
+        checkpoint = this.save({
+          ...checkpoint,
+          remoteStatus: 'uploaded',
+          uploadedBytes: asset.sizeBytes,
+        });
+      }
+      if (!['verifying', 'processing', 'publishing'].includes(checkpoint.remoteStatus)) {
+        checkpoint = this.save({ ...checkpoint, remoteStatus: 'publishing' });
+        await this.finish(input, target.externalId, accessToken, checkpoint, context);
+        checkpoint = this.save({ ...checkpoint, remoteStatus: 'verifying' });
+      }
+      await this.reconcile(checkpoint, accessToken, context);
+    } catch (error) {
+      if (error instanceof JobExecutionError) {
+        if (error.code.endsWith('_TOKEN_REVOKED'))
+          this.targets.setCredentialStatus(credential.id, 'reauthorization_required', this.now());
+        if (error.code.endsWith('_PERMISSION_DENIED'))
+          this.targets.markTargetUnavailable(target.id, error.publicMessage, this.now());
+      }
+      throw error;
     }
-    if (!['verifying', 'processing', 'publishing'].includes(checkpoint.remoteStatus)) {
-      checkpoint = this.save({ ...checkpoint, remoteStatus: 'publishing' });
-      await this.finish(input, target.externalId, accessToken, checkpoint, context);
-      checkpoint = this.save({ ...checkpoint, remoteStatus: 'verifying' });
-    }
-    await this.reconcile(checkpoint, accessToken, context);
   }
 
   private validateMedia(asset: MediaAsset): void {

@@ -176,4 +176,109 @@ describe('Facebook Page Reels publishing transport', () => {
       status: 'failed',
     });
   });
+
+  it('honors Retry-After while reconciling an uploaded Reel without uploading or finalizing again', async () => {
+    temporary = createTemporaryDatabase();
+    let clock = new Date('2026-09-18T10:00:00.000Z');
+    const media = new SqliteMediaRepository(temporary.database);
+    media.create({
+      createdAt: clock,
+      fingerprint: 'sha256:facebook-uploaded',
+      id: 'media-uploaded',
+      metadata: { durationSeconds: 10, frameRate: 30, hasAudio: true, height: 1920, width: 1080 },
+      modifiedAt: clock,
+      path: join(temporary.directory, 'uploaded.mp4'),
+      sizeBytes: 42,
+      state: 'available',
+    });
+    const targets = new SqliteMetaCredentialRepository(temporary.database);
+    targets.upsertCredential({
+      connectedAt: clock,
+      displayName: 'Creator',
+      externalId: 'person-uploaded',
+      id: 'credential-uploaded',
+      scopes: ['pages_manage_posts'],
+      status: 'connected',
+      tokenExpiresAt: new Date(clock.getTime() + 86_400_000),
+      updatedAt: clock,
+    });
+    targets.upsertTarget({
+      availability: 'available',
+      credentialId: 'credential-uploaded',
+      displayName: 'Uploaded Page',
+      enabled: true,
+      externalId: 'page-uploaded',
+      id: 'target-uploaded',
+      kind: 'facebook_page',
+      pageId: 'page-uploaded',
+      updatedAt: clock,
+    });
+    const secrets = new InMemorySecretStore();
+    await secrets.set(
+      { name: 'meta-page-token', ownerId: 'target-uploaded', scope: 'account' },
+      'page-token',
+    );
+    let statusCalls = 0;
+    const http = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      expect(url.pathname).toBe('/v26.0/video-uploaded');
+      statusCalls += 1;
+      return statusCalls === 1
+        ? new Response(JSON.stringify({ error: { code: 2 } }), {
+            headers: { 'Content-Type': 'application/json', 'Retry-After': '120' },
+            status: 503,
+          })
+        : json({
+            permalink_url: 'https://facebook.test/reel/uploaded',
+            status: { video_status: 'published' },
+          });
+    };
+    const checkpoints = new SqliteDestinationJobRepository(temporary.database);
+    const repository = new SqliteJobRepository(temporary.database);
+    const jobs = new JobService(repository, () => clock);
+    const job = jobs.create({
+      maxAttempts: 3,
+      type: 'facebook.reels.publish',
+      input: { mediaId: 'media-uploaded', targetId: 'target-uploaded' },
+    }).job;
+    checkpoints.save({
+      destinationId: 'facebook',
+      jobId: job.id,
+      remoteId: 'video-uploaded',
+      remoteStatus: 'verifying',
+      uploadedBytes: 42,
+      updatedAt: clock,
+    });
+    const runner = new JobRunner(
+      repository,
+      [
+        new FacebookReelsJobHandler(media, checkpoints, targets, secrets, {
+          http,
+          now: () => clock,
+        }),
+      ],
+      {
+        baseRetryDelayMs: 0,
+        maxRetryDelayMs: 0,
+        now: () => clock,
+        random: () => 1,
+      },
+    );
+
+    await runner.runOnce();
+    expect(jobs.show(job.id)?.job).toMatchObject({
+      availableAt: new Date(clock.getTime() + 120_000),
+      status: 'retrying',
+    });
+    clock = new Date(clock.getTime() + 120_000);
+    await runner.runOnce();
+
+    expect(statusCalls).toBe(2);
+    expect(jobs.show(job.id)?.job.status).toBe('succeeded');
+    expect(checkpoints.find(job.id)).toMatchObject({
+      remoteId: 'video-uploaded',
+      remoteStatus: 'published',
+      uploadedBytes: 42,
+    });
+  });
 });

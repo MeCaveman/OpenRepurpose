@@ -561,6 +561,19 @@ export class SqliteMetaCredentialRepository implements MetaCredentialRepository 
       : statement.all(credentialId)) as unknown as RawMetaTargetRow[];
     return rows.map(metaTargetFromRow);
   }
+  public markTargetUnavailable(id: string, blocker: string, updatedAt: Date): boolean {
+    return (
+      Number(
+        this.database.client
+          .prepare(
+            `UPDATE meta_publish_targets
+             SET enabled = 0, availability = 'blocked', blocker = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(blocker, updatedAt.getTime(), id).changes,
+      ) === 1
+    );
+  }
   public removeCredential(id: string): MetaCredential | undefined {
     const existing = this.findCredential(id);
     if (existing !== undefined)
@@ -625,7 +638,12 @@ export class SqliteMetaCredentialRepository implements MetaCredentialRepository 
       .get(input.credentialId, input.kind, input.externalId) as
       { id: string; enabled: number } | undefined;
     const id = existing?.id ?? input.id;
-    const enabled = existing === undefined ? input.enabled : existing.enabled === 1;
+    const enabled =
+      input.availability === 'blocked'
+        ? false
+        : existing === undefined
+          ? input.enabled
+          : existing.enabled === 1;
     this.database.db
       .insert(metaPublishTargets)
       .values({
