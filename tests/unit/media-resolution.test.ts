@@ -8,6 +8,7 @@ import {
   RegisteredLocalOriginalMatcher,
   SourceMediaCleanupService,
   retentionCleanupAt,
+  type MediaProbe,
   type MediaResolver,
   type RemoteSourceItem,
 } from '@openrepurpose/core';
@@ -66,6 +67,7 @@ function seedSourceAndExecution(temporary: TemporaryDatabase): RemoteSourceItem 
 function services(
   temporary: TemporaryDatabase,
   resolvers: readonly MediaResolver[],
+  probe: MediaProbe = { probe: async () => ({ hasAudio: true, durationSeconds: 2 }) },
 ): {
   readonly media: SqliteMediaRepository;
   readonly resolution: MediaResolutionService;
@@ -75,11 +77,7 @@ function services(
   const media = new SqliteMediaRepository(temporary.database);
   const resolutions = new SqliteSourceMediaResolutionRepository(temporary.database);
   const storage = new LocalManagedTemporaryStorage(temporary.directory);
-  const importer = new MediaImportService(
-    new LocalMediaFileInspector(),
-    { probe: async () => ({ hasAudio: true, durationSeconds: 2 }) },
-    media,
-  );
+  const importer = new MediaImportService(new LocalMediaFileInspector(), probe, media);
   return {
     media,
     resolutions,
@@ -166,6 +164,33 @@ describe('media resolution and managed temporary storage', () => {
     ).toBe(false);
   });
 
+  it('persists an unavailable result when source media cannot be resolved', async () => {
+    temporary = createTemporaryDatabase();
+    const sourceItem = seedSourceAndExecution(temporary);
+    const app = services(temporary, []);
+
+    await expect(
+      app.resolution.resolve(
+        resolveInput({
+          ...sourceItem,
+          media: {
+            availability: 'unavailable',
+            resolutionStrategies: [],
+            rightsRequirement: 'connection_authorization',
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: 'MEDIA_RESOLVER_UNAVAILABLE',
+      retryable: false,
+    });
+    expect(app.media.list()).toEqual([]);
+    expect(app.resolutions.find('item-1', 'execution-1')).toMatchObject({
+      status: 'failed',
+      errorCode: 'MEDIA_RESOLVER_UNAVAILABLE',
+    });
+  });
+
   it('persists cancellation and removes partial output', async () => {
     temporary = createTemporaryDatabase();
     const sourceItem = seedSourceAndExecution(temporary);
@@ -204,6 +229,36 @@ describe('media resolution and managed temporary storage', () => {
     );
     expect(app.media.list()).toEqual([]);
     expect(app.resolutions.find('item-1', 'execution-1')?.status).toBe('failed');
+  });
+
+  it('rejects corrupt resolver output and removes both partial and finalized bytes', async () => {
+    temporary = createTemporaryDatabase();
+    const sourceItem = seedSourceAndExecution(temporary);
+    const app = services(
+      temporary,
+      [
+        {
+          id: 'corrupt-test',
+          canResolve: () => true,
+          resolve: async (_request, context) =>
+            writeFileSync(context.destinationPath, 'not-valid-media'),
+        },
+      ],
+      { probe: async () => Promise.reject(new Error('corrupt media')) },
+    );
+
+    await expect(app.resolution.resolve(resolveInput(sourceItem))).rejects.toMatchObject({
+      code: 'MEDIA_RESOLUTION_FAILED',
+    });
+
+    const scope = join(temporary.directory, 'storage', 'temp', 'execution-1');
+    expect(existsSync(join(scope, 'source.mp4'))).toBe(false);
+    expect(existsSync(join(scope, 'source.mp4.partial'))).toBe(false);
+    expect(app.media.list()).toEqual([]);
+    expect(app.resolutions.find('item-1', 'execution-1')).toMatchObject({
+      status: 'failed',
+      errorCode: 'MEDIA_RESOLUTION_FAILED',
+    });
   });
 
   it('recovers a completed download after restart without invoking the resolver again', async () => {
@@ -302,5 +357,37 @@ describe('media resolution and managed temporary storage', () => {
     expect(() =>
       retentionCleanupAt({ kind: 'keep_for_duration', durationSeconds: 0 }, now),
     ).toThrow('positive whole number');
+  });
+
+  it('reconciles stale managed scopes safely and idempotently', async () => {
+    temporary = createTemporaryDatabase();
+    const storage = new LocalManagedTemporaryStorage(temporary.directory);
+    const stale = await storage.prepare('stale-execution', '.mp4');
+    const active = await storage.prepare('active-execution', '.mp4');
+    writeFileSync(stale.partialPath, 'abandoned partial');
+    writeFileSync(active.finalPath, 'active retry media');
+    const outside = join(temporary.directory, 'outside-original.mp4');
+    writeFileSync(outside, 'never delete');
+    const staleBefore = new Date(Date.now() + 60_000);
+
+    await expect(
+      storage.reconcileStale({ activeScopeIds: ['active-execution'], staleBefore }),
+    ).resolves.toEqual({
+      deletedScopeIds: ['stale-execution'],
+      skippedScopeIds: ['active-execution'],
+    });
+    expect(existsSync(join(storage.root, 'stale-execution'))).toBe(false);
+    expect(readFileSync(active.finalPath, 'utf8')).toBe('active retry media');
+    expect(readFileSync(outside, 'utf8')).toBe('never delete');
+
+    await expect(
+      storage.reconcileStale({ activeScopeIds: ['active-execution'], staleBefore }),
+    ).resolves.toEqual({
+      deletedScopeIds: [],
+      skippedScopeIds: ['active-execution'],
+    });
+    await expect(
+      storage.reconcileStale({ activeScopeIds: ['../escape'], staleBefore }),
+    ).rejects.toThrow('safe identifier');
   });
 });

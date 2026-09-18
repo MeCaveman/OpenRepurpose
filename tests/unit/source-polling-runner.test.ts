@@ -96,6 +96,87 @@ describe('source polling runner', () => {
     });
   });
 
+  it('recovers when the process stops after item persistence but before handoff creation', async () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    insertConnection(database.client, 'source-1');
+    const now = 1_000;
+    const repository = new SqliteSourcePollingRepository(database);
+    repository.upsertObservedItem({
+      connectionId: 'source-1',
+      now: new Date(now),
+      item: {
+        eventId: 'event-1',
+        externalId: 'item-1',
+        metadata: { title: 'First item' },
+        media: {
+          availability: 'available',
+          resolutionStrategies: ['local_original', 'official_download'],
+          rightsRequirement: 'connection_authorization',
+        },
+        publishedAt: '2026-09-18T00:00:00.000Z',
+      },
+    });
+    const jobs = new JobService(new SqliteJobRepository(database), () => new Date(now));
+    expect(jobs.list()).toEqual([]);
+
+    await createRunner(
+      repository,
+      new SourceRegistry([new MockSourceAdapter()]),
+      jobs,
+      () => new Date(now),
+    ).runOnce();
+
+    expect(database.client.prepare('SELECT COUNT(*) AS count FROM source_items').get()).toEqual({
+      count: 1,
+    });
+    expect(jobs.list()).toHaveLength(1);
+    expect(repository.findConnection('source-1')?.cursor).toBe('cursor-1');
+  });
+
+  it('dedupes item and handoff after a crash before cursor advancement', async () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    insertConnection(database.client, 'source-1');
+    let now = 1_000;
+    class CrashBeforeCursorRepository extends SqliteSourcePollingRepository {
+      public override recordPollSuccess(): never {
+        throw new Error('simulated process stop before cursor commit');
+      }
+    }
+    const crashingRepository = new CrashBeforeCursorRepository(database);
+    const jobs = new JobService(new SqliteJobRepository(database), () => new Date(now));
+    const adapter = new MockSourceAdapter();
+
+    await createRunner(
+      crashingRepository,
+      new SourceRegistry([adapter]),
+      jobs,
+      () => new Date(now),
+    ).runOnce();
+
+    expect(jobs.list()).toHaveLength(1);
+    expect(crashingRepository.findConnection('source-1')?.cursor).toBeNull();
+
+    now += 60_000;
+    database.client
+      .prepare('UPDATE source_connections SET next_poll_at = NULL WHERE id = ?')
+      .run('source-1');
+    const restartedRepository = new SqliteSourcePollingRepository(database);
+    await createRunner(
+      restartedRepository,
+      new SourceRegistry([adapter]),
+      jobs,
+      () => new Date(now),
+    ).runOnce();
+
+    expect(database.client.prepare('SELECT COUNT(*) AS count FROM source_items').get()).toEqual({
+      count: 1,
+    });
+    expect(jobs.list()).toHaveLength(1);
+    expect(restartedRepository.findConnection('source-1')?.cursor).toBe('cursor-1');
+  });
+
   it('persists poll errors and pauses a source after repeated authentication failures', async () => {
     temporary = createTemporaryDatabase();
     const database = temporary.database;

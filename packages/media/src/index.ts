@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { access, lstat, mkdir, realpath, rename, rm } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { delimiter, isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import type {
   LocalFileInspector,
@@ -49,7 +49,9 @@ export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
     const scopeDirectory = resolve(this.root, safeScopeId(jobScopeId));
     if (!isPathInside(this.root, scopeDirectory))
       throw new Error('Managed temporary path escaped its root.');
+    await mkdir(this.root, { recursive: true });
     await mkdir(scopeDirectory, { recursive: true });
+    await this.assertCanonicalDirectory(scopeDirectory);
     const finalPath = resolve(scopeDirectory, `source${safeExtension(extension)}`);
     this.assertManaged(finalPath);
     return { finalPath, partialPath: `${finalPath}.partial` };
@@ -58,6 +60,7 @@ export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
   public async isUsableFile(path: string): Promise<boolean> {
     this.assertManaged(path);
     try {
+      await this.assertCanonicalDirectory(dirname(path));
       const details = await lstat(path);
       return details.isFile() && !details.isSymbolicLink() && details.size > 0;
     } catch (error) {
@@ -69,6 +72,7 @@ export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
   public async finalize(paths: ManagedTemporaryPath): Promise<string> {
     this.assertManaged(paths.partialPath);
     this.assertManaged(paths.finalPath);
+    await this.assertCanonicalDirectory(dirname(paths.partialPath));
     const details = await lstat(paths.partialPath);
     if (!details.isFile() || details.isSymbolicLink() || details.size <= 0)
       throw new Error('Resolver output must be a non-empty regular file.');
@@ -87,14 +91,54 @@ export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
 
   public async cleanup(path: string): Promise<'deleted' | 'missing'> {
     const managedPath = this.assertManaged(path);
+    let details: Awaited<ReturnType<typeof lstat>>;
     try {
-      await lstat(managedPath);
+      details = await lstat(managedPath);
     } catch (error) {
       if (isMissingFileError(error)) return 'missing';
       throw error;
     }
+    if (details.isSymbolicLink())
+      throw new Error('Refusing to clean a symbolic link in managed temporary storage.');
+    await this.assertCanonicalDirectory(dirname(managedPath));
+    const canonicalPath = await realpath(managedPath);
+    const canonicalRoot = await realpath(this.root);
+    if (!isPathInside(canonicalRoot, canonicalPath))
+      throw new Error('Refusing to access a path outside managed temporary storage.');
     await rm(managedPath, { recursive: true, force: true });
     return 'deleted';
+  }
+
+  /** Removes only inactive, direct child scopes old enough to be considered abandoned. */
+  public async reconcileStale(input: {
+    readonly activeScopeIds: readonly string[];
+    readonly staleBefore: Date;
+  }): Promise<{
+    readonly deletedScopeIds: readonly string[];
+    readonly skippedScopeIds: readonly string[];
+  }> {
+    if (!Number.isFinite(input.staleBefore.getTime()))
+      throw new Error('A valid stale managed temporary cutoff is required.');
+    const active = new Set(input.activeScopeIds.map(safeScopeId));
+    await mkdir(this.root, { recursive: true });
+    const deletedScopeIds: string[] = [];
+    const skippedScopeIds: string[] = [];
+    for (const entry of await readdir(this.root, { withFileTypes: true })) {
+      const scopeId = entry.name;
+      if (!entry.isDirectory() || active.has(scopeId)) {
+        skippedScopeIds.push(scopeId);
+        continue;
+      }
+      const scopePath = resolve(this.root, safeScopeId(scopeId));
+      const details = await lstat(scopePath);
+      if (details.isSymbolicLink() || details.mtime.getTime() > input.staleBefore.getTime()) {
+        skippedScopeIds.push(scopeId);
+        continue;
+      }
+      await this.cleanup(scopePath);
+      deletedScopeIds.push(scopeId);
+    }
+    return { deletedScopeIds, skippedScopeIds };
   }
 
   private assertManaged(path: string): string {
@@ -102,6 +146,16 @@ export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
     if (!isPathInside(this.root, candidate))
       throw new Error('Refusing to access a path outside managed temporary storage.');
     return candidate;
+  }
+
+  private async assertCanonicalDirectory(path: string): Promise<void> {
+    const details = await lstat(path);
+    if (!details.isDirectory() || details.isSymbolicLink())
+      throw new Error('Managed temporary scope must be a real directory.');
+    const canonicalRoot = await realpath(this.root);
+    const canonicalDirectory = await realpath(path);
+    if (canonicalDirectory !== canonicalRoot && !isPathInside(canonicalRoot, canonicalDirectory))
+      throw new Error('Refusing to access a path outside managed temporary storage.');
   }
 }
 

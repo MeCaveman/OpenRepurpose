@@ -41,6 +41,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0011_source_domain' },
       { id: '0012_media_resolution' },
       { id: '0013_source_workflow_integration' },
+      { id: '0014_execution_scoped_media' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -119,7 +120,7 @@ describe('SQLite migrations and repositories', () => {
 
     expect(
       fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toHaveLength(13);
+    ).toHaveLength(14);
     expect(
       fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
     ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);
@@ -175,6 +176,15 @@ describe('SQLite migrations and repositories', () => {
         )
         .get(),
     ).toEqual({ destination_id: 'facebook', remote_id: 'remote-v03', remote_status: 'published' });
+    expect(() => {
+      const insert = database.client.prepare(
+        `INSERT INTO media_assets (
+          id, path, fingerprint, size_bytes, modified_at, state, has_audio, created_at
+        ) VALUES (?, ?, 'sha256:same-bytes', 1, 1, 'available', 0, 1)`,
+      );
+      insert.run('execution-media-a', 'C:\\temp\\execution-a.mp4');
+      insert.run('execution-media-b', 'C:\\temp\\execution-b.mp4');
+    }).not.toThrow();
     expect(
       database.client
         .prepare(

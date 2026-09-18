@@ -178,10 +178,15 @@ export class MediaImportService {
     private readonly repository: MediaRepository,
   ) {}
 
-  public async import(path: string): Promise<ImportMediaResult> {
+  public async import(
+    path: string,
+    options: { readonly deduplicate?: boolean } = {},
+  ): Promise<ImportMediaResult> {
     const file = await this.files.inspect(path);
-    const existing = this.repository.findByFingerprint(file.fingerprint);
-    if (existing !== undefined) return { asset: existing, duplicate: true };
+    if (options.deduplicate !== false) {
+      const existing = this.repository.findByFingerprint(file.fingerprint);
+      if (existing !== undefined) return { asset: existing, duplicate: true };
+    }
 
     const metadata = await this.probe.probe(file.path);
     const asset: MediaAsset = {
@@ -1123,6 +1128,13 @@ export interface ManagedTemporaryStorage {
   finalize(paths: ManagedTemporaryPath): Promise<string>;
   isUsableFile(path: string): Promise<boolean>;
   prepare(jobScopeId: string, extension?: string): Promise<ManagedTemporaryPath>;
+  reconcileStale(input: {
+    readonly activeScopeIds: readonly string[];
+    readonly staleBefore: Date;
+  }): Promise<{
+    readonly deletedScopeIds: readonly string[];
+    readonly skippedScopeIds: readonly string[];
+  }>;
 }
 
 export interface LocalOriginalHints {
@@ -1336,7 +1348,9 @@ export class MediaResolutionService {
         this.throwIfCancelled(input.signal);
         await this.storage.finalize(paths);
       }
-      const imported = await this.importer.import(paths.finalPath);
+      // Each execution owns its retry and retention lifetime. Identical bytes in another
+      // execution must not make both executions share one cleanup path.
+      const imported = await this.importer.import(paths.finalPath, { deduplicate: false });
       const ready = this.resolutions.markReady({
         sourceItemId: input.sourceItem.id,
         executionId: input.executionId,

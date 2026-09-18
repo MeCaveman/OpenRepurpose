@@ -43,10 +43,15 @@ missing.
 - After job creation: the persistent queue claims the existing job after restart.
 - After one destination succeeds: that destination's terminal result is skipped; only unfinished
   or explicitly retried failed destinations run.
+- Managed downloads are registered per execution even when their content fingerprints match.
+  This keeps retry and retention paths independent when multiple workflows subscribe to one item;
+  normal user media-library imports still deduplicate by fingerprint.
 - After all required destinations succeed: SQLite marks the execution cleanup-eligible according
   to its snapshotted retention policy. Optional destination failure does not block eligibility.
 - During cleanup: cleanup resumes from the execution/artifact state. Missing managed files count as
   successful cleanup, errors remain visible and retryable, and user-owned originals are protected.
+- Stale managed-temp reconciliation accepts an explicit active-scope set and age cutoff, considers
+  only direct child scopes, validates canonical containment, and is safe to run repeatedly.
 
 Source metadata, immutable snapshots, destination results and remote IDs, job attempts, and media
 artifact audit rows remain after managed temporary bytes are deleted.

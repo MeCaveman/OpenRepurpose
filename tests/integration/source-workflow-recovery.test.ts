@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -58,6 +58,7 @@ function createSystem(
   clock: Clock,
   calls: DestinationCalls,
   failFacebook: { value: boolean },
+  options: { readonly resolverCalls?: { value: number } } = {},
 ) {
   const media = new SqliteMediaRepository(database);
   const jobsRepository = new SqliteJobRepository(database);
@@ -67,30 +68,35 @@ function createSystem(
   const executions = new SqliteSourceWorkflowExecutionRepository(database);
   const resolutions = new SqliteSourceMediaResolutionRepository(database);
   const storage = new LocalManagedTemporaryStorage(directory);
+  const resolution = new MediaResolutionService(
+    resolutions,
+    new RegisteredLocalOriginalMatcher(media),
+    [
+      {
+        id: 'official-test-resolver',
+        canResolve: () => true,
+        resolve: async (request, context) => {
+          if (options.resolverCalls !== undefined) options.resolverCalls.value += 1;
+          writeFileSync(
+            context.destinationPath,
+            `resolved remote media ${request.sourceItem.externalId}`,
+          );
+        },
+      },
+    ],
+    storage,
+    new MediaImportService(
+      new LocalMediaFileInspector(),
+      { probe: async () => ({ durationSeconds: 42, hasAudio: true }) },
+      media,
+    ),
+    media,
+    () => clock.value,
+  );
   const coordinator = new SourceWorkflowCoordinator(
     workflowsRepository,
     executions,
-    new MediaResolutionService(
-      resolutions,
-      new RegisteredLocalOriginalMatcher(media),
-      [
-        {
-          id: 'official-test-resolver',
-          canResolve: () => true,
-          resolve: async (_request, context) => {
-            writeFileSync(context.destinationPath, 'resolved remote media');
-          },
-        },
-      ],
-      storage,
-      new MediaImportService(
-        new LocalMediaFileInspector(),
-        { probe: async () => ({ durationSeconds: 42, hasAudio: true }) },
-        media,
-      ),
-      media,
-      () => clock.value,
-    ),
+    resolution,
     workflows,
     jobs,
     new SourceMediaCleanupService(resolutions, storage, () => clock.value),
@@ -123,6 +129,7 @@ function createSystem(
     executions,
     jobs,
     jobsRepository,
+    resolution,
     resolutions,
     storage,
     workflows,
@@ -207,6 +214,308 @@ describe('remote source workflow recovery', () => {
       },
     });
     expect(system.executions.find(execution!.id)?.snapshot.workflow.name).toBe('Included');
+    database.close();
+  });
+
+  it('honors a workflow disabled after detection and dedupes two workflows on one source', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-source-fanout-'));
+    directories.push(directory);
+    const database = openDatabase(join(directory, 'openrepurpose.sqlite'));
+    runMigrations(database);
+    seedConnection(database);
+    const clock = { value: new Date('2026-09-18T10:00:00.000Z') };
+    const system = createSystem(
+      database,
+      directory,
+      clock,
+      { facebook: 0, youtube: 0 },
+      { value: false },
+    );
+    const disabled = system.workflows.create({
+      name: 'Disable during poll',
+      remoteSource: { connectionId: 'source-1' },
+      titleTemplate: '{{source.title}}',
+      destinations: [{ destinationId: 'youtube', accountId: 'disabled', privacy: 'private' }],
+    });
+    const polling = new SqliteSourcePollingRepository(database);
+    const firstItem = polling.upsertObservedItem({
+      connectionId: 'source-1',
+      now: clock.value,
+      item: {
+        externalId: 'disabled-video',
+        metadata: { title: 'Disable before handoff runs' },
+        media: {
+          availability: 'available',
+          resolutionStrategies: ['official_download'],
+          rightsRequirement: 'connection_authorization',
+        },
+      },
+    }).item;
+    system.jobs.create({
+      type: 'source.item.observed',
+      idempotencyKey: `source-item:${firstItem.id}:observed`,
+      input: { sourceConnectionId: 'source-1', sourceItemId: firstItem.id },
+    });
+    system.workflows.update(disabled.id, {
+      name: disabled.name,
+      enabled: false,
+      remoteSource: { connectionId: 'source-1' },
+      titleTemplate: disabled.titleTemplate,
+      destinations: disabled.destinations,
+    });
+
+    await new JobRunner(system.jobsRepository, [system.handlers.observed], {
+      concurrency: 1,
+      now: () => clock.value,
+    }).runOnce();
+    expect(
+      database.client.prepare('SELECT count(*) AS count FROM source_workflow_executions').get(),
+    ).toEqual({ count: 0 });
+
+    for (const accountId of ['first-account', 'second-account'])
+      system.workflows.create({
+        name: `Workflow ${accountId}`,
+        remoteSource: { connectionId: 'source-1' },
+        titleTemplate: '{{source.title}}',
+        destinations: [{ destinationId: 'youtube', accountId, privacy: 'private' }],
+      });
+    const secondItem = polling.upsertObservedItem({
+      connectionId: 'source-1',
+      now: clock.value,
+      item: {
+        externalId: 'shared-video',
+        metadata: { title: 'One source, two workflows' },
+        media: {
+          availability: 'available',
+          resolutionStrategies: ['official_download'],
+          rightsRequirement: 'connection_authorization',
+        },
+      },
+    }).item;
+
+    const workflowExecutions = system.coordinator.observe(secondItem.id);
+    expect(workflowExecutions).toHaveLength(2);
+    expect(system.coordinator.observe(secondItem.id)).toHaveLength(2);
+    expect(
+      database.client
+        .prepare(
+          'SELECT count(*) AS count FROM source_workflow_executions WHERE source_item_id = ?',
+        )
+        .get(secondItem.id),
+    ).toEqual({ count: 2 });
+    expect(system.jobs.list().filter((job) => job.type === 'source.execution.run')).toHaveLength(2);
+    await new JobRunner(system.jobsRepository, [system.handlers.execution], {
+      concurrency: 2,
+      now: () => clock.value,
+    }).runOnce();
+    const artifacts = workflowExecutions.flatMap((execution) =>
+      system.executions.listArtifacts(execution.id),
+    );
+    expect(new Set(artifacts.map((artifact) => artifact.path)).size).toBe(2);
+    expect(new Set(artifacts.map((artifact) => artifact.mediaId)).size).toBe(2);
+    expect(artifacts.every((artifact) => existsSync(artifact.path))).toBe(true);
+    expect(system.jobs.list().filter((job) => job.type === 'youtube.upload')).toHaveLength(2);
+    database.close();
+  });
+
+  it('reuses a completed download after restart before publishing begins', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-downloaded-restart-'));
+    directories.push(directory);
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    const clock = { value: new Date('2026-09-18T10:00:00.000Z') };
+    const resolverCalls = { value: 0 };
+    let database = openDatabase(databasePath);
+    runMigrations(database);
+    seedConnection(database);
+    let system = createSystem(
+      database,
+      directory,
+      clock,
+      { facebook: 0, youtube: 0 },
+      { value: false },
+      { resolverCalls },
+    );
+    system.workflows.create({
+      name: 'Download recovery',
+      remoteSource: { connectionId: 'source-1' },
+      titleTemplate: '{{source.title}}',
+      destinations: [{ destinationId: 'youtube', accountId: 'account-1', privacy: 'private' }],
+    });
+    const item = new SqliteSourcePollingRepository(database).upsertObservedItem({
+      connectionId: 'source-1',
+      now: clock.value,
+      item: {
+        externalId: 'downloaded-before-crash',
+        metadata: { title: 'Downloaded first', fileExtension: 'mp4' },
+        media: {
+          availability: 'available',
+          resolutionStrategies: ['official_download'],
+          rightsRequirement: 'connection_authorization',
+        },
+      },
+    }).item;
+    const execution = system.coordinator.observe(item.id)[0]!;
+    const sourceItem = system.executions.findSourceItem(item.id)!;
+    const resolved = await system.resolution.resolve({
+      sourceItem,
+      executionId: execution.id,
+      jobScopeId: execution.id,
+      outputExtension: 'mp4',
+      signal: new AbortController().signal,
+    });
+    expect(resolverCalls.value).toBe(1);
+    expect(existsSync(resolved.media.path)).toBe(true);
+    database.close();
+
+    clock.value = new Date(clock.value.getTime() + 100);
+    database = openDatabase(databasePath);
+    runMigrations(database);
+    system = createSystem(
+      database,
+      directory,
+      clock,
+      { facebook: 0, youtube: 0 },
+      { value: false },
+      { resolverCalls },
+    );
+    await new JobRunner(system.jobsRepository, [system.handlers.execution], {
+      concurrency: 1,
+      now: () => clock.value,
+    }).runOnce();
+
+    expect(resolverCalls.value).toBe(1);
+    expect(system.jobs.list().filter((job) => job.type === 'youtube.upload')).toHaveLength(1);
+    database.close();
+  });
+
+  it('enforces default, delayed, and keep-forever retention while preserving history', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-source-retention-'));
+    directories.push(directory);
+    const database = openDatabase(join(directory, 'openrepurpose.sqlite'));
+    runMigrations(database);
+    seedConnection(database);
+    const clock = { value: new Date('2026-09-18T10:00:00.000Z') };
+    const calls = { facebook: 0, youtube: 0 };
+    const system = createSystem(database, directory, clock, calls, { value: false });
+    const policies = [
+      {
+        externalId: 'delete-immediately-video',
+        name: 'Delete immediately',
+        retentionPolicy: { kind: 'delete_after_success' } as const,
+      },
+      {
+        externalId: 'delete-later-video',
+        name: 'Delete later',
+        retentionPolicy: { kind: 'keep_for_duration', durationSeconds: 3_600 } as const,
+      },
+      {
+        externalId: 'keep-forever-video',
+        name: 'Keep forever',
+        retentionPolicy: { kind: 'keep_forever' } as const,
+      },
+    ];
+    for (const policy of policies)
+      system.workflows.create({
+        name: policy.name,
+        remoteSource: {
+          connectionId: 'source-1',
+          filters: { titleContains: policy.name },
+          retentionPolicy: policy.retentionPolicy,
+        },
+        titleTemplate: '{{source.title}}',
+        destinations: [{ destinationId: 'youtube', accountId: policy.name, privacy: 'private' }],
+      });
+    const polling = new SqliteSourcePollingRepository(database);
+    const executions = policies.flatMap((policy) => {
+      const item = polling.upsertObservedItem({
+        connectionId: 'source-1',
+        now: clock.value,
+        item: {
+          externalId: policy.externalId,
+          metadata: { title: policy.name, fileExtension: 'mp4' },
+          media: {
+            availability: 'available',
+            resolutionStrategies: ['official_download'],
+            rightsRequirement: 'connection_authorization',
+          },
+        },
+      }).item;
+      return system.coordinator.observe(item.id);
+    });
+    await new JobRunner(system.jobsRepository, [system.handlers.execution], {
+      concurrency: 3,
+      now: () => clock.value,
+    }).runOnce();
+    expect(
+      system.jobs
+        .list()
+        .filter((job) => job.type === 'source.execution.run')
+        .map((job) => ({ status: job.status, error: job.lastErrorCode })),
+    ).toEqual([
+      { status: 'succeeded', error: undefined },
+      { status: 'succeeded', error: undefined },
+      { status: 'succeeded', error: undefined },
+    ]);
+    await new JobRunner(system.jobsRepository, [system.handlers.youtube], {
+      concurrency: 3,
+      now: () => clock.value,
+    }).runOnce();
+    expect(
+      system.jobs
+        .list()
+        .filter((job) => job.type === 'youtube.upload')
+        .map((job) => job.status),
+    ).toEqual(['succeeded', 'succeeded', 'succeeded']);
+    const byName = new Map(
+      executions.map((execution) => [execution.snapshot.workflow.name, execution.id]),
+    );
+    const immediateId = byName.get('Delete immediately')!;
+    const delayedId = byName.get('Delete later')!;
+    const foreverId = byName.get('Keep forever')!;
+    const immediateArtifact = system.executions.listArtifacts(immediateId)[0]!;
+    const delayedArtifact = system.executions.listArtifacts(delayedId)[0]!;
+    const foreverArtifact = system.executions.listArtifacts(foreverId)[0]!;
+
+    expect(system.executions.find(immediateId)?.cleanupStatus).toBe('eligible');
+    expect(system.executions.find(delayedId)?.cleanupEligibleAt).toEqual(
+      new Date(clock.value.getTime() + 3_600_000),
+    );
+    expect(system.executions.find(foreverId)?.cleanupStatus).toBe('retained');
+    system.coordinator.recover();
+    await new JobRunner(system.jobsRepository, [system.handlers.cleanup], {
+      concurrency: 3,
+      now: () => clock.value,
+    }).runOnce();
+
+    expect(existsSync(immediateArtifact.path)).toBe(false);
+    expect(existsSync(delayedArtifact.path)).toBe(true);
+    expect(existsSync(foreverArtifact.path)).toBe(true);
+    expect(system.executions.find(immediateId)?.cleanupStatus).toBe('completed');
+    expect(system.executions.find(delayedId)?.cleanupStatus).toBe('eligible');
+    expect(system.executions.find(foreverId)?.cleanupStatus).toBe('retained');
+    expect(system.executions.listDestinations(immediateId)[0]).toMatchObject({
+      status: 'succeeded',
+      remoteId: 'youtube-remote-id',
+    });
+    expect(system.executions.findSourceItem(immediateArtifact.sourceItemId)?.metadata).toEqual({
+      title: 'Delete immediately',
+      fileExtension: 'mp4',
+    });
+    expect(system.resolutions.findArtifact(immediateArtifact.id)).toMatchObject({
+      state: 'deleted',
+      cleanupState: 'completed',
+    });
+
+    clock.value = new Date(clock.value.getTime() + 3_600_000);
+    system.coordinator.recover();
+    await new JobRunner(system.jobsRepository, [system.handlers.cleanup], {
+      concurrency: 3,
+      now: () => clock.value,
+    }).runOnce();
+    expect(existsSync(delayedArtifact.path)).toBe(false);
+    expect(existsSync(foreverArtifact.path)).toBe(true);
+    expect(system.executions.find(delayedId)?.cleanupStatus).toBe('completed');
+    expect(system.executions.find(foreverId)?.cleanupStatus).toBe('retained');
     database.close();
   });
 
@@ -297,6 +606,9 @@ describe('remote source workflow recovery', () => {
       },
     ).runOnce();
     expect(calls).toEqual({ youtube: 1, facebook: 1 });
+    const managedArtifact = system.executions.listArtifacts(executionId)[0]!;
+    expect(existsSync(managedArtifact.path)).toBe(true);
+    expect(system.executions.find(executionId)?.cleanupStatus).toBe('not_eligible');
     expect(system.coordinator.retryFailedDestinations(executionId)).toBe(1);
     await new JobRunner(
       system.jobsRepository,
@@ -323,7 +635,6 @@ describe('remote source workflow recovery', () => {
     system = createSystem(database, directory, clock, calls, failFacebook);
     system.coordinator.recover();
     const cleanupJob = system.jobs.list().find((job) => job.type === 'source.execution.cleanup')!;
-    const artifact = system.executions.listArtifacts(executionId)[0]!;
     expect(cleanupJob.status).toBe('pending');
 
     // Crash during cleanup after the managed file is deleted but before its checkpoint commits.
@@ -335,8 +646,8 @@ describe('remote source workflow recovery', () => {
       new Date(claimedAt.getTime() + 10),
     );
     system.executions.markCleanupRunning(executionId, claimedAt);
-    system.resolutions.markCleanupRunning(artifact.id, claimedAt);
-    await system.storage.cleanup(artifact.path);
+    system.resolutions.markCleanupRunning(managedArtifact.id, claimedAt);
+    await system.storage.cleanup(managedArtifact.path);
     database.close();
 
     clock.value = new Date(claimedAt.getTime() + 20);
@@ -352,10 +663,21 @@ describe('remote source workflow recovery', () => {
       status: 'succeeded',
       cleanupStatus: 'completed',
     });
-    expect(system.resolutions.findArtifact(artifact.id)).toMatchObject({
+    expect(system.resolutions.findArtifact(managedArtifact.id)).toMatchObject({
       state: 'deleted',
       cleanupState: 'completed',
     });
+    expect(existsSync(managedArtifact.path)).toBe(false);
+    expect(system.executions.findSourceItem(item.id)?.metadata).toEqual({
+      title: 'Recovery video',
+      fileExtension: 'mp4',
+    });
+    expect(system.executions.listDestinations(executionId)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ destinationId: 'youtube', remoteId: 'youtube-remote-id' }),
+        expect.objectContaining({ destinationId: 'facebook', remoteId: 'facebook-remote-id' }),
+      ]),
+    );
     expect(calls).toEqual({ youtube: 1, facebook: 2 });
     database.close();
   });

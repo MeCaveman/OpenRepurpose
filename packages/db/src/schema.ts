@@ -11,7 +11,7 @@ export const settings = sqliteTable('settings', {
 export const mediaAssets = sqliteTable('media_assets', {
   id: text('id').primaryKey(),
   path: text('path').notNull(),
-  fingerprint: text('fingerprint').notNull().unique(),
+  fingerprint: text('fingerprint').notNull(),
   sizeBytes: integer('size_bytes').notNull(),
   modifiedAt: integer('modified_at', { mode: 'timestamp_ms' }).notNull(),
   state: text('state', { enum: ['available', 'missing'] }).notNull(),
