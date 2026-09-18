@@ -38,6 +38,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0008_workflow_destinations' },
       { id: '0009_meta_credentials_targets' },
       { id: '0010_meta_workflow_destinations' },
+      { id: '0011_source_domain' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -116,7 +117,7 @@ describe('SQLite migrations and repositories', () => {
 
     expect(
       fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toHaveLength(10);
+    ).toHaveLength(11);
     expect(
       fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
     ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);
@@ -132,5 +133,61 @@ describe('SQLite migrations and repositories', () => {
         .prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?) ORDER BY name')
         .all('meta_credentials', 'meta_publish_targets'),
     ).toEqual([{ name: 'meta_credentials' }, { name: 'meta_publish_targets' }]);
+  });
+  it('upgrades a populated v0.3 database without changing existing job checkpoints', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-v03-migration-'));
+    const database = openDatabase(join(directory, 'openrepurpose.sqlite'));
+    temporaryDatabase = {
+      directory,
+      database,
+      dispose: () => {
+        database.close();
+        rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
+      },
+    };
+    runMigrations(database, migrations.slice(0, 10));
+    database.client
+      .prepare(
+        `INSERT INTO jobs (
+          id, type, status, input_json, idempotency_key, max_attempts, attempt_count,
+          available_at, created_at, updated_at, completed_at
+        ) VALUES ('v03-job', 'facebook.reels.publish', 'succeeded', '{}', 'v03-idempotency',
+          3, 1, 1, 1, 2, 2)`,
+      )
+      .run();
+    database.client
+      .prepare(
+        `INSERT INTO destination_job_records (
+          job_id, destination_id, remote_id, remote_status, uploaded_bytes, updated_at
+        ) VALUES ('v03-job', 'facebook', 'remote-v03', 'published', 42, 2)`,
+      )
+      .run();
+
+    runMigrations(database);
+
+    expect(
+      database.client
+        .prepare(
+          `SELECT destination_id, remote_id, remote_status
+           FROM destination_job_records WHERE job_id = 'v03-job'`,
+        )
+        .get(),
+    ).toEqual({ destination_id: 'facebook', remote_id: 'remote-v03', remote_status: 'published' });
+    expect(
+      database.client
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'table' AND name LIKE 'source_%'
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: 'source_connections' },
+      { name: 'source_cursors' },
+      { name: 'source_execution_destinations' },
+      { name: 'source_items' },
+      { name: 'source_media_artifacts' },
+      { name: 'source_workflow_executions' },
+    ]);
   });
 });

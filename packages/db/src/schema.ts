@@ -1,4 +1,5 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /** Durable user-configurable settings. Feature tables are introduced by their owning packets. */
 export const settings = sqliteTable('settings', {
@@ -225,5 +226,217 @@ export const sourceCursors = sqliteTable(
   },
   (table) => [
     uniqueIndex('source_cursors_workflow_source_idx').on(table.workflowId, table.sourceKey),
+  ],
+);
+
+export const sourceConnections = sqliteTable(
+  'source_connections',
+  {
+    id: text('id').primaryKey(),
+    adapterId: text('adapter_id').notNull(),
+    accountId: text('account_id').references(() => accounts.id, { onDelete: 'set null' }),
+    externalSourceId: text('external_source_id').notNull(),
+    displayName: text('display_name').notNull(),
+    configurationJson: text('configuration_json').notNull(),
+    status: text('status', { enum: ['active', 'paused', 'authorization_failed'] }).notNull(),
+    cursorJson: text('cursor_json'),
+    watermarkPublishedAt: integer('watermark_published_at', { mode: 'timestamp_ms' }),
+    watermarkExternalId: text('watermark_external_id'),
+    lastPollAt: integer('last_poll_at', { mode: 'timestamp_ms' }),
+    lastSuccessfulPollAt: integer('last_successful_poll_at', { mode: 'timestamp_ms' }),
+    lastPollErrorCode: text('last_poll_error_code'),
+    lastPollErrorMessage: text('last_poll_error_message'),
+    consecutivePollFailures: integer('consecutive_poll_failures').notNull().default(0),
+    nextPollAt: integer('next_poll_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('source_connections_adapter_external_idx').on(
+      table.adapterId,
+      table.externalSourceId,
+    ),
+    index('source_connections_status_next_poll_idx').on(table.status, table.nextPollAt),
+    check(
+      'source_connections_watermark_pair_check',
+      sql`(${table.watermarkPublishedAt} IS NULL AND ${table.watermarkExternalId} IS NULL) OR (${table.watermarkPublishedAt} IS NOT NULL AND ${table.watermarkExternalId} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const sourceItems = sqliteTable(
+  'source_items',
+  {
+    id: text('id').primaryKey(),
+    sourceConnectionId: text('source_connection_id')
+      .notNull()
+      .references(() => sourceConnections.id, { onDelete: 'restrict' }),
+    externalId: text('external_id').notNull(),
+    dedupeKey: text('dedupe_key').notNull(),
+    eventId: text('event_id'),
+    publishedAt: integer('published_at', { mode: 'timestamp_ms' }),
+    firstObservedAt: integer('first_observed_at', { mode: 'timestamp_ms' }).notNull(),
+    lastObservedAt: integer('last_observed_at', { mode: 'timestamp_ms' }).notNull(),
+    metadataJson: text('metadata_json').notNull(),
+    lifecycleStatus: text('lifecycle_status', {
+      enum: [
+        'observed',
+        'queued',
+        'resolving',
+        'media_ready',
+        'processing',
+        'publishing',
+        'partial_failure',
+        'retrying',
+        'published',
+        'cleanup_pending',
+        'completed',
+        'failed',
+      ],
+    }).notNull(),
+    resolutionStatus: text('resolution_status', {
+      enum: ['unresolved', 'resolving', 'ready', 'unavailable', 'failed'],
+    }).notNull(),
+    linkedMediaId: text('linked_media_id').references(() => mediaAssets.id, {
+      onDelete: 'set null',
+    }),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('source_items_connection_external_idx').on(
+      table.sourceConnectionId,
+      table.externalId,
+    ),
+    uniqueIndex('source_items_connection_dedupe_idx').on(table.sourceConnectionId, table.dedupeKey),
+    index('source_items_connection_observed_idx').on(
+      table.sourceConnectionId,
+      table.firstObservedAt,
+    ),
+    index('source_items_lifecycle_idx').on(table.lifecycleStatus, table.updatedAt),
+  ],
+);
+
+export const sourceWorkflowExecutions = sqliteTable(
+  'source_workflow_executions',
+  {
+    id: text('id').primaryKey(),
+    sourceItemId: text('source_item_id')
+      .notNull()
+      .references(() => sourceItems.id, { onDelete: 'restrict' }),
+    workflowId: text('workflow_id').references(() => workflows.id, { onDelete: 'set null' }),
+    workflowKey: text('workflow_key').notNull(),
+    workflowVersion: text('workflow_version').notNull(),
+    status: text('status', {
+      enum: ['pending', 'running', 'waiting', 'retrying', 'succeeded', 'failed', 'cancelled'],
+    }).notNull(),
+    snapshotJson: text('snapshot_json').notNull(),
+    retentionPolicy: text('retention_policy', {
+      enum: ['delete_after_success', 'keep_for_duration', 'keep_forever'],
+    }).notNull(),
+    retentionDurationSeconds: integer('retention_duration_seconds'),
+    cleanupStatus: text('cleanup_status', {
+      enum: ['not_eligible', 'eligible', 'scheduled', 'running', 'completed', 'failed', 'retained'],
+    }).notNull(),
+    cleanupEligibleAt: integer('cleanup_eligible_at', { mode: 'timestamp_ms' }),
+    cleanupErrorCode: text('cleanup_error_code'),
+    cleanupErrorMessage: text('cleanup_error_message'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('source_workflow_executions_item_workflow_version_idx').on(
+      table.sourceItemId,
+      table.workflowKey,
+      table.workflowVersion,
+    ),
+    index('source_workflow_executions_item_idx').on(table.sourceItemId, table.createdAt),
+    index('source_workflow_executions_recovery_idx').on(table.status, table.updatedAt),
+    index('source_workflow_executions_cleanup_idx').on(
+      table.cleanupStatus,
+      table.cleanupEligibleAt,
+    ),
+  ],
+);
+
+export const sourceExecutionDestinations = sqliteTable(
+  'source_execution_destinations',
+  {
+    id: text('id').primaryKey(),
+    executionId: text('execution_id')
+      .notNull()
+      .references(() => sourceWorkflowExecutions.id, { onDelete: 'restrict' }),
+    destinationKey: text('destination_key').notNull(),
+    destinationId: text('destination_id').notNull(),
+    required: integer('required', { mode: 'boolean' }).notNull(),
+    jobId: text('job_id')
+      .unique()
+      .references(() => jobs.id, { onDelete: 'set null' }),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    status: text('status', {
+      enum: ['pending', 'running', 'waiting', 'retrying', 'succeeded', 'failed', 'cancelled'],
+    }).notNull(),
+    remoteId: text('remote_id'),
+    remoteUrl: text('remote_url'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastErrorCode: text('last_error_code'),
+    lastErrorMessage: text('last_error_message'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('source_execution_destinations_execution_key_idx').on(
+      table.executionId,
+      table.destinationKey,
+    ),
+    index('source_execution_destinations_recovery_idx').on(table.executionId, table.status),
+  ],
+);
+
+export const sourceMediaArtifacts = sqliteTable(
+  'source_media_artifacts',
+  {
+    id: text('id').primaryKey(),
+    sourceItemId: text('source_item_id')
+      .notNull()
+      .references(() => sourceItems.id, { onDelete: 'restrict' }),
+    executionId: text('execution_id').references(() => sourceWorkflowExecutions.id, {
+      onDelete: 'restrict',
+    }),
+    mediaId: text('media_id').references(() => mediaAssets.id, { onDelete: 'set null' }),
+    path: text('path').notNull(),
+    ownership: text('ownership', {
+      enum: ['user_owned_original', 'openrepurpose_temporary', 'openrepurpose_generated'],
+    }).notNull(),
+    state: text('state', { enum: ['available', 'missing', 'deleted'] }).notNull(),
+    cleanupState: text('cleanup_state', {
+      enum: [
+        'protected',
+        'not_eligible',
+        'eligible',
+        'scheduled',
+        'running',
+        'completed',
+        'failed',
+        'retained',
+      ],
+    }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('source_media_artifacts_item_path_ownership_idx').on(
+      table.sourceItemId,
+      table.path,
+      table.ownership,
+    ),
+    index('source_media_artifacts_cleanup_idx').on(
+      table.ownership,
+      table.cleanupState,
+      table.updatedAt,
+    ),
   ],
 );

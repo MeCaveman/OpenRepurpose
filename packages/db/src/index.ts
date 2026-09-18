@@ -53,7 +53,12 @@ export {
   metaCredentials,
   metaPublishTargets,
   settings,
+  sourceConnections,
   sourceCursors,
+  sourceExecutionDestinations,
+  sourceItems,
+  sourceMediaArtifacts,
+  sourceWorkflowExecutions,
   workflows,
   workflowDestinations,
 } from './schema.js';

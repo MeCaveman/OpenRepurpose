@@ -637,6 +637,60 @@ export interface SourceCursorRepository {
   save(cursor: SourceCursor): SourceCursor;
 }
 
+export type SourceItemLifecycleState =
+  | 'observed'
+  | 'queued'
+  | 'resolving'
+  | 'media_ready'
+  | 'processing'
+  | 'publishing'
+  | 'partial_failure'
+  | 'retrying'
+  | 'published'
+  | 'cleanup_pending'
+  | 'completed'
+  | 'failed';
+
+export type SourceResolutionStatus =
+  'unresolved' | 'resolving' | 'ready' | 'unavailable' | 'failed';
+
+export type SourceDestinationStatus =
+  'pending' | 'running' | 'waiting' | 'retrying' | 'succeeded' | 'failed' | 'cancelled';
+
+export type SourceRetentionPolicy =
+  | { readonly kind: 'delete_after_success' }
+  | { readonly durationSeconds: number; readonly kind: 'keep_for_duration' }
+  | { readonly kind: 'keep_forever' };
+
+export type SourceMediaOwnership =
+  'user_owned_original' | 'openrepurpose_temporary' | 'openrepurpose_generated';
+
+export interface SourceDestinationState {
+  readonly required: boolean;
+  readonly status: SourceDestinationStatus;
+}
+
+/** Successful destination results are terminal checkpoints and are never selected for retry. */
+export function sourceDestinationNeedsWork(destination: SourceDestinationState): boolean {
+  return destination.status !== 'succeeded' && destination.status !== 'cancelled';
+}
+
+/** Cleanup remains blocked until every required destination has a durable success checkpoint. */
+export function allRequiredSourceDestinationsSucceeded(
+  destinations: readonly SourceDestinationState[],
+): boolean {
+  return destinations.every(
+    (destination) => !destination.required || destination.status === 'succeeded',
+  );
+}
+
+/** Cleanup code may accept only OpenRepurpose-owned artifacts as deletion candidates. */
+export function isOpenRepurposeManagedMedia(
+  ownership: SourceMediaOwnership,
+): ownership is 'openrepurpose_temporary' | 'openrepurpose_generated' {
+  return ownership !== 'user_owned_original';
+}
+
 const templateVariables = new Set(['file.name', 'file.stem', 'media.duration', 'workflow.name']);
 const templateToken = /{{\s*([^{}\s]+)\s*}}/g;
 

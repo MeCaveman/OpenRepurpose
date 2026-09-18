@@ -3,17 +3,23 @@ import {
   DestinationRegistry,
   PlatformError,
   REDACTED_LOG_VALUE,
+  SourceRegistry,
   createRedactingLogger,
   isPlatformError,
+  validateSourcePollResult,
   type AdapterContext,
   type PublishRequest,
   type RedactedLogEntry,
   type SecretReference,
+  type SourceAdapterContext,
+  type SourcePollResult,
 } from '@openrepurpose/platform-sdk';
 import {
   InMemorySecretStore,
   MockDestinationAdapter,
+  MockSourceAdapter,
   mockDestinationCapabilities,
+  mockSourceCapabilities,
 } from '@openrepurpose/testkit';
 
 const request: PublishRequest = {
@@ -31,6 +37,14 @@ function createContext(secretStore: InMemorySecretStore): AdapterContext {
   return {
     idempotencyKey: 'job-1:destination-1',
     logger: createRedactingLogger({ subsystem: 'test', write: () => undefined }),
+    secretStore,
+    signal: new AbortController().signal,
+  };
+}
+
+function createSourceContext(secretStore: InMemorySecretStore): SourceAdapterContext {
+  return {
+    logger: createRedactingLogger({ subsystem: 'source-test', write: () => undefined }),
     secretStore,
     signal: new AbortController().signal,
   };
@@ -80,6 +94,79 @@ describe('destination adapter contract', () => {
 
     unregister();
     expect(registry.get('second')).toBeUndefined();
+  });
+});
+
+describe('source adapter contract', () => {
+  it('keeps detection serializable, cursor-based, and stable across repeated observations', async () => {
+    const adapter = new MockSourceAdapter();
+    const context = createSourceContext(new InMemorySecretStore());
+    const request = { connectionExternalId: 'channel-1', cursor: null } as const;
+
+    const first = await adapter.poll(request, context);
+    validateSourcePollResult(first);
+    const repeated = await adapter.poll({ ...request, cursor: first.cursor }, context);
+    validateSourcePollResult(repeated);
+
+    expect(await adapter.capabilities()).toEqual(mockSourceCapabilities);
+    expect(first.items.map((item) => item.externalId)).toEqual(
+      repeated.items.map((item) => item.externalId),
+    );
+    expect(first.cursor).toBe('cursor-1');
+    expect(JSON.parse(JSON.stringify(first))).toEqual(first);
+    expect(adapter.pollCalls.map((call) => call.request.cursor)).toEqual([null, 'cursor-1']);
+  });
+
+  it('rejects observations that cannot provide a stable, unambiguous identity', () => {
+    const invalidPages: readonly SourcePollResult[] = [
+      {
+        cursor: 'cursor',
+        hasMore: false,
+        items: [{ externalId: ' ', metadata: {} }],
+      },
+      {
+        cursor: 'cursor',
+        hasMore: false,
+        items: [
+          { externalId: 'duplicate', metadata: {} },
+          { externalId: 'duplicate', metadata: {} },
+        ],
+      },
+      {
+        cursor: ' ',
+        hasMore: false,
+        items: [],
+      },
+      {
+        cursor: null,
+        hasMore: false,
+        items: [
+          {
+            externalId: 'item',
+            metadata: {},
+            publishedAt: 'not-a-date',
+          },
+        ],
+      },
+      { cursor: null, hasMore: true, items: [] },
+    ];
+
+    for (const page of invalidPages) expect(() => validateSourcePollResult(page)).toThrow();
+  });
+
+  it('registers replaceable source adapters without a provider switch', () => {
+    const first = new MockSourceAdapter({ id: 'first-source' });
+    const second = new MockSourceAdapter({ id: 'second-source' });
+    const registry = new SourceRegistry([first]);
+    const unregister = registry.register(second);
+
+    expect(registry.list()).toEqual([first, second]);
+    expect(registry.require('second-source')).toBe(second);
+    expect(() => registry.register(new MockSourceAdapter({ id: 'first-source' }))).toThrow(
+      'Duplicate source adapter: first-source',
+    );
+    unregister();
+    expect(registry.get('second-source')).toBeUndefined();
   });
 });
 

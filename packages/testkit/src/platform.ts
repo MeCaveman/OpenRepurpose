@@ -8,6 +8,11 @@ import {
   type RemoteStatus,
   type SecretReference,
   type SecretStore,
+  type SourceAdapter,
+  type SourceAdapterContext,
+  type SourceCapabilities,
+  type SourcePollRequest,
+  type SourcePollResult,
   type ValidationResult,
 } from '@openrepurpose/platform-sdk';
 
@@ -80,6 +85,73 @@ export class MockDestinationAdapter implements DestinationAdapter {
   public async validate(input: PublishRequest): Promise<ValidationResult> {
     this.validationCalls.push(input);
     return this.configuredValidationResult;
+  }
+}
+
+export const mockSourceCapabilities: SourceCapabilities = {
+  eventIds: true,
+  mediaResolution: ['local_original', 'official_download'],
+  polling: true,
+};
+
+export interface MockSourceAdapterOptions {
+  readonly capabilities?: SourceCapabilities;
+  readonly displayName?: string;
+  readonly id?: string;
+  readonly pollResults?: readonly SourcePollResult[];
+}
+
+/** Reusable deterministic source fake; repeated calls use the last configured page. */
+export class MockSourceAdapter implements SourceAdapter {
+  public readonly displayName: string;
+  public readonly id: string;
+  public readonly pollCalls: Array<{
+    readonly context: SourceAdapterContext;
+    readonly request: SourcePollRequest;
+  }> = [];
+
+  private readonly configuredCapabilities: SourceCapabilities;
+  private readonly pollResults: readonly SourcePollResult[];
+
+  public constructor(options: MockSourceAdapterOptions = {}) {
+    this.id = options.id ?? 'mock-source';
+    this.displayName = options.displayName ?? 'Mock source';
+    this.configuredCapabilities = options.capabilities ?? mockSourceCapabilities;
+    this.pollResults = options.pollResults ?? [
+      {
+        cursor: 'cursor-1',
+        hasMore: false,
+        items: [
+          {
+            eventId: 'event-1',
+            externalId: 'item-1',
+            media: {
+              availability: 'available',
+              resolutionStrategies: ['local_original', 'official_download'],
+              rightsRequirement: 'connection_authorization',
+            },
+            metadata: { title: 'First item' },
+            publishedAt: '2026-09-18T00:00:00.000Z',
+          },
+        ],
+      },
+    ];
+  }
+
+  public async capabilities(): Promise<SourceCapabilities> {
+    return this.configuredCapabilities;
+  }
+
+  public async poll(
+    request: SourcePollRequest,
+    context: SourceAdapterContext,
+  ): Promise<SourcePollResult> {
+    this.pollCalls.push({ context, request });
+    const index = Math.min(this.pollCalls.length - 1, this.pollResults.length - 1);
+    const result = this.pollResults[index];
+    if (result === undefined)
+      throw new Error('MockSourceAdapter requires at least one poll result.');
+    return result;
   }
 }
 
