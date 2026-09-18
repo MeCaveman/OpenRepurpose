@@ -29,7 +29,11 @@ import {
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import { createRedactingLogger, redactLogText, SourceRegistry } from '@openrepurpose/platform-sdk';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
-import { YouTubeOAuthService, YouTubeUploadJobHandler } from '@openrepurpose/youtube';
+import {
+  YouTubeOAuthService,
+  YouTubeSourceAdapter,
+  YouTubeUploadJobHandler,
+} from '@openrepurpose/youtube';
 import { TikTokDirectPostJobHandler, TikTokOAuthService } from '@openrepurpose/tiktok';
 import {
   FacebookReelsJobHandler,
@@ -73,11 +77,11 @@ export async function startServer(): Promise<void> {
   );
   const jobService = new JobService(jobRepository);
   const workflowService = new WorkflowService(new SqliteWorkflowRepository(database), jobService);
-  // Source adapters register here in later packets. The durable loop is intentionally server-owned,
-  // so polling continues with no browser session or web UI open.
+  // The durable loop is intentionally server-owned, so polling continues with no browser session
+  // or web UI open. The YouTube adapter performs detection/metadata only.
   const sourcePollingRunner = new SourcePollingRunner(
     new SqliteSourcePollingRepository(database),
-    new SourceRegistry(),
+    new SourceRegistry([new YouTubeSourceAdapter(youtubeOAuthService)]),
     jobService,
     {
       sourceContext: {

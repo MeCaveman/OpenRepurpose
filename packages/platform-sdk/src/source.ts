@@ -40,6 +40,8 @@ export interface SourceItemObservation {
 }
 
 export interface SourcePollRequest {
+  /** Adapter-specific, browser-safe source configuration persisted with the connection. */
+  readonly configuration: Readonly<Record<string, SourceJsonValue>>;
   readonly connectionExternalId: string;
   /** Adapter-owned opaque value. The application persists it only after the poll page is durable. */
   readonly cursor: string | null;

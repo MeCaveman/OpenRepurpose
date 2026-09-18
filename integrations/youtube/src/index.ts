@@ -19,6 +19,13 @@ import type {
   PublishMetadata,
   SecretReference,
   SecretStore,
+  SourceAdapter,
+  SourceAdapterContext,
+  SourceCapabilities,
+  SourceItemObservation,
+  SourceJsonValue,
+  SourcePollRequest,
+  SourcePollResult,
 } from '@openrepurpose/platform-sdk';
 import { PlatformError } from '@openrepurpose/platform-sdk';
 
@@ -114,6 +121,469 @@ const defaultUploadEndpoints = {
 };
 
 export const YOUTUBE_UPLOAD_JOB_TYPE = 'youtube.upload';
+
+const youtubeDataApiBaseUrl = 'https://www.googleapis.com/youtube/v3';
+
+export interface YouTubeSourceConfiguration {
+  readonly accountId: string;
+  readonly filters?: {
+    readonly includeShorts?: boolean;
+    readonly privacyStatuses?: readonly ('private' | 'public' | 'unlisted')[];
+    readonly publishedAfter?: string;
+    readonly shortsMaxDurationSeconds?: number;
+    readonly titleRegex?: string;
+    readonly titleSubstring?: string;
+  };
+}
+
+export interface YouTubeAccessTokenProvider {
+  refreshAccessToken(accountId: string): Promise<string>;
+}
+
+export interface YouTubeSourceAdapterOptions {
+  readonly apiBaseUrl?: string;
+  readonly http?: OAuthHttpClient;
+}
+
+interface YouTubeWatermark {
+  readonly externalId: string;
+  readonly publishedAt: string;
+}
+
+interface YouTubeSourceCursor {
+  readonly nextPageToken?: string;
+  readonly version: 1;
+  readonly watermark?: YouTubeWatermark;
+}
+
+interface YouTubeUploadCandidate {
+  readonly description: string;
+  readonly externalId: string;
+  readonly privacyStatus?: string;
+  readonly publishedAt: string;
+  readonly title: string;
+}
+
+/**
+ * Detection-only YouTube source adapter. It uses each channel's uploads playlist rather than
+ * `search.list`; no media bytes are requested or resolved here.
+ */
+export class YouTubeSourceAdapter implements SourceAdapter {
+  public readonly displayName = 'YouTube';
+  public readonly id = 'youtube';
+
+  private readonly apiBaseUrl: string;
+  private readonly http: OAuthHttpClient;
+  private readonly uploadsPlaylists = new Map<string, string>();
+
+  public constructor(
+    private readonly tokens: YouTubeAccessTokenProvider,
+    options: YouTubeSourceAdapterOptions = {},
+  ) {
+    this.apiBaseUrl = options.apiBaseUrl ?? youtubeDataApiBaseUrl;
+    this.http = options.http ?? fetch;
+  }
+
+  public async capabilities(): Promise<SourceCapabilities> {
+    return { eventIds: false, mediaResolution: ['local_original'], polling: true };
+  }
+
+  public async poll(
+    request: SourcePollRequest,
+    context: SourceAdapterContext,
+  ): Promise<SourcePollResult> {
+    const configuration = parseYouTubeSourceConfiguration(request.configuration);
+    const cursor = parseYouTubeCursor(request.cursor);
+    const accessToken = await this.tokens.refreshAccessToken(configuration.accountId);
+    const uploadsPlaylistId = await this.uploadsPlaylist(
+      request.connectionExternalId,
+      accessToken,
+      context.signal,
+    );
+    const page = await this.playlistPage(
+      uploadsPlaylistId,
+      cursor.nextPageToken,
+      accessToken,
+      context.signal,
+    );
+    const candidates = page.items
+      .map(parseUploadCandidate)
+      .filter((candidate): candidate is YouTubeUploadCandidate => candidate !== undefined);
+    const newCandidates = candidates.filter(
+      (candidate) =>
+        cursor.watermark === undefined || compareWatermark(candidate, cursor.watermark) > 0,
+    );
+    const durations =
+      configuration.filters?.includeShorts === undefined
+        ? new Map<string, number>()
+        : await this.durations(
+            newCandidates.map((candidate) => candidate.externalId),
+            accessToken,
+            context.signal,
+          );
+    const items = newCandidates
+      .filter((candidate) =>
+        matchesYouTubeFilters(
+          candidate,
+          durations.get(candidate.externalId),
+          configuration.filters,
+        ),
+      )
+      .map((candidate): SourceItemObservation => ({
+        externalId: candidate.externalId,
+        publishedAt: candidate.publishedAt,
+        metadata: {
+          description: candidate.description,
+          ...(durations.has(candidate.externalId)
+            ? { durationSeconds: durations.get(candidate.externalId)! }
+            : {}),
+          ...(candidate.privacyStatus === undefined
+            ? {}
+            : { privacyStatus: candidate.privacyStatus }),
+          title: candidate.title,
+          videoId: candidate.externalId,
+        },
+        media: {
+          availability: 'unknown',
+          resolutionStrategies: ['local_original'],
+          rightsRequirement: 'connection_authorization',
+        },
+      }));
+    const watermark = maximumWatermark(cursor.watermark, candidates);
+    return {
+      hasMore: page.nextPageToken !== undefined,
+      items,
+      cursor: encodeYouTubeCursor({
+        version: 1,
+        ...(watermark === undefined ? {} : { watermark }),
+        ...(page.nextPageToken === undefined ? {} : { nextPageToken: page.nextPageToken }),
+      }),
+    };
+  }
+
+  private async uploadsPlaylist(
+    channelId: string,
+    accessToken: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const cached = this.uploadsPlaylists.get(channelId);
+    if (cached !== undefined) return cached;
+    const url = new URL('channels', `${this.apiBaseUrl}/`);
+    url.searchParams.set('id', channelId);
+    url.searchParams.set('part', 'contentDetails');
+    const body = await this.get(url, accessToken, signal, 'YOUTUBE_CHANNEL_LOOKUP_FAILED');
+    const item = Array.isArray(body.items) ? safeJsonObject(body.items[0]) : undefined;
+    const details = safeJsonObject(item?.contentDetails);
+    const playlists = safeJsonObject(details?.relatedPlaylists);
+    if (typeof playlists?.uploads !== 'string' || playlists.uploads.length === 0)
+      throw platformError(
+        'authorization',
+        'YOUTUBE_UPLOADS_PLAYLIST_NOT_FOUND',
+        'The YouTube channel uploads playlist could not be found.',
+      );
+    this.uploadsPlaylists.set(channelId, playlists.uploads);
+    return playlists.uploads;
+  }
+
+  private async playlistPage(
+    playlistId: string,
+    pageToken: string | undefined,
+    accessToken: string,
+    signal: AbortSignal,
+  ): Promise<{ readonly items: readonly unknown[]; readonly nextPageToken?: string }> {
+    const url = new URL('playlistItems', `${this.apiBaseUrl}/`);
+    url.searchParams.set('playlistId', playlistId);
+    url.searchParams.set('part', 'snippet,contentDetails,status');
+    url.searchParams.set('maxResults', '50');
+    if (pageToken !== undefined) url.searchParams.set('pageToken', pageToken);
+    const body = await this.get(url, accessToken, signal, 'YOUTUBE_UPLOADS_POLL_FAILED');
+    return {
+      items: Array.isArray(body.items) ? body.items : [],
+      ...(typeof body.nextPageToken === 'string' && body.nextPageToken.length > 0
+        ? { nextPageToken: body.nextPageToken }
+        : {}),
+    };
+  }
+
+  private async durations(
+    ids: readonly string[],
+    accessToken: string,
+    signal: AbortSignal,
+  ): Promise<Map<string, number>> {
+    if (ids.length === 0) return new Map();
+    const url = new URL('videos', `${this.apiBaseUrl}/`);
+    url.searchParams.set('id', ids.join(','));
+    url.searchParams.set('part', 'contentDetails');
+    url.searchParams.set('maxResults', '50');
+    const body = await this.get(url, accessToken, signal, 'YOUTUBE_VIDEO_METADATA_FAILED');
+    const values = new Map<string, number>();
+    for (const raw of Array.isArray(body.items) ? body.items : []) {
+      const item = safeJsonObject(raw);
+      const details = safeJsonObject(item?.contentDetails);
+      if (typeof item?.id !== 'string' || typeof details?.duration !== 'string') continue;
+      const duration = parseIso8601DurationSeconds(details.duration);
+      if (duration !== undefined) values.set(item.id, duration);
+    }
+    return values;
+  }
+
+  private async get(
+    url: URL,
+    accessToken: string,
+    signal: AbortSignal,
+    code: string,
+  ): Promise<Record<string, unknown>> {
+    let response: Response;
+    try {
+      response = await this.http(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        method: 'GET',
+        signal,
+      });
+    } catch (error) {
+      throw platformError(
+        'network',
+        `${code}_NETWORK_ERROR`,
+        'YouTube could not be reached while detecting uploads.',
+        true,
+        error,
+      );
+    }
+    const body = await responseJson(response);
+    if (!response.ok)
+      throw platformError(
+        response.status === 401
+          ? 'authentication'
+          : response.status === 403
+            ? 'authorization'
+            : 'remote',
+        code,
+        response.status === 401
+          ? 'Reconnect the YouTube account to continue detecting uploads.'
+          : 'YouTube could not provide upload metadata.',
+        response.status === 429 || response.status >= 500,
+      );
+    return body ?? {};
+  }
+}
+
+function parseYouTubeSourceConfiguration(
+  value: Readonly<Record<string, SourceJsonValue>>,
+): YouTubeSourceConfiguration {
+  const accountId = value.accountId;
+  if (typeof accountId !== 'string' || accountId.trim().length === 0)
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_ACCOUNT_REQUIRED',
+      'Select a connected YouTube account for this source.',
+    );
+  const filtersValue = value.filters;
+  if (filtersValue === undefined) return { accountId };
+  if (filtersValue === null || typeof filtersValue !== 'object' || Array.isArray(filtersValue))
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_FILTERS_INVALID',
+      'The YouTube source filters are invalid.',
+    );
+  const filters = filtersValue as Readonly<Record<string, SourceJsonValue>>;
+  const titleRegex = filters.titleRegex;
+  if (titleRegex !== undefined && (typeof titleRegex !== 'string' || titleRegex.length > 256))
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_TITLE_REGEX_INVALID',
+      'The YouTube title regex is invalid.',
+    );
+  if (typeof titleRegex === 'string') {
+    try {
+      new RegExp(titleRegex, 'u');
+    } catch {
+      throw platformError(
+        'configuration',
+        'YOUTUBE_SOURCE_TITLE_REGEX_INVALID',
+        'The YouTube title regex is invalid.',
+      );
+    }
+  }
+  const publishedAfter = filters.publishedAfter;
+  if (
+    publishedAfter !== undefined &&
+    (typeof publishedAfter !== 'string' || !Number.isFinite(Date.parse(publishedAfter)))
+  )
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_PUBLISHED_AFTER_INVALID',
+      'The YouTube published-after filter is invalid.',
+    );
+  const privacyStatuses = filters.privacyStatuses;
+  if (
+    privacyStatuses !== undefined &&
+    (!Array.isArray(privacyStatuses) ||
+      privacyStatuses.some(
+        (status) => status !== 'private' && status !== 'public' && status !== 'unlisted',
+      ))
+  )
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_PRIVACY_FILTER_INVALID',
+      'The YouTube privacy filter is invalid.',
+    );
+  const includeShorts = filters.includeShorts;
+  const shortsMaxDurationSeconds = filters.shortsMaxDurationSeconds;
+  if (includeShorts !== undefined && typeof includeShorts !== 'boolean')
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_SHORTS_FILTER_INVALID',
+      'The YouTube Shorts filter is invalid.',
+    );
+  if (
+    shortsMaxDurationSeconds !== undefined &&
+    (typeof shortsMaxDurationSeconds !== 'number' ||
+      !Number.isInteger(shortsMaxDurationSeconds) ||
+      shortsMaxDurationSeconds <= 0)
+  )
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_SHORTS_FILTER_INVALID',
+      'The YouTube Shorts filter is invalid.',
+    );
+  if (filters.titleSubstring !== undefined && typeof filters.titleSubstring !== 'string')
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_TITLE_FILTER_INVALID',
+      'The YouTube title filter is invalid.',
+    );
+  return {
+    accountId,
+    filters: {
+      ...(typeof includeShorts === 'boolean' ? { includeShorts } : {}),
+      ...(Array.isArray(privacyStatuses)
+        ? { privacyStatuses: privacyStatuses as readonly ('private' | 'public' | 'unlisted')[] }
+        : {}),
+      ...(typeof publishedAfter === 'string' ? { publishedAfter } : {}),
+      ...(typeof shortsMaxDurationSeconds === 'number' ? { shortsMaxDurationSeconds } : {}),
+      ...(typeof titleRegex === 'string' ? { titleRegex } : {}),
+      ...(typeof filters.titleSubstring === 'string'
+        ? { titleSubstring: filters.titleSubstring }
+        : {}),
+    },
+  };
+}
+
+function parseYouTubeCursor(cursor: string | null): YouTubeSourceCursor {
+  if (cursor === null) return { version: 1 };
+  try {
+    const value = JSON.parse(cursor) as Partial<YouTubeSourceCursor>;
+    if (
+      value.version !== 1 ||
+      (value.nextPageToken !== undefined &&
+        (typeof value.nextPageToken !== 'string' || value.nextPageToken.length === 0))
+    )
+      throw new Error();
+    const watermark = value.watermark;
+    if (
+      watermark !== undefined &&
+      (typeof watermark.externalId !== 'string' ||
+        typeof watermark.publishedAt !== 'string' ||
+        !Number.isFinite(Date.parse(watermark.publishedAt)))
+    )
+      throw new Error();
+    return value as YouTubeSourceCursor;
+  } catch {
+    throw platformError(
+      'configuration',
+      'YOUTUBE_SOURCE_CURSOR_INVALID',
+      'The stored YouTube source cursor is invalid.',
+    );
+  }
+}
+
+function encodeYouTubeCursor(cursor: YouTubeSourceCursor): string {
+  return JSON.stringify(cursor);
+}
+
+function parseUploadCandidate(value: unknown): YouTubeUploadCandidate | undefined {
+  const item = safeJsonObject(value);
+  const snippet = safeJsonObject(item?.snippet);
+  const details = safeJsonObject(item?.contentDetails);
+  const status = safeJsonObject(item?.status);
+  const resource = safeJsonObject(snippet?.resourceId);
+  const externalId = typeof details?.videoId === 'string' ? details.videoId : resource?.videoId;
+  const publishedAt =
+    typeof details?.videoPublishedAt === 'string' ? details.videoPublishedAt : snippet?.publishedAt;
+  if (
+    typeof externalId !== 'string' ||
+    typeof publishedAt !== 'string' ||
+    !Number.isFinite(Date.parse(publishedAt)) ||
+    typeof snippet?.title !== 'string'
+  )
+    return undefined;
+  return {
+    externalId,
+    publishedAt: new Date(publishedAt).toISOString(),
+    title: snippet.title,
+    description: typeof snippet.description === 'string' ? snippet.description : '',
+    ...(typeof status?.privacyStatus === 'string' ? { privacyStatus: status.privacyStatus } : {}),
+  };
+}
+
+function compareWatermark(
+  candidate: Pick<YouTubeUploadCandidate, 'externalId' | 'publishedAt'>,
+  watermark: YouTubeWatermark,
+): number {
+  const published = Date.parse(candidate.publishedAt) - Date.parse(watermark.publishedAt);
+  return published === 0 ? candidate.externalId.localeCompare(watermark.externalId) : published;
+}
+
+function maximumWatermark(
+  current: YouTubeWatermark | undefined,
+  candidates: readonly YouTubeUploadCandidate[],
+): YouTubeWatermark | undefined {
+  let maximum = current;
+  for (const candidate of candidates)
+    if (maximum === undefined || compareWatermark(candidate, maximum) > 0)
+      maximum = { externalId: candidate.externalId, publishedAt: candidate.publishedAt };
+  return maximum;
+}
+
+function matchesYouTubeFilters(
+  candidate: YouTubeUploadCandidate,
+  durationSeconds: number | undefined,
+  filters: YouTubeSourceConfiguration['filters'],
+): boolean {
+  if (filters === undefined) return true;
+  if (
+    filters.publishedAfter !== undefined &&
+    Date.parse(candidate.publishedAt) <= Date.parse(filters.publishedAfter)
+  )
+    return false;
+  if (filters.titleSubstring !== undefined && !candidate.title.includes(filters.titleSubstring))
+    return false;
+  if (
+    filters.titleRegex !== undefined &&
+    !new RegExp(filters.titleRegex, 'u').test(candidate.title)
+  )
+    return false;
+  if (
+    filters.privacyStatuses !== undefined &&
+    (candidate.privacyStatus === undefined ||
+      !filters.privacyStatuses.includes(
+        candidate.privacyStatus as 'private' | 'public' | 'unlisted',
+      ))
+  )
+    return false;
+  if (filters.includeShorts !== undefined) {
+    if (durationSeconds === undefined) return false;
+    const isShort = durationSeconds <= (filters.shortsMaxDurationSeconds ?? 180);
+    if (filters.includeShorts !== isShort) return false;
+  }
+  return true;
+}
+
+function parseIso8601DurationSeconds(value: string): number | undefined {
+  const match = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(value);
+  if (match === null) return undefined;
+  return Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0);
+}
 
 export const youtubeDestinationCapabilities: DestinationCapabilities = {
   media: { kinds: ['video'] },

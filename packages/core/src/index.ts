@@ -817,7 +817,11 @@ export class SourcePollingRunner {
       let cursor = connection.cursor;
       for (let page = 0; page < this.maxPagesPerPoll; page += 1) {
         const result = await adapter.poll(
-          { connectionExternalId: connection.externalSourceId, cursor },
+          {
+            configuration: connection.configuration,
+            connectionExternalId: connection.externalSourceId,
+            cursor,
+          },
           { ...this.sourceContext, signal: controller.signal },
         );
         validateSourcePollResult(result);
