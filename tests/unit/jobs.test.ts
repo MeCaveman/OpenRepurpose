@@ -23,11 +23,14 @@ function testConfig(directory: string): ApplicationConfig {
     appUrl: new URL('http://127.0.0.1:3000'),
     bindHost: '127.0.0.1',
     jobRunner: {
+      accountConcurrency: 1,
+      authFailureThreshold: 3,
       baseRetryDelayMs: 1,
       concurrency: 2,
       leaseDurationMs: 1_000,
       maxRetryDelayMs: 10,
       pollIntervalMs: 25,
+      platformConcurrency: 2,
     },
     paths: {
       configDirectory: join(directory, 'config'),
@@ -116,6 +119,62 @@ describe('persistent jobs', () => {
       expect(service.show(job.id)?.attempts).toMatchObject([{ status: 'succeeded' }]);
   });
 
+  it('enforces persisted global, platform, and account concurrency scopes', async () => {
+    temporary = createTemporaryDatabase();
+    const repository = new SqliteJobRepository(temporary.database);
+    const service = new JobService(repository);
+    for (const accountId of ['youtube-a', 'youtube-a', 'youtube-b'])
+      service.create({ type: 'youtube.upload', input: { accountId, mediaId: accountId } });
+    service.create({
+      type: 'tiktok.direct-post',
+      input: { accountId: 'tiktok-a', mediaId: 'tiktok-a' },
+    });
+    const activeByPlatform = new Map<string, number>();
+    const activeByAccount = new Map<string, number>();
+    let activeGlobal = 0;
+    let maximumGlobal = 0;
+    let maximumYouTube = 0;
+    let maximumYouTubeA = 0;
+    const execute = async (input: unknown, platform: string) => {
+      const accountId = (input as { accountId: string }).accountId;
+      activeGlobal += 1;
+      activeByPlatform.set(platform, (activeByPlatform.get(platform) ?? 0) + 1);
+      activeByAccount.set(accountId, (activeByAccount.get(accountId) ?? 0) + 1);
+      maximumGlobal = Math.max(maximumGlobal, activeGlobal);
+      maximumYouTube = Math.max(maximumYouTube, activeByPlatform.get('youtube') ?? 0);
+      maximumYouTubeA = Math.max(maximumYouTubeA, activeByAccount.get('youtube-a') ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      activeGlobal -= 1;
+      activeByPlatform.set(platform, (activeByPlatform.get(platform) ?? 1) - 1);
+      activeByAccount.set(accountId, (activeByAccount.get(accountId) ?? 1) - 1);
+    };
+    const runner = new JobRunner(
+      repository,
+      [
+        { type: 'youtube.upload', execute: (input) => execute(input, 'youtube') },
+        { type: 'tiktok.direct-post', execute: (input) => execute(input, 'tiktok') },
+      ],
+      {
+        accountConcurrency: 1,
+        concurrency: 3,
+        platformConcurrency: 2,
+        leaseDurationMs: 1_000,
+        pollIntervalMs: 25,
+      },
+    );
+
+    await runner.runOnce();
+    await runner.runOnce();
+
+    expect(maximumGlobal).toBe(3);
+    expect(maximumYouTube).toBe(2);
+    expect(maximumYouTubeA).toBe(1);
+    expect(service.list().every((job) => job.status === 'succeeded')).toBe(true);
+    expect(service.list().find((job) => job.type === 'youtube.upload')).toMatchObject({
+      platformId: 'youtube',
+    });
+  });
+
   it('retries only classified failures with exponential backoff foundations', async () => {
     temporary = createTemporaryDatabase();
     const repository = new SqliteJobRepository(temporary.database);
@@ -153,6 +212,173 @@ describe('persistent jobs', () => {
     expect(details?.job.status).toBe('succeeded');
     expect(details?.attempts.map((attempt) => attempt.status)).toEqual(['failed', 'succeeded']);
     expect(details?.attempts[0]).toMatchObject({ retryable: true, errorCode: 'FAKE_TRANSIENT' });
+  });
+
+  it('persists Retry-After cooldowns that block other work on the same platform', async () => {
+    temporary = createTemporaryDatabase();
+    const repository = new SqliteJobRepository(temporary.database);
+    let now = new Date('2026-01-01T00:00:00.000Z');
+    const service = new JobService(repository, () => now);
+    service.create({
+      type: 'youtube.upload',
+      input: { accountId: 'account-a', mediaId: 'media-a' },
+      maxAttempts: 2,
+    });
+    service.create({
+      type: 'youtube.upload',
+      input: { accountId: 'account-b', mediaId: 'media-b' },
+    });
+    const executions: string[] = [];
+    let firstAccount: string | undefined;
+    const runner = new JobRunner(
+      repository,
+      [
+        {
+          type: 'youtube.upload',
+          execute: async (input) => {
+            const accountId = (input as { accountId: string }).accountId;
+            executions.push(accountId);
+            if (executions.length === 1) {
+              firstAccount = accountId;
+              throw new JobExecutionError(
+                'YOUTUBE_UPLOAD_RATE_LIMITED',
+                true,
+                'YouTube asked this client to wait.',
+                1_000,
+                'rate_limit',
+              );
+            }
+          },
+        },
+      ],
+      {
+        baseRetryDelayMs: 0,
+        concurrency: 1,
+        leaseDurationMs: 1_000,
+        maxRetryDelayMs: 0,
+        now: () => now,
+        pollIntervalMs: 25,
+      },
+    );
+
+    await runner.runOnce();
+    expect(
+      service
+        .list()
+        .map((job) => job.status)
+        .sort(),
+    ).toEqual(['pending', 'retrying']);
+    expect(
+      temporary.database.client
+        .prepare('SELECT platform_id, cooldown_until FROM job_platform_controls')
+        .all(),
+    ).toEqual([{ platform_id: 'youtube', cooldown_until: now.getTime() + 1_000 }]);
+    now = new Date(now.getTime() + 999);
+    await new JobRunner(repository, [{ type: 'youtube.upload', execute: async () => undefined }], {
+      concurrency: 1,
+      leaseDurationMs: 1_000,
+      now: () => now,
+      pollIntervalMs: 25,
+    }).runOnce();
+    expect(service.list().filter((job) => job.status === 'pending')).toHaveLength(1);
+
+    now = new Date(now.getTime() + 1);
+    await runner.runOnce();
+    expect(executions).toHaveLength(2);
+    expect(new Set(executions)).toEqual(new Set(['account-a', 'account-b']));
+    expect(firstAccount).toBeDefined();
+  });
+
+  it('pauses an account after repeated auth failures until it is manually resumed', async () => {
+    temporary = createTemporaryDatabase();
+    const repository = new SqliteJobRepository(temporary.database);
+    const service = new JobService(repository);
+    const failed = service.create({
+      type: 'youtube.upload',
+      input: { accountId: 'auth-account', mediaId: 'media-auth' },
+      maxAttempts: 1,
+    }).job;
+    let executions = 0;
+    const runner = new JobRunner(
+      repository,
+      [
+        {
+          type: 'youtube.upload',
+          execute: async () => {
+            executions += 1;
+            if (executions <= 3)
+              throw new JobExecutionError(
+                'YOUTUBE_TOKEN_EXPIRED',
+                false,
+                'Reconnect the YouTube account.',
+              );
+          },
+        },
+      ],
+      { authFailureThreshold: 3, concurrency: 1, leaseDurationMs: 1_000, pollIntervalMs: 25 },
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt > 0) expect(service.retry(failed.id)?.status).toBe('pending');
+      await runner.runOnce();
+    }
+    expect(service.accountControl('youtube', 'auth-account')).toMatchObject({
+      authFailureCount: 3,
+      pauseReason: 'YOUTUBE_TOKEN_EXPIRED',
+      status: 'paused',
+    });
+    expect(service.retry(failed.id)?.status).toBe('pending');
+    await runner.runOnce();
+    expect(executions).toBe(3);
+
+    service.resumeAccount('youtube', 'auth-account');
+    await runner.runOnce();
+    expect(executions).toBe(4);
+    expect(service.show(failed.id)?.job.status).toBe('succeeded');
+  });
+
+  it('persists queue pause/resume and drains active work before returning', async () => {
+    temporary = createTemporaryDatabase();
+    const repository = new SqliteJobRepository(temporary.database);
+    const service = new JobService(repository);
+    service.create({ type: 'fake.queue-control', input: {} });
+    let executions = 0;
+    const began = deferred();
+    const release = deferred();
+    const runner = new JobRunner(
+      repository,
+      [
+        {
+          type: 'fake.queue-control',
+          execute: async () => {
+            executions += 1;
+            began.resolve();
+            await release.promise;
+          },
+        },
+      ],
+      { concurrency: 1, leaseDurationMs: 1_000, pollIntervalMs: 25 },
+    );
+
+    expect(service.pauseQueue().mode).toBe('paused');
+    expect(new JobService(new SqliteJobRepository(temporary.database)).queueState().mode).toBe(
+      'paused',
+    );
+    await runner.runOnce();
+    expect(executions).toBe(0);
+    service.resumeQueue();
+    const running = runner.runOnce();
+    await began.promise;
+    let drained = false;
+    const draining = runner.drain().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    expect(service.queueState().mode).toBe('draining');
+    release.resolve();
+    await Promise.all([running, draining]);
+    expect(drained).toBe(true);
   });
 
   it('recovers an expired lease without losing attempt history', async () => {
@@ -280,8 +506,22 @@ describe('persistent jobs', () => {
 
   it('exposes job history and cancellation through protected HTTP routes', async () => {
     temporary = createTemporaryDatabase();
-    const service = new JobService(new SqliteJobRepository(temporary.database));
+    const repository = new SqliteJobRepository(temporary.database);
+    const service = new JobService(repository);
     const job = service.create({ type: 'fake.http', input: { source: 'test' } }).job;
+    const failed = service.create({ type: 'fake.failed', input: {} }).job;
+    repository.claimNext(
+      ['fake.failed'],
+      'http-test-worker',
+      new Date(),
+      new Date(Date.now() + 1_000),
+    );
+    repository.fail(
+      failed.id,
+      'http-test-worker',
+      { code: 'TEST_FAILURE', message: 'Safe test failure.', retryable: false },
+      new Date(),
+    );
     const config = testConfig(temporary.directory);
     server = buildServer({
       config,
@@ -293,7 +533,9 @@ describe('persistent jobs', () => {
 
     const list = await server.inject({ method: 'GET', url: '/api/jobs', headers });
     expect(list.statusCode).toBe(200);
-    expect(list.json<{ jobs: Array<{ id: string }> }>().jobs[0]?.id).toBe(job.id);
+    expect(list.json<{ jobs: Array<{ id: string }> }>().jobs).toContainEqual(
+      expect.objectContaining({ id: job.id }),
+    );
 
     const session = await server.inject({ method: 'GET', url: '/api/session', headers });
     const { csrfToken } = session.json<{ csrfToken: string }>();
@@ -309,6 +551,34 @@ describe('persistent jobs', () => {
     });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json<{ job: { status: string } }>().job.status).toBe('cancelled');
+
+    const mutationHeaders = {
+      ...headers,
+      origin: config.appUrl.origin,
+      cookie: String(session.headers['set-cookie']),
+      'x-csrf-token': csrfToken,
+    };
+    const retried = await server.inject({
+      method: 'POST',
+      url: `/api/jobs/${failed.id}/retry`,
+      headers: mutationHeaders,
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json<{ job: { status: string } }>().job.status).toBe('pending');
+    const paused = await server.inject({
+      method: 'POST',
+      url: '/api/jobs/queue/pause',
+      headers: mutationHeaders,
+    });
+    expect(paused.json<{ queue: { mode: string } }>().queue.mode).toBe('paused');
+    const queue = await server.inject({ method: 'GET', url: '/api/jobs/queue', headers });
+    expect(queue.json<{ queue: { mode: string } }>().queue.mode).toBe('paused');
+    const resumed = await server.inject({
+      method: 'POST',
+      url: '/api/jobs/queue/resume',
+      headers: mutationHeaders,
+    });
+    expect(resumed.json<{ queue: { mode: string } }>().queue.mode).toBe('running');
   });
 
   it('supports JSON jobs list/show through the CLI without a running server', async () => {

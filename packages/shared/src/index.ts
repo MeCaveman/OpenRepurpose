@@ -21,11 +21,14 @@ export interface ApplicationConfig {
   readonly bindHost: string;
   readonly developmentServerUrl?: URL;
   readonly jobRunner: {
+    readonly accountConcurrency: number;
+    readonly authFailureThreshold: number;
     readonly baseRetryDelayMs: number;
     readonly concurrency: number;
     readonly leaseDurationMs: number;
     readonly maxRetryDelayMs: number;
     readonly pollIntervalMs: number;
+    readonly platformConcurrency: number;
   };
   readonly watchedFolder?: { readonly pollIntervalMs: number; readonly settleMs: number };
   readonly paths: ApplicationPaths;
@@ -112,6 +115,9 @@ export function loadApplicationConfig(
       APP_URL: httpUrlSchema().default('http://127.0.0.1:3000'),
       DEV_SERVER_URL: httpUrlSchema().optional(),
       JOB_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
+      JOB_PLATFORM_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
+      JOB_ACCOUNT_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(1),
+      JOB_AUTH_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
       JOB_LEASE_MS: z.coerce.number().int().min(1_000).default(30_000),
       JOB_POLL_INTERVAL_MS: z.coerce.number().int().min(25).default(250),
       JOB_RETRY_BASE_MS: z.coerce.number().int().min(0).default(1_000),
@@ -150,11 +156,14 @@ export function loadApplicationConfig(
       ? {}
       : { developmentServerUrl: new URL(parsed.DEV_SERVER_URL) }),
     jobRunner: {
+      accountConcurrency: parsed.JOB_ACCOUNT_CONCURRENCY,
+      authFailureThreshold: parsed.JOB_AUTH_FAILURE_THRESHOLD,
       baseRetryDelayMs: parsed.JOB_RETRY_BASE_MS,
       concurrency: parsed.JOB_CONCURRENCY,
       leaseDurationMs: parsed.JOB_LEASE_MS,
       maxRetryDelayMs: parsed.JOB_RETRY_MAX_MS,
       pollIntervalMs: parsed.JOB_POLL_INTERVAL_MS,
+      platformConcurrency: parsed.JOB_PLATFORM_CONCURRENCY,
     },
     watchedFolder: {
       pollIntervalMs: parsed.WATCH_POLL_INTERVAL_MS,

@@ -8,11 +8,14 @@ const config: ApplicationConfig = {
   appUrl: new URL('http://127.0.0.1:3000'),
   bindHost: '127.0.0.1',
   jobRunner: {
+    accountConcurrency: 1,
+    authFailureThreshold: 3,
     baseRetryDelayMs: 1_000,
     concurrency: 2,
     leaseDurationMs: 30_000,
     maxRetryDelayMs: 60_000,
     pollIntervalMs: 250,
+    platformConcurrency: 2,
   },
   paths: {
     configDirectory: resolve('test-results/config'),

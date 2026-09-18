@@ -58,6 +58,10 @@ describe('application configuration', () => {
         SESSION_KEY_PATH: '/config/custom-session.key',
         SECRET_KEY_PATH: '/config/custom-secret.key',
         SECRET_VAULT_PATH: '/data/custom-secrets.json',
+        JOB_CONCURRENCY: '8',
+        JOB_PLATFORM_CONCURRENCY: '4',
+        JOB_ACCOUNT_CONCURRENCY: '2',
+        JOB_AUTH_FAILURE_THRESHOLD: '5',
       },
       linuxRuntime,
     );
@@ -68,6 +72,12 @@ describe('application configuration', () => {
     expect(config.paths.secretKeyPath).toBe('/config/custom-secret.key');
     expect(config.paths.secretVaultPath).toBe('/data/custom-secrets.json');
     expect(config.port).toBe(8080);
+    expect(config.jobRunner).toMatchObject({
+      concurrency: 8,
+      platformConcurrency: 4,
+      accountConcurrency: 2,
+      authFailureThreshold: 5,
+    });
   });
 
   it('rejects invalid network configuration', () => {

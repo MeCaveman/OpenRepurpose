@@ -213,6 +213,7 @@ export type JobStatus = 'pending' | 'running' | 'retrying' | 'succeeded' | 'fail
 export type JobAttemptStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface Job {
+  readonly accountId?: string;
   readonly attemptCount: number;
   readonly availableAt: Date;
   readonly cancellationRequestedAt?: Date;
@@ -226,6 +227,7 @@ export interface Job {
   readonly leaseExpiresAt?: Date;
   readonly leaseOwner?: string;
   readonly maxAttempts: number;
+  readonly platformId?: string;
   readonly status: JobStatus;
   readonly type: string;
   readonly updatedAt: Date;
@@ -245,12 +247,14 @@ export interface JobAttempt {
 }
 
 export interface EnqueueJobInput {
+  readonly accountId?: string;
   readonly availableAt?: Date;
   readonly id: string;
   readonly idempotencyKey?: string;
   readonly input: JsonValue;
   readonly maxAttempts: number;
   readonly now: Date;
+  readonly platformId?: string;
   readonly type: string;
 }
 
@@ -260,10 +264,35 @@ export interface EnqueueJobResult {
 }
 
 export interface JobFailure {
+  readonly category?: JobFailureCategory;
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
+}
+
+export type JobFailureCategory = 'authentication' | 'authorization' | 'rate_limit';
+export type JobQueueMode = 'draining' | 'paused' | 'running';
+
+export interface JobQueueState {
+  readonly mode: JobQueueMode;
+  readonly updatedAt: Date;
+}
+
+export interface JobAccountControl {
+  readonly accountId: string;
+  readonly authFailureCount: number;
+  readonly cooldownUntil?: Date;
+  readonly pauseReason?: string;
+  readonly platformId: string;
+  readonly status: 'active' | 'paused';
+  readonly updatedAt: Date;
+}
+
+export interface JobClaimLimits {
+  readonly accountConcurrency: number;
+  readonly globalConcurrency: number;
+  readonly platformConcurrency: number;
 }
 
 export interface JobRepository {
@@ -273,10 +302,21 @@ export interface JobRepository {
     workerId: string,
     now: Date,
     leaseExpiresAt: Date,
+    limits?: JobClaimLimits,
   ): Job | undefined;
   complete(jobId: string, workerId: string, now: Date): boolean;
+  countRunning(): number;
   enqueue(input: EnqueueJobInput): EnqueueJobResult;
-  fail(jobId: string, workerId: string, failure: JobFailure, now: Date, retryAt?: Date): boolean;
+  fail(
+    jobId: string,
+    workerId: string,
+    failure: JobFailure,
+    now: Date,
+    retryAt?: Date,
+    authFailureThreshold?: number,
+  ): boolean;
+  getAccountControl(platformId: string, accountId: string): JobAccountControl | undefined;
+  getQueueState(): JobQueueState;
   findById(id: string): Job | undefined;
   heartbeat(jobId: string, workerId: string, now: Date, leaseExpiresAt: Date): boolean;
   isCancellationRequested(jobId: string): boolean;
@@ -284,6 +324,9 @@ export interface JobRepository {
   listAttempts(jobId: string): readonly JobAttempt[];
   recoverExpiredLeases(now: Date): number;
   requestCancellation(id: string, now: Date): Job | undefined;
+  resumeAccount(platformId: string, accountId: string, now: Date): JobAccountControl;
+  retry(id: string, now: Date): Job | undefined;
+  setQueueMode(mode: JobQueueMode, now: Date): JobQueueState;
 }
 
 /** Durable external-operation checkpoint owned by a destination job. */
@@ -305,10 +348,12 @@ export interface DestinationJobRepository {
 }
 
 export interface CreateJobInput {
+  readonly accountId?: string;
   readonly availableAt?: Date;
   readonly idempotencyKey?: string;
   readonly input: JsonValue;
   readonly maxAttempts?: number;
+  readonly platformId?: string;
   readonly type: string;
 }
 
@@ -344,12 +389,17 @@ export class JobService {
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1)
       throw new Error('maxAttempts must be a positive integer.');
     const now = this.now();
+    const inferredScope = inferJobConcurrencyScope(input.type, input.input);
+    const platformId = input.platformId ?? inferredScope?.platformId;
+    const accountId = input.accountId ?? inferredScope?.accountId;
     return this.repository.enqueue({
       id: randomUUID(),
       type: input.type,
       input: immutableJsonSnapshot(input.input),
       maxAttempts,
       now,
+      ...(platformId === undefined ? {} : { platformId }),
+      ...(accountId === undefined ? {} : { accountId }),
       ...(input.availableAt === undefined ? {} : { availableAt: input.availableAt }),
       ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
     });
@@ -367,6 +417,57 @@ export class JobService {
   public cancel(id: string): Job | undefined {
     return this.repository.requestCancellation(id, this.now());
   }
+
+  public retry(id: string): Job | undefined {
+    return this.repository.retry(id, this.now());
+  }
+
+  public queueState(): JobQueueState {
+    return this.repository.getQueueState();
+  }
+
+  public pauseQueue(): JobQueueState {
+    return this.repository.setQueueMode('paused', this.now());
+  }
+
+  public resumeQueue(): JobQueueState {
+    return this.repository.setQueueMode('running', this.now());
+  }
+
+  public drainQueue(): JobQueueState {
+    return this.repository.setQueueMode('draining', this.now());
+  }
+
+  public accountControl(platformId: string, accountId: string): JobAccountControl | undefined {
+    return this.repository.getAccountControl(platformId, accountId);
+  }
+
+  public resumeAccount(platformId: string, accountId: string): JobAccountControl {
+    return this.repository.resumeAccount(platformId, accountId, this.now());
+  }
+}
+
+function inferJobConcurrencyScope(
+  type: string,
+  input: JsonValue,
+): { readonly accountId: string; readonly platformId: string } | undefined {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const record = input as Readonly<Record<string, JsonValue>>;
+  const definition =
+    type === 'youtube.upload'
+      ? { accountKey: 'accountId', platformId: 'youtube' }
+      : type === 'tiktok.direct-post'
+        ? { accountKey: 'accountId', platformId: 'tiktok' }
+        : type === 'instagram.reels.publish'
+          ? { accountKey: 'targetId', platformId: 'instagram' }
+          : type === 'facebook.reels.publish'
+            ? { accountKey: 'targetId', platformId: 'facebook' }
+            : undefined;
+  if (definition === undefined) return undefined;
+  const accountId = record[definition.accountKey];
+  return typeof accountId === 'string' && accountId.trim().length > 0
+    ? { accountId, platformId: definition.platformId }
+    : undefined;
 }
 
 export interface JobHandlerContext {
@@ -388,13 +489,30 @@ export class JobExecutionError extends Error {
     public readonly retryable: boolean,
     public readonly publicMessage: string,
     public readonly retryAfterMs?: number,
+    public readonly category?: JobFailureCategory,
   ) {
     super(publicMessage);
     this.name = 'JobExecutionError';
   }
 }
 
+function classifiedJobFailureCategory(error: JobExecutionError): JobFailureCategory | undefined {
+  if (error.category !== undefined) return error.category;
+  if (
+    /(REAUTHORIZATION|TOKEN_(?:EXPIRED|REVOKED|MISSING|INVALID)|UNAUTHORIZED|AUTHENTICATION|(?:^|_)AUTH(?:_|$))/.test(
+      error.code,
+    )
+  )
+    return 'authentication';
+  if (/(PERMISSION|FORBIDDEN|SCOPE_NOT_AUTHORIZED|AUTHORIZATION)/.test(error.code))
+    return 'authorization';
+  if (/RATE_LIMIT/.test(error.code)) return 'rate_limit';
+  return undefined;
+}
+
 export interface JobRunnerOptions {
+  readonly accountConcurrency?: number;
+  readonly authFailureThreshold?: number;
   readonly baseRetryDelayMs?: number;
   readonly concurrency?: number;
   readonly leaseDurationMs?: number;
@@ -402,14 +520,17 @@ export interface JobRunnerOptions {
   readonly now?: () => Date;
   readonly onJobSettled?: (job: Job) => Promise<void> | void;
   readonly pollIntervalMs?: number;
+  readonly platformConcurrency?: number;
   readonly random?: () => number;
   readonly workerId?: string;
 }
 
 /** SQLite-independent persistent runner with bounded concurrency and cooperative cancellation. */
 export class JobRunner {
+  private readonly accountConcurrency: number;
   private readonly active = new Set<Promise<void>>();
   private readonly baseRetryDelayMs: number;
+  private readonly authFailureThreshold: number;
   private readonly concurrency: number;
   private filling = false;
   private readonly handlers = new Map<string, JobHandler>();
@@ -419,6 +540,7 @@ export class JobRunner {
   private readonly onJobSettled: ((job: Job) => Promise<void> | void) | undefined;
   private pollTimer: NodeJS.Timeout | undefined;
   private readonly pollIntervalMs: number;
+  private readonly platformConcurrency: number;
   private readonly random: () => number;
   private started = false;
   private stopping = false;
@@ -430,6 +552,9 @@ export class JobRunner {
     options: JobRunnerOptions = {},
   ) {
     this.concurrency = options.concurrency ?? 2;
+    this.platformConcurrency = options.platformConcurrency ?? this.concurrency;
+    this.accountConcurrency = options.accountConcurrency ?? 1;
+    this.authFailureThreshold = options.authFailureThreshold ?? 3;
     this.leaseDurationMs = options.leaseDurationMs ?? 30_000;
     this.pollIntervalMs = options.pollIntervalMs ?? 250;
     this.baseRetryDelayMs = options.baseRetryDelayMs ?? 1_000;
@@ -440,6 +565,12 @@ export class JobRunner {
     this.workerId = options.workerId ?? randomUUID();
     if (!Number.isInteger(this.concurrency) || this.concurrency < 1)
       throw new Error('Job concurrency must be a positive integer.');
+    if (!Number.isInteger(this.platformConcurrency) || this.platformConcurrency < 1)
+      throw new Error('Platform concurrency must be a positive integer.');
+    if (!Number.isInteger(this.accountConcurrency) || this.accountConcurrency < 1)
+      throw new Error('Account concurrency must be a positive integer.');
+    if (!Number.isInteger(this.authFailureThreshold) || this.authFailureThreshold < 1)
+      throw new Error('Auth failure threshold must be a positive integer.');
     if (this.leaseDurationMs < 20) throw new Error('Job leases must be at least 20ms.');
     if (this.pollIntervalMs < 10) throw new Error('Job polling must be at least 10ms.');
     if (this.baseRetryDelayMs < 0 || this.maxRetryDelayMs < this.baseRetryDelayMs)
@@ -469,6 +600,20 @@ export class JobRunner {
     this.started = false;
   }
 
+  /** Persistently stops new claims and waits for all active handlers to settle. */
+  public async drain(): Promise<JobQueueState> {
+    const state = this.repository.setQueueMode('draining', this.now());
+    while (this.repository.countRunning() > 0) {
+      this.repository.recoverExpiredLeases(this.now());
+      if (this.repository.countRunning() === 0) break;
+      const delay = new Promise<void>((resolve) => setTimeout(resolve, this.pollIntervalMs));
+      await (this.active.size === 0
+        ? delay
+        : Promise.race([Promise.allSettled([...this.active]), delay]));
+    }
+    return state;
+  }
+
   /** Claims up to the configured capacity and waits for just those claims; useful for deterministic tests. */
   public async runOnce(): Promise<void> {
     if (this.stopping || this.filling || this.handlers.size === 0) return;
@@ -483,6 +628,11 @@ export class JobRunner {
           this.workerId,
           now,
           new Date(now.getTime() + this.leaseDurationMs),
+          {
+            accountConcurrency: this.accountConcurrency,
+            globalConcurrency: this.concurrency,
+            platformConcurrency: this.platformConcurrency,
+          },
         );
         if (job === undefined) break;
         const execution = this.execute(job);
@@ -541,12 +691,15 @@ export class JobRunner {
       if (controller.signal.aborted || this.repository.isCancellationRequested(job.id)) {
         this.repository.cancelRunning(job.id, this.workerId, this.now());
       } else {
+        const category =
+          error instanceof JobExecutionError ? classifiedJobFailureCategory(error) : undefined;
         const failure: JobFailure =
           error instanceof JobExecutionError
             ? {
                 code: error.code,
                 message: error.publicMessage,
                 retryable: error.retryable,
+                ...(category === undefined ? {} : { category }),
                 ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
               }
             : { code: 'UNEXPECTED_JOB_ERROR', message: 'Job execution failed.', retryable: false };
@@ -556,7 +709,8 @@ export class JobRunner {
           this.workerId,
           failure,
           this.now(),
-          ...(canRetry ? [this.retryAt(job, failure.retryAfterMs)] : []),
+          canRetry ? this.retryAt(job, failure.retryAfterMs) : undefined,
+          this.authFailureThreshold,
         );
       }
     } finally {

@@ -43,6 +43,8 @@ export const jobs = sqliteTable(
     cancellationRequestedAt: integer('cancellation_requested_at', { mode: 'timestamp_ms' }),
     lastErrorCode: text('last_error_code'),
     lastErrorMessage: text('last_error_message'),
+    platformId: text('platform_id'),
+    accountId: text('account_id'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
     completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
@@ -51,6 +53,8 @@ export const jobs = sqliteTable(
     uniqueIndex('jobs_idempotency_key_idx').on(table.idempotencyKey),
     index('jobs_status_available_at_idx').on(table.status, table.availableAt),
     index('jobs_lease_expires_at_idx').on(table.leaseExpiresAt),
+    index('jobs_running_platform_idx').on(table.status, table.platformId),
+    index('jobs_running_account_idx').on(table.status, table.platformId, table.accountId),
   ],
 );
 

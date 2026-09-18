@@ -11,6 +11,7 @@ import type { TikTokOAuthService } from '@openrepurpose/tiktok';
 import type { MetaOAuthService } from '@openrepurpose/meta';
 import type {
   JobService,
+  JobRunner,
   JobStatus,
   DestinationJobRepository,
   MediaImportService,
@@ -18,6 +19,7 @@ import type {
   WorkflowInput,
   WorkflowService,
   SourceService,
+  SourceWorkflowCoordinator,
 } from '@openrepurpose/core';
 
 declare module '@fastify/secure-session' {
@@ -36,6 +38,7 @@ export interface LoggerDestination {
 export interface BuildServerOptions {
   readonly config: ApplicationConfig;
   readonly jobService?: JobService;
+  readonly jobRunner?: Pick<JobRunner, 'drain'>;
   readonly destinationJobRepository?: DestinationJobRepository;
   readonly logger?: boolean;
   readonly loggerDestination?: LoggerDestination;
@@ -44,6 +47,7 @@ export interface BuildServerOptions {
   readonly metaOAuthService?: MetaOAuthService;
   readonly sessionKey: Buffer;
   readonly sourceService?: SourceService;
+  readonly sourceWorkflowCoordinator?: Pick<SourceWorkflowCoordinator, 'retryFailedDestinations'>;
   readonly staticRoot?: false | string;
   readonly tiktokOAuthService?: TikTokOAuthService;
   readonly youtubeOAuthService?: YouTubeOAuthService;
@@ -523,7 +527,56 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         ? reply.code(404).send({ error: 'Job not found.', code: 'JOB_NOT_FOUND' })
         : { job };
     });
+    server.post<{ Params: { id: string } }>('/api/jobs/:id/retry', async (request, reply) => {
+      const existing = options.jobService!.show(request.params.id)?.job;
+      if (existing === undefined)
+        return reply.code(404).send({ error: 'Job not found.', code: 'JOB_NOT_FOUND' });
+      if (existing.status !== 'failed')
+        return reply
+          .code(409)
+          .send({ error: 'Only failed jobs can be retried.', code: 'JOB_NOT_FAILED' });
+      return { job: options.jobService!.retry(request.params.id)! };
+    });
+    server.get('/api/jobs/queue', async () => ({ queue: options.jobService!.queueState() }));
+    server.post('/api/jobs/queue/pause', async () => ({
+      queue: options.jobService!.pauseQueue(),
+    }));
+    server.post('/api/jobs/queue/resume', async () => ({
+      queue: options.jobService!.resumeQueue(),
+    }));
+    server.post('/api/jobs/queue/drain', async () => ({
+      queue:
+        options.jobRunner === undefined
+          ? options.jobService!.drainQueue()
+          : await options.jobRunner.drain(),
+    }));
+    server.get<{ Params: { accountId: string; platformId: string } }>(
+      '/api/jobs/accounts/:platformId/:accountId/control',
+      async (request) => ({
+        control: options.jobService!.accountControl(
+          request.params.platformId,
+          request.params.accountId,
+        ),
+      }),
+    );
+    server.post<{ Params: { accountId: string; platformId: string } }>(
+      '/api/jobs/accounts/:platformId/:accountId/resume',
+      async (request) => ({
+        control: options.jobService!.resumeAccount(
+          request.params.platformId,
+          request.params.accountId,
+        ),
+      }),
+    );
   }
+
+  if (options.sourceWorkflowCoordinator !== undefined)
+    server.post<{ Params: { id: string } }>(
+      '/api/source-executions/:id/retry-failed-destinations',
+      async (request) => ({
+        retried: options.sourceWorkflowCoordinator!.retryFailedDestinations(request.params.id),
+      }),
+    );
 
   if (options.mediaRepository !== undefined) {
     server.get('/api/media', async () => ({ media: options.mediaRepository!.list() }));

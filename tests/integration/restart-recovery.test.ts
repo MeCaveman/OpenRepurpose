@@ -23,6 +23,72 @@ function json(body: unknown, status = 200): Response {
 }
 
 describe('restart recovery', () => {
+  it('restores queue mode and account circuit state from SQLite', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-controls-restart-'));
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    const firstDatabase = openDatabase(databasePath);
+    runMigrations(firstDatabase);
+    const firstRepository = new SqliteJobRepository(firstDatabase);
+    const firstService = new JobService(firstRepository, () => now);
+    const job = firstService.create({
+      type: 'youtube.upload',
+      input: { accountId: 'restart-account', mediaId: 'restart-media' },
+      maxAttempts: 1,
+    }).job;
+    firstRepository.claimNext(
+      ['youtube.upload'],
+      'first-worker',
+      now,
+      new Date(now.getTime() + 1_000),
+    );
+    firstRepository.fail(
+      job.id,
+      'first-worker',
+      {
+        category: 'authentication',
+        code: 'YOUTUBE_TOKEN_REVOKED',
+        message: 'Reconnect the YouTube account.',
+        retryable: false,
+      },
+      now,
+      undefined,
+      1,
+    );
+    firstService.pauseQueue();
+    firstDatabase.close();
+
+    const secondDatabase = openDatabase(databasePath);
+    try {
+      runMigrations(secondDatabase);
+      const repository = new SqliteJobRepository(secondDatabase);
+      const service = new JobService(repository, () => new Date(now.getTime() + 1));
+      expect(service.queueState().mode).toBe('paused');
+      expect(service.accountControl('youtube', 'restart-account')).toMatchObject({
+        authFailureCount: 1,
+        status: 'paused',
+      });
+      expect(service.show(job.id)?.job).toMatchObject({
+        accountId: 'restart-account',
+        platformId: 'youtube',
+        status: 'failed',
+      });
+
+      service.resumeQueue();
+      service.resumeAccount('youtube', 'restart-account');
+      service.retry(job.id);
+      await new JobRunner(
+        repository,
+        [{ type: 'youtube.upload', execute: async () => undefined }],
+        { concurrency: 1, now: () => new Date(now.getTime() + 1) },
+      ).runOnce();
+      expect(service.show(job.id)?.job.status).toBe('succeeded');
+    } finally {
+      secondDatabase.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('reopens the same SQLite database and resumes an abandoned running job', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-restart-'));
     const databasePath = join(directory, 'openrepurpose.sqlite');

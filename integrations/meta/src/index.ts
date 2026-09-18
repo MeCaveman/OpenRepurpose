@@ -16,7 +16,7 @@ import type {
 } from '@openrepurpose/core';
 import { JobExecutionError } from '@openrepurpose/core';
 import type { SecretReference, SecretStore } from '@openrepurpose/platform-sdk';
-import { PlatformError } from '@openrepurpose/platform-sdk';
+import { parseRetryAfterMs, PlatformError } from '@openrepurpose/platform-sdk';
 
 export const META_SCOPES = [
   'public_profile',
@@ -555,8 +555,7 @@ function jobInput(value: JsonValue): InstagramReelsJobInput {
 }
 
 function retryAfterMs(response: Response): number | undefined {
-  const seconds = Number(response.headers.get('retry-after'));
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1_000) : undefined;
+  return parseRetryAfterMs(response.headers.get('retry-after'));
 }
 
 function graphFailure(

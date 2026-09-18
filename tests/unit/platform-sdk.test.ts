@@ -6,6 +6,7 @@ import {
   SourceRegistry,
   createRedactingLogger,
   isPlatformError,
+  parseRetryAfterMs,
   validateSourcePollResult,
   type AdapterContext,
   type PublishRequest,
@@ -171,6 +172,14 @@ describe('source adapter contract', () => {
 });
 
 describe('platform errors', () => {
+  it('parses Retry-After seconds and HTTP dates', () => {
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    expect(parseRetryAfterMs('1.5', now)).toBe(1_500);
+    expect(parseRetryAfterMs('Thu, 01 Jan 2026 00:00:05 GMT', now)).toBe(5_000);
+    expect(parseRetryAfterMs('invalid', now)).toBeUndefined();
+    expect(parseRetryAfterMs(null, now)).toBeUndefined();
+  });
+
   it('carries stable public classification without exposing an internal cause', () => {
     const error = new PlatformError({
       category: 'rate_limit',

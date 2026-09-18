@@ -43,3 +43,15 @@ export class PlatformError extends Error {
 export function isPlatformError(error: unknown): error is PlatformError {
   return error instanceof PlatformError;
 }
+
+/** Parses both Retry-After delta-seconds and HTTP-date values without accepting malformed input. */
+export function parseRetryAfterMs(
+  value: string | null,
+  now: Date = new Date(),
+): number | undefined {
+  if (value === null) return undefined;
+  const trimmed = value.trim();
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) return Math.ceil(Number(trimmed) * 1_000);
+  const timestamp = Date.parse(trimmed);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now.getTime()) : undefined;
+}

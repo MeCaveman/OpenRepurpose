@@ -15,8 +15,12 @@ import type {
   EnqueueJobInput,
   EnqueueJobResult,
   Job,
+  JobAccountControl,
   JobAttempt,
+  JobClaimLimits,
   JobFailure,
+  JobQueueMode,
+  JobQueueState,
   JobRepository,
   JobStatus,
   JsonValue,
@@ -2205,6 +2209,7 @@ export class SqliteDestinationJobRepository implements DestinationJobRepository 
 }
 
 interface RawJobRow {
+  readonly account_id: string | null;
   readonly attempt_count: number;
   readonly available_at: number;
   readonly cancellation_requested_at: number | null;
@@ -2218,6 +2223,7 @@ interface RawJobRow {
   readonly lease_expires_at: number | null;
   readonly lease_owner: string | null;
   readonly max_attempts: number;
+  readonly platform_id: string | null;
   readonly status: JobStatus;
   readonly type: string;
   readonly updated_at: number;
@@ -2247,6 +2253,8 @@ function jobFromRow(row: RawJobRow): Job {
     availableAt: new Date(row.available_at),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
+    ...(row.platform_id === null ? {} : { platformId: row.platform_id }),
+    ...(row.account_id === null ? {} : { accountId: row.account_id }),
     ...(row.idempotency_key === null ? {} : { idempotencyKey: row.idempotency_key }),
     ...(row.lease_owner === null ? {} : { leaseOwner: row.lease_owner }),
     ...(row.lease_expires_at === null ? {} : { leaseExpiresAt: new Date(row.lease_expires_at) }),
@@ -2297,8 +2305,9 @@ export class SqliteJobRepository implements JobRepository {
           `INSERT INTO jobs (
             id, type, status, input_json, idempotency_key, max_attempts, attempt_count,
             available_at, lease_owner, lease_expires_at, cancellation_requested_at,
-            last_error_code, last_error_message, created_at, updated_at, completed_at
-          ) VALUES (?, ?, 'pending', ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, NULL)`,
+            last_error_code, last_error_message, created_at, updated_at, completed_at,
+            platform_id, account_id
+          ) VALUES (?, ?, 'pending', ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, NULL, ?, ?)`,
         )
         .run(
           input.id,
@@ -2309,6 +2318,8 @@ export class SqliteJobRepository implements JobRepository {
           availableAt.getTime(),
           input.now.getTime(),
           input.now.getTime(),
+          input.platformId ?? null,
+          input.accountId ?? null,
         );
       const row = client
         .prepare('SELECT * FROM jobs WHERE id = ?')
@@ -2350,23 +2361,40 @@ export class SqliteJobRepository implements JobRepository {
     workerId: string,
     now: Date,
     leaseExpiresAt: Date,
+    limits?: JobClaimLimits,
   ): Job | undefined {
     if (supportedTypes.length === 0) return undefined;
     const client = this.database.client;
     const placeholders = supportedTypes.map(() => '?').join(', ');
     client.exec('BEGIN IMMEDIATE;');
     try {
-      const candidate = client
+      const queue = client
+        .prepare('SELECT mode FROM job_queue_control WHERE singleton = 1')
+        .get() as { mode: JobQueueMode };
+      if (queue.mode !== 'running') {
+        client.exec('COMMIT;');
+        return undefined;
+      }
+      if (limits !== undefined) {
+        const running = client
+          .prepare("SELECT count(*) AS count FROM jobs WHERE status = 'running'")
+          .get() as { count: number };
+        if (running.count >= limits.globalConcurrency) {
+          client.exec('COMMIT;');
+          return undefined;
+        }
+      }
+      const candidates = client
         .prepare(
-          `SELECT id FROM jobs
+          `SELECT * FROM jobs
            WHERE status IN ('pending', 'retrying')
              AND available_at <= ?
              AND cancellation_requested_at IS NULL
              AND type IN (${placeholders})
-           ORDER BY available_at ASC, created_at ASC, id ASC
-           LIMIT 1`,
+           ORDER BY available_at ASC, created_at ASC, id ASC`,
         )
-        .get(now.getTime(), ...supportedTypes) as { id: string } | undefined;
+        .all(now.getTime(), ...supportedTypes) as unknown as RawJobRow[];
+      const candidate = candidates.find((job) => this.scopeCanRun(job, now, limits));
       if (candidate === undefined) {
         client.exec('COMMIT;');
         return undefined;
@@ -2398,6 +2426,51 @@ export class SqliteJobRepository implements JobRepository {
     }
   }
 
+  private scopeCanRun(job: RawJobRow, now: Date, limits?: JobClaimLimits): boolean {
+    if (job.platform_id === null) return true;
+    const client = this.database.client;
+    const platformControl = client
+      .prepare('SELECT cooldown_until FROM job_platform_controls WHERE platform_id = ?')
+      .get(job.platform_id) as { cooldown_until: number | null } | undefined;
+    if (
+      platformControl?.cooldown_until !== null &&
+      platformControl?.cooldown_until !== undefined &&
+      platformControl.cooldown_until > now.getTime()
+    )
+      return false;
+    if (limits !== undefined) {
+      const platformRunning = client
+        .prepare("SELECT count(*) AS count FROM jobs WHERE status = 'running' AND platform_id = ?")
+        .get(job.platform_id) as { count: number };
+      if (platformRunning.count >= limits.platformConcurrency) return false;
+    }
+    if (job.account_id === null) return true;
+    const accountControl = client
+      .prepare(
+        `SELECT status, cooldown_until FROM job_account_controls
+         WHERE platform_id = ? AND account_id = ?`,
+      )
+      .get(job.platform_id, job.account_id) as
+      { cooldown_until: number | null; status: 'active' | 'paused' } | undefined;
+    if (accountControl?.status === 'paused') return false;
+    if (
+      accountControl?.cooldown_until !== null &&
+      accountControl?.cooldown_until !== undefined &&
+      accountControl.cooldown_until > now.getTime()
+    )
+      return false;
+    if (limits !== undefined) {
+      const accountRunning = client
+        .prepare(
+          `SELECT count(*) AS count FROM jobs
+           WHERE status = 'running' AND platform_id = ? AND account_id = ?`,
+        )
+        .get(job.platform_id, job.account_id) as { count: number };
+      if (accountRunning.count >= limits.accountConcurrency) return false;
+    }
+    return true;
+  }
+
   public heartbeat(jobId: string, workerId: string, now: Date, leaseExpiresAt: Date): boolean {
     const result = this.database.client
       .prepare(
@@ -2406,6 +2479,13 @@ export class SqliteJobRepository implements JobRepository {
       )
       .run(leaseExpiresAt.getTime(), now.getTime(), jobId, workerId);
     return Number(result.changes) === 1;
+  }
+
+  public countRunning(): number {
+    const row = this.database.client
+      .prepare("SELECT count(*) AS count FROM jobs WHERE status = 'running'")
+      .get() as { count: number };
+    return row.count;
   }
 
   public complete(jobId: string, workerId: string, now: Date): boolean {
@@ -2425,6 +2505,8 @@ export class SqliteJobRepository implements JobRepository {
     const client = this.database.client;
     client.exec('BEGIN IMMEDIATE;');
     try {
+      const job = client.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as
+        RawJobRow | undefined;
       const cancellationGuard =
         status === 'succeeded' ? 'AND cancellation_requested_at IS NULL' : '';
       const result = client
@@ -2441,6 +2523,19 @@ export class SqliteJobRepository implements JobRepository {
              WHERE job_id = ? AND status = 'running' AND lease_owner = ?`,
           )
           .run(status, now.getTime(), jobId, workerId);
+        if (
+          status === 'succeeded' &&
+          job?.platform_id !== null &&
+          job?.platform_id !== undefined &&
+          job.account_id !== null
+        )
+          client
+            .prepare(
+              `UPDATE job_account_controls
+               SET auth_failure_count = 0, updated_at = ?
+               WHERE platform_id = ? AND account_id = ? AND status = 'active'`,
+            )
+            .run(now.getTime(), job.platform_id, job.account_id);
       }
       client.exec('COMMIT;');
       return Number(result.changes) === 1;
@@ -2456,10 +2551,13 @@ export class SqliteJobRepository implements JobRepository {
     failure: JobFailure,
     now: Date,
     retryAt?: Date,
+    authFailureThreshold = 3,
   ): boolean {
     const client = this.database.client;
     client.exec('BEGIN IMMEDIATE;');
     try {
+      const job = client.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as
+        RawJobRow | undefined;
       const status = retryAt === undefined ? 'failed' : 'retrying';
       const result = client
         .prepare(
@@ -2493,9 +2591,162 @@ export class SqliteJobRepository implements JobRepository {
             jobId,
             workerId,
           );
+        if (job !== undefined) this.recordScopeFailure(job, failure, now, authFailureThreshold);
       }
       client.exec('COMMIT;');
       return Number(result.changes) === 1;
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  private recordScopeFailure(
+    job: RawJobRow,
+    failure: JobFailure,
+    now: Date,
+    authFailureThreshold: number,
+  ): void {
+    if (job.platform_id === null) return;
+    const client = this.database.client;
+    if (failure.retryAfterMs !== undefined) {
+      const cooldownUntil = now.getTime() + Math.max(0, failure.retryAfterMs);
+      client
+        .prepare(
+          `INSERT INTO job_platform_controls (platform_id, cooldown_until, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(platform_id) DO UPDATE SET
+             cooldown_until = max(COALESCE(cooldown_until, 0), excluded.cooldown_until),
+             updated_at = excluded.updated_at`,
+        )
+        .run(job.platform_id, cooldownUntil, now.getTime());
+      if (job.account_id !== null)
+        client
+          .prepare(
+            `INSERT INTO job_account_controls (
+               platform_id, account_id, status, pause_reason, auth_failure_count,
+               cooldown_until, updated_at
+             ) VALUES (?, ?, 'active', NULL, 0, ?, ?)
+             ON CONFLICT(platform_id, account_id) DO UPDATE SET
+               cooldown_until = max(COALESCE(cooldown_until, 0), excluded.cooldown_until),
+               updated_at = excluded.updated_at`,
+          )
+          .run(job.platform_id, job.account_id, cooldownUntil, now.getTime());
+    }
+    if (
+      job.account_id !== null &&
+      (failure.category === 'authentication' || failure.category === 'authorization')
+    )
+      client
+        .prepare(
+          `INSERT INTO job_account_controls (
+             platform_id, account_id, status, pause_reason, auth_failure_count,
+             cooldown_until, updated_at
+           ) VALUES (?, ?, ?, ?, 1, NULL, ?)
+           ON CONFLICT(platform_id, account_id) DO UPDATE SET
+             auth_failure_count = auth_failure_count + 1,
+             status = CASE
+               WHEN auth_failure_count + 1 >= ? THEN 'paused'
+               ELSE status
+             END,
+             pause_reason = CASE
+               WHEN auth_failure_count + 1 >= ? THEN excluded.pause_reason
+               ELSE pause_reason
+             END,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          job.platform_id,
+          job.account_id,
+          authFailureThreshold <= 1 ? 'paused' : 'active',
+          failure.code,
+          now.getTime(),
+          authFailureThreshold,
+          authFailureThreshold,
+        );
+  }
+
+  public getQueueState(): JobQueueState {
+    const row = this.database.client
+      .prepare('SELECT mode, updated_at FROM job_queue_control WHERE singleton = 1')
+      .get() as { mode: JobQueueMode; updated_at: number };
+    return { mode: row.mode, updatedAt: new Date(row.updated_at) };
+  }
+
+  public setQueueMode(mode: JobQueueMode, now: Date): JobQueueState {
+    this.database.client
+      .prepare('UPDATE job_queue_control SET mode = ?, updated_at = ? WHERE singleton = 1')
+      .run(mode, now.getTime());
+    return this.getQueueState();
+  }
+
+  public getAccountControl(platformId: string, accountId: string): JobAccountControl | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM job_account_controls WHERE platform_id = ? AND account_id = ?')
+      .get(platformId, accountId) as
+      | {
+          account_id: string;
+          auth_failure_count: number;
+          cooldown_until: number | null;
+          pause_reason: string | null;
+          platform_id: string;
+          status: 'active' | 'paused';
+          updated_at: number;
+        }
+      | undefined;
+    return row === undefined
+      ? undefined
+      : {
+          accountId: row.account_id,
+          authFailureCount: row.auth_failure_count,
+          platformId: row.platform_id,
+          status: row.status,
+          updatedAt: new Date(row.updated_at),
+          ...(row.cooldown_until === null ? {} : { cooldownUntil: new Date(row.cooldown_until) }),
+          ...(row.pause_reason === null ? {} : { pauseReason: row.pause_reason }),
+        };
+  }
+
+  public resumeAccount(platformId: string, accountId: string, now: Date): JobAccountControl {
+    this.database.client
+      .prepare(
+        `INSERT INTO job_account_controls (
+           platform_id, account_id, status, pause_reason, auth_failure_count,
+           cooldown_until, updated_at
+         ) VALUES (?, ?, 'active', NULL, 0, NULL, ?)
+         ON CONFLICT(platform_id, account_id) DO UPDATE SET
+           status = 'active', pause_reason = NULL, auth_failure_count = 0,
+           cooldown_until = NULL, updated_at = excluded.updated_at`,
+      )
+      .run(platformId, accountId, now.getTime());
+    return this.getAccountControl(platformId, accountId)!;
+  }
+
+  public retry(id: string, now: Date): Job | undefined {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const existing = client.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as
+        RawJobRow | undefined;
+      if (existing === undefined) {
+        client.exec('COMMIT;');
+        return undefined;
+      }
+      if (existing.status === 'failed')
+        client
+          .prepare(
+            `UPDATE jobs SET status = 'pending', available_at = ?,
+               max_attempts = max(max_attempts, attempt_count + 1),
+               cancellation_requested_at = NULL, completed_at = NULL,
+               last_error_code = NULL, last_error_message = NULL, updated_at = ?
+             WHERE id = ? AND status = 'failed'`,
+          )
+          .run(now.getTime(), now.getTime(), id);
+      const updated = client
+        .prepare('SELECT * FROM jobs WHERE id = ?')
+        .get(id) as unknown as RawJobRow;
+      client.exec('COMMIT;');
+      return jobFromRow(updated);
     } catch (error) {
       client.exec('ROLLBACK;');
       throw error;

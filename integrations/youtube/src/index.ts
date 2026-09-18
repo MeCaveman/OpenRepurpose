@@ -27,7 +27,7 @@ import type {
   SourcePollRequest,
   SourcePollResult,
 } from '@openrepurpose/platform-sdk';
-import { PlatformError } from '@openrepurpose/platform-sdk';
+import { parseRetryAfterMs, PlatformError } from '@openrepurpose/platform-sdk';
 
 export const YOUTUBE_READONLY_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly';
 export const YOUTUBE_UPLOAD_SCOPE = 'https://www.googleapis.com/auth/youtube.upload';
@@ -666,10 +666,7 @@ function uploadInput(value: JsonValue): YouTubeUploadJobInput {
 }
 
 function retryAfterMs(response: Response): number | undefined {
-  const value = response.headers.get('retry-after');
-  if (value === null) return undefined;
-  const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1_000) : undefined;
+  return parseRetryAfterMs(response.headers.get('retry-after'));
 }
 
 function uploadFailure(response: Response, operation: string): JobExecutionError {

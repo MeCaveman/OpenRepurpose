@@ -16,7 +16,7 @@ import type {
 } from '@openrepurpose/core';
 import { JobExecutionError } from '@openrepurpose/core';
 import type { SecretReference, SecretStore } from '@openrepurpose/platform-sdk';
-import { PlatformError } from '@openrepurpose/platform-sdk';
+import { parseRetryAfterMs, PlatformError } from '@openrepurpose/platform-sdk';
 
 export const TIKTOK_IDENTITY_SCOPE = 'user.info.basic';
 export const TIKTOK_PUBLISH_SCOPE = 'video.publish';
@@ -874,9 +874,7 @@ function directPostInput(value: JsonValue): TikTokDirectPostJobInput {
 }
 
 function retryAfterMs(response: Response): number | undefined {
-  const value = response.headers.get('retry-after');
-  const seconds = value === null ? Number.NaN : Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1_000) : undefined;
+  return parseRetryAfterMs(response.headers.get('retry-after'));
 }
 
 function remoteErrorCode(body: Record<string, unknown> | undefined): string {
