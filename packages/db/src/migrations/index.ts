@@ -12,6 +12,7 @@ import { sourceDomainMigration } from './0011_source_domain.js';
 import { mediaResolutionMigration } from './0012_media_resolution.js';
 import { sourceWorkflowIntegrationMigration } from './0013_source_workflow_integration.js';
 import { executionScopedMediaMigration } from './0014_execution_scoped_media.js';
+import { schedulesMigration } from './0015_schedules.js';
 import type { Migration } from './types.js';
 
 /** Ordered, immutable migration ledger. Never alter a released migration's SQL. */
@@ -30,5 +31,6 @@ export const migrations: readonly Migration[] = [
   mediaResolutionMigration,
   sourceWorkflowIntegrationMigration,
   executionScopedMediaMigration,
+  schedulesMigration,
 ];
 export type { Migration } from './types.js';

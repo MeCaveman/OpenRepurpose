@@ -238,6 +238,8 @@ export const sourceConnections = sqliteTable(
     externalSourceId: text('external_source_id').notNull(),
     displayName: text('display_name').notNull(),
     configurationJson: text('configuration_json').notNull(),
+    cadenceOwner: text('cadence_owner', { enum: ['interval', 'schedule'] }).notNull(),
+    scheduledPollPending: integer('scheduled_poll_pending', { mode: 'boolean' }).notNull(),
     status: text('status', { enum: ['active', 'paused', 'authorization_failed'] }).notNull(),
     cursorJson: text('cursor_json'),
     watermarkPublishedAt: integer('watermark_published_at', { mode: 'timestamp_ms' }),
@@ -260,6 +262,47 @@ export const sourceConnections = sqliteTable(
     check(
       'source_connections_watermark_pair_check',
       sql`(${table.watermarkPublishedAt} IS NULL AND ${table.watermarkExternalId} IS NULL) OR (${table.watermarkPublishedAt} IS NOT NULL AND ${table.watermarkExternalId} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const schedules = sqliteTable(
+  'schedules',
+  {
+    id: text('id').primaryKey(),
+    status: text('status').notNull(),
+    revision: integer('revision').notNull(),
+    targetJson: text('target_json').notNull(),
+    definitionJson: text('definition_json').notNull(),
+    timeZone: text('time_zone').notNull(),
+    nextOccurrenceAt: integer('next_occurrence_at', { mode: 'timestamp_ms' }),
+    lastOccurrenceAt: integer('last_occurrence_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('schedules_due_idx').on(table.status, table.nextOccurrenceAt)],
+);
+
+export const scheduleOccurrences = sqliteTable(
+  'schedule_occurrences',
+  {
+    id: text('id').primaryKey(),
+    scheduleId: text('schedule_id')
+      .notNull()
+      .references(() => schedules.id),
+    scheduleRevision: integer('schedule_revision').notNull(),
+    scheduledFor: integer('scheduled_for_utc', { mode: 'timestamp_ms' }).notNull(),
+    targetJson: text('target_json').notNull(),
+    dispatchStatus: text('dispatch_status').notNull(),
+    errorMessage: text('error_message'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('schedule_occurrences_identity_idx').on(
+      table.scheduleId,
+      table.scheduleRevision,
+      table.scheduledFor,
     ),
   ],
 );

@@ -44,6 +44,9 @@ import type {
   SourceCursor,
   SourceCursorRepository,
   SourceConnection,
+  Schedule,
+  ScheduleOccurrence,
+  ScheduleRepository,
   SourcePollingRepository,
   RemoteSourceItem,
   SourceItemObservation,
@@ -70,6 +73,8 @@ export {
   metaPublishTargets,
   settings,
   sourceConnections,
+  schedules,
+  scheduleOccurrences,
   sourceCursors,
   sourceExecutionDestinations,
   sourceItems,
@@ -548,6 +553,7 @@ export class SqliteSourceCursorRepository implements SourceCursorRepository {
 
 interface RawSourceConnectionRow {
   readonly adapter_id: string;
+  readonly cadence_owner: SourceConnection['cadenceOwner'];
   readonly configuration_json: string;
   readonly consecutive_poll_failures: number;
   readonly created_at: number;
@@ -602,6 +608,7 @@ function sourceConnectionFromRow(row: RawSourceConnectionRow): SourceConnection 
     cursor: row.cursor_json,
     status: row.status,
     consecutivePollFailures: row.consecutive_poll_failures,
+    cadenceOwner: row.cadence_owner,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
     ...(row.last_poll_at === null ? {} : { lastPollAt: new Date(row.last_poll_at) }),
@@ -614,6 +621,173 @@ function sourceConnectionFromRow(row: RawSourceConnectionRow): SourceConnection 
       : { lastPollErrorMessage: row.last_poll_error_message }),
     ...(row.next_poll_at === null ? {} : { nextPollAt: new Date(row.next_poll_at) }),
   };
+}
+
+interface RawScheduleRow {
+  readonly created_at: number;
+  readonly definition_json: string;
+  readonly id: string;
+  readonly last_occurrence_at: number | null;
+  readonly next_occurrence_at: number | null;
+  readonly revision: number;
+  readonly status: Schedule['status'];
+  readonly target_json: string;
+  readonly time_zone: string;
+  readonly updated_at: number;
+}
+interface RawScheduleOccurrenceRow {
+  readonly created_at: number;
+  readonly dispatch_status: ScheduleOccurrence['dispatchStatus'];
+  readonly error_message: string | null;
+  readonly id: string;
+  readonly schedule_id: string;
+  readonly schedule_revision: number;
+  readonly scheduled_for_utc: number;
+  readonly target_json: string;
+  readonly updated_at: number;
+}
+function scheduleFromRow(row: RawScheduleRow): Schedule {
+  const definition = JSON.parse(row.definition_json) as Schedule['definition'];
+  return {
+    id: row.id,
+    status: row.status,
+    revision: row.revision,
+    target: JSON.parse(row.target_json) as Schedule['target'],
+    definition:
+      definition.kind === 'once'
+        ? { ...definition, resolvedAt: new Date(definition.resolvedAt) }
+        : definition,
+    timeZone: row.time_zone,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    ...(row.next_occurrence_at === null
+      ? {}
+      : { nextOccurrenceAt: new Date(row.next_occurrence_at) }),
+    ...(row.last_occurrence_at === null
+      ? {}
+      : { lastOccurrenceAt: new Date(row.last_occurrence_at) }),
+  };
+}
+function scheduleOccurrenceFromRow(row: RawScheduleOccurrenceRow): ScheduleOccurrence {
+  return {
+    id: row.id,
+    scheduleId: row.schedule_id,
+    scheduleRevision: row.schedule_revision,
+    scheduledFor: new Date(row.scheduled_for_utc),
+    target: JSON.parse(row.target_json) as ScheduleOccurrence['target'],
+    dispatchStatus: row.dispatch_status,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    ...(row.error_message === null ? {} : { errorMessage: row.error_message }),
+  };
+}
+
+/** SQLite persistence for durable scheduler checkpoints and immutable occurrence history. */
+export class SqliteScheduleRepository implements ScheduleRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+  public create(schedule: Schedule): Schedule {
+    this.database.client
+      .prepare(
+        `INSERT INTO schedules (id,status,revision,target_json,definition_json,time_zone,next_occurrence_at,last_occurrence_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        schedule.id,
+        schedule.status,
+        schedule.revision,
+        JSON.stringify(schedule.target),
+        JSON.stringify(schedule.definition),
+        schedule.timeZone,
+        schedule.nextOccurrenceAt?.getTime() ?? null,
+        schedule.lastOccurrenceAt?.getTime() ?? null,
+        schedule.createdAt.getTime(),
+        schedule.updatedAt.getTime(),
+      );
+    return this.find(schedule.id)!;
+  }
+  public find(id: string): Schedule | undefined {
+    const row = this.database.client.prepare('SELECT * FROM schedules WHERE id = ?').get(id) as
+      RawScheduleRow | undefined;
+    return row === undefined ? undefined : scheduleFromRow(row);
+  }
+  public listDue(now: Date, limit: number): readonly Schedule[] {
+    return (
+      this.database.client
+        .prepare(
+          `SELECT * FROM schedules WHERE status = 'active' AND next_occurrence_at <= ? ORDER BY next_occurrence_at ASC, id ASC LIMIT ?`,
+        )
+        .all(now.getTime(), limit) as unknown as RawScheduleRow[]
+    ).map(scheduleFromRow);
+  }
+  public listPendingDispatch(limit: number): readonly ScheduleOccurrence[] {
+    return (
+      this.database.client
+        .prepare(
+          `SELECT * FROM schedule_occurrences WHERE dispatch_status IN ('pending_dispatch', 'failed') ORDER BY created_at ASC, id ASC LIMIT ?`,
+        )
+        .all(limit) as unknown as RawScheduleOccurrenceRow[]
+    ).map(scheduleOccurrenceFromRow);
+  }
+  public materialize(input: {
+    readonly nextOccurrenceAt?: Date;
+    readonly now: Date;
+    readonly occurrence: ScheduleOccurrence;
+    readonly scheduleId: string;
+    readonly status: Schedule['status'];
+  }): boolean {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      const result = client
+        .prepare(
+          `UPDATE schedules SET status = ?, next_occurrence_at = ?, last_occurrence_at = ?, updated_at = ? WHERE id = ? AND status = 'active' AND next_occurrence_at = ?`,
+        )
+        .run(
+          input.status,
+          input.nextOccurrenceAt?.getTime() ?? null,
+          input.occurrence.scheduledFor.getTime(),
+          input.now.getTime(),
+          input.scheduleId,
+          input.occurrence.scheduledFor.getTime(),
+        );
+      if (result.changes === 0) {
+        client.exec('COMMIT;');
+        return false;
+      }
+      client
+        .prepare(
+          `INSERT INTO schedule_occurrences (id,schedule_id,schedule_revision,scheduled_for_utc,target_json,dispatch_status,error_message,created_at,updated_at) VALUES (?,?,?,?,?,?,NULL,?,?)`,
+        )
+        .run(
+          input.occurrence.id,
+          input.occurrence.scheduleId,
+          input.occurrence.scheduleRevision,
+          input.occurrence.scheduledFor.getTime(),
+          JSON.stringify(input.occurrence.target),
+          input.occurrence.dispatchStatus,
+          input.now.getTime(),
+          input.now.getTime(),
+        );
+      client.exec('COMMIT;');
+      return true;
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+  public markDispatched(id: string, now: Date): void {
+    this.database.client
+      .prepare(
+        `UPDATE schedule_occurrences SET dispatch_status = 'dispatched', error_message = NULL, updated_at = ? WHERE id = ?`,
+      )
+      .run(now.getTime(), id);
+  }
+  public markDispatchFailed(id: string, message: string, now: Date): void {
+    this.database.client
+      .prepare(
+        `UPDATE schedule_occurrences SET dispatch_status = 'failed', error_message = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(message, now.getTime(), id);
+  }
 }
 
 function remoteSourceItemFromRow(row: RawRemoteSourceItemRow): RemoteSourceItem {
@@ -731,6 +905,29 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
     return this.connection(connectionId);
   }
 
+  public enableScheduleCadence(connectionId: string, now: Date): boolean {
+    return (
+      this.database.client
+        .prepare(
+          `UPDATE source_connections SET cadence_owner = 'schedule', next_poll_at = NULL,
+       scheduled_poll_pending = 0, updated_at = ? WHERE id = ? AND status = 'active'`,
+        )
+        .run(now.getTime(), connectionId).changes > 0
+    );
+  }
+
+  public requestScheduledPoll(connectionId: string, now: Date): boolean {
+    return (
+      this.database.client
+        .prepare(
+          `UPDATE source_connections SET next_poll_at = ?, scheduled_poll_pending = 1, updated_at = ?
+       WHERE id = ? AND status = 'active' AND cadence_owner = 'schedule'
+       AND (next_poll_at IS NULL OR next_poll_at <= ?)`,
+        )
+        .run(now.getTime(), now.getTime(), connectionId, now.getTime()).changes > 0
+    );
+  }
+
   public recordPollFailure(input: {
     readonly connectionId: string;
     readonly errorCode: string;
@@ -761,20 +958,20 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
   public recordPollSuccess(input: {
     readonly connectionId: string;
     readonly cursor: string | null;
-    readonly nextPollAt: Date;
+    readonly nextPollAt?: Date;
     readonly now: Date;
   }): SourceConnection | undefined {
     this.database.client
       .prepare(
         `UPDATE source_connections SET cursor_json = ?, last_poll_at = ?, last_successful_poll_at = ?,
          last_poll_error_code = NULL, last_poll_error_message = NULL, consecutive_poll_failures = 0,
-         next_poll_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
+         next_poll_at = ?, scheduled_poll_pending = 0, updated_at = ? WHERE id = ? AND status = 'active'`,
       )
       .run(
         input.cursor,
         input.now.getTime(),
         input.now.getTime(),
-        input.nextPollAt.getTime(),
+        input.nextPollAt?.getTime() ?? null,
         input.now.getTime(),
         input.connectionId,
       );

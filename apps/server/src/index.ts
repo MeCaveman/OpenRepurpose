@@ -11,6 +11,8 @@ import {
   SourceItemObservedJobHandler,
   SourceMediaCleanupService,
   SourcePollingRunner,
+  SchedulerLoop,
+  ScheduleService,
   SourceService,
   SourceWorkflowCoordinator,
   WorkflowService,
@@ -29,6 +31,7 @@ import {
   SqliteSourceMediaResolutionRepository,
   SqliteSourcePollingRepository,
   SqliteSourceWorkflowExecutionRepository,
+  SqliteScheduleRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
 import {
@@ -137,6 +140,9 @@ export async function startServer(): Promise<void> {
       },
     },
   );
+  const schedulerLoop = new SchedulerLoop(
+    new ScheduleService(new SqliteScheduleRepository(database), sourceRepository),
+  );
   const jobHandlers: JobHandler[] = [
     new YouTubeUploadJobHandler(
       mediaRepository,
@@ -175,6 +181,7 @@ export async function startServer(): Promise<void> {
   sourceCoordinator?.recover();
   jobRunner.start();
   sourcePollingRunner.start();
+  schedulerLoop.start();
   const watchedFolderRunner =
     mediaImportService === undefined
       ? undefined
@@ -204,6 +211,7 @@ export async function startServer(): Promise<void> {
     closing ??= (async () => {
       await jobRunner.stop();
       await sourcePollingRunner.stop();
+      schedulerLoop.stop();
       watchedFolderRunner?.stop();
       await server.close();
       database.close();
@@ -217,6 +225,7 @@ export async function startServer(): Promise<void> {
   } catch (error) {
     await jobRunner.stop();
     await sourcePollingRunner.stop();
+    schedulerLoop.stop();
     watchedFolderRunner?.stop();
     database.close();
     throw error;

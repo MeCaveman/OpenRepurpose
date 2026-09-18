@@ -15,6 +15,7 @@ export type {
   SourceMediaDescriptor,
   SourceMediaResolutionStrategy,
 } from '@openrepurpose/platform-sdk';
+export * from './schedule.js';
 
 export type MediaAssetState = 'available' | 'missing';
 
@@ -692,12 +693,14 @@ export interface SourceCursorRepository {
 }
 
 export type SourceConnectionStatus = 'active' | 'paused' | 'authorization_failed';
+export type SourcePollCadenceOwner = 'interval' | 'schedule';
 
 /** Persistent configuration and polling checkpoint for one remote source. */
 export interface SourceConnection {
   readonly adapterId: string;
   readonly configuration: Readonly<Record<string, SourceJsonValue>>;
   readonly consecutivePollFailures: number;
+  readonly cadenceOwner: SourcePollCadenceOwner;
   readonly createdAt: Date;
   readonly cursor: string | null;
   readonly displayName: string;
@@ -740,6 +743,7 @@ export interface SourcePollingRepository {
   listDue(now: Date): readonly SourceConnection[];
   listItems(connectionId: string, limit?: number): readonly SourceItemStatus[];
   requestPoll(connectionId: string, now: Date): SourceConnection | undefined;
+  requestScheduledPoll(connectionId: string, now: Date): boolean;
   recordPollFailure(input: {
     readonly connectionId: string;
     readonly errorCode: string;
@@ -751,7 +755,7 @@ export interface SourcePollingRepository {
   recordPollSuccess(input: {
     readonly connectionId: string;
     readonly cursor: string | null;
-    readonly nextPollAt: Date;
+    readonly nextPollAt?: Date;
     readonly now: Date;
   }): SourceConnection | undefined;
   upsertObservedItem(input: {
@@ -961,7 +965,9 @@ export class SourcePollingRunner {
           this.repository.recordPollSuccess({
             connectionId: connection.id,
             cursor,
-            nextPollAt: this.nextPollAt(this.now()),
+            ...(connection.cadenceOwner === 'interval'
+              ? { nextPollAt: this.nextPollAt(this.now()) }
+              : {}),
             now: this.now(),
           });
           return;

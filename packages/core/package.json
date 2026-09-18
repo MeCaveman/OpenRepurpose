@@ -14,7 +14,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openrepurpose/platform-sdk": "workspace:*"
+    "@openrepurpose/platform-sdk": "workspace:*",
+    "croner": "10.0.1"
   },
   "devDependencies": {
     "@types/node": "24.13.5"
