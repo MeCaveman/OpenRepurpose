@@ -214,4 +214,94 @@ describe('SQLite migrations and repositories', () => {
       { name: 'source_workflow_executions' },
     ]);
   });
+  it('upgrades a populated v0.4 workflow to the v0.5 schedule and plan model', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-v04-migration-'));
+    const database = openDatabase(join(directory, 'openrepurpose.sqlite'));
+    temporaryDatabase = {
+      directory,
+      database,
+      dispose: () => {
+        database.close();
+        rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
+      },
+    };
+    runMigrations(database, migrations.slice(0, 14));
+    database.client
+      .prepare(
+        `INSERT INTO accounts (
+          id, provider, external_id, display_name, status, capabilities_json,
+          connected_at, updated_at
+        ) VALUES ('youtube-v04', 'youtube', 'channel-v04', 'v0.4 creator',
+          'connected', '[]', 1, 1)`,
+      )
+      .run();
+    database.client
+      .prepare(
+        `INSERT INTO workflows (
+          id, name, enabled, source_directory, title_template, description_template,
+          failure_policy, created_at, updated_at
+        ) VALUES ('workflow-v04', 'Remote v0.4 workflow', 1, '', '{{source.title}}',
+          '{{source.description}}', 'best_effort', 1, 1)`,
+      )
+      .run();
+    database.client
+      .prepare(
+        `INSERT INTO workflow_destinations (
+          workflow_id, destination_id, account_id, position, configuration_json
+        ) VALUES ('workflow-v04', 'youtube', 'youtube-v04', 0,
+          '{"privacy":"unlisted","category":null}')`,
+      )
+      .run();
+    database.client
+      .prepare(
+        `INSERT INTO source_connections (
+          id, adapter_id, account_id, external_source_id, display_name, configuration_json,
+          status, consecutive_poll_failures, next_poll_at, created_at, updated_at
+        ) VALUES ('source-v04', 'youtube', 'youtube-v04', 'channel-v04', 'v0.4 source',
+          '{}', 'active', 0, 1000, 1, 1)`,
+      )
+      .run();
+    database.client
+      .prepare(
+        `INSERT INTO workflow_remote_sources (
+          workflow_id, source_connection_id, filters_json, retention_policy,
+          retention_duration_seconds, rights_confirmed, local_original_json
+        ) VALUES ('workflow-v04', 'source-v04', '{}', 'delete_after_success', NULL, 1, NULL)`,
+      )
+      .run();
+
+    runMigrations(database);
+
+    expect(
+      database.client
+        .prepare('SELECT cadence_owner, scheduled_poll_pending FROM source_connections')
+        .get(),
+    ).toEqual({ cadence_owner: 'interval', scheduled_poll_pending: 0 });
+    expect(
+      database.client
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'table' AND name IN ('schedules', 'schedule_occurrences',
+             'job_queue_control', 'job_account_controls') ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: 'job_account_controls' },
+      { name: 'job_queue_control' },
+      { name: 'schedule_occurrences' },
+      { name: 'schedules' },
+    ]);
+    expect(new SqliteWorkflowRepository(database).findById('workflow-v04')).toMatchObject({
+      remoteSource: { connectionId: 'source-v04', rightsConfirmed: true },
+      destinations: [{ destinationId: 'youtube', accountId: 'youtube-v04', privacy: 'unlisted' }],
+      definition: {
+        schemaVersion: 1,
+        steps: expect.arrayContaining([
+          expect.objectContaining({ kind: 'source', sourceType: 'remote' }),
+          expect.objectContaining({ kind: 'destination' }),
+        ]),
+      },
+      plan: { planVersion: 'workflow-plan-v1' },
+    });
+  });
 });

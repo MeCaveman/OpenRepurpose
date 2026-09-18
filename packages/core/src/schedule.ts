@@ -152,10 +152,17 @@ export function nextCronOccurrence(expression: string, timeZone: string, after: 
   } catch {
     throw new Error('Invalid cron-v1 expression.');
   }
-  const next = cron.nextRun(new Date(after.getTime() + 1));
-  if (next === null || next.getTime() <= after.getTime())
-    throw new Error('Cron recurrence has no next run.');
-  return next;
+  let cursor = new Date(after.getTime() + 1);
+  for (let skippedDstGaps = 0; skippedDstGaps < 400; skippedDstGaps += 1) {
+    const next = cron.nextRun(cursor);
+    if (next === null || next.getTime() <= after.getTime())
+      throw new Error('Cron recurrence has no next run.');
+    // Croner's calculated instant can be shifted through a DST gap even though it no longer
+    // matches the expression in the requested zone. The accepted policy skips that occurrence.
+    if (cron.match(next)) return next;
+    cursor = new Date(next.getTime() + 1);
+  }
+  throw new Error('Cron recurrence has no valid run outside timezone gaps.');
 }
 
 export class ScheduleService {

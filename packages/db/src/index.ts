@@ -913,10 +913,13 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
       this.database.client
         .prepare(
           `SELECT * FROM source_connections
-           WHERE status = 'active' AND (next_poll_at IS NULL OR next_poll_at <= ?)
+           WHERE status = 'active' AND (
+             (cadence_owner = 'interval' AND (next_poll_at IS NULL OR next_poll_at <= ?)) OR
+             (cadence_owner = 'schedule' AND scheduled_poll_pending = 1 AND next_poll_at <= ?)
+           )
            ORDER BY COALESCE(next_poll_at, created_at) ASC, id ASC`,
         )
-        .all(now.getTime()) as unknown as RawSourceConnectionRow[]
+        .all(now.getTime(), now.getTime()) as unknown as RawSourceConnectionRow[]
     ).map(sourceConnectionFromRow);
   }
 
