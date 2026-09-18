@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { desc, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-sqlite';
+import { compileWorkflowExecutionPlan } from '@openrepurpose/core';
 import type {
   AccountCapability,
   AccountProvider,
@@ -56,6 +57,7 @@ import type {
   SourceItemObservation,
   SourceJsonValue,
   Workflow,
+  WorkflowDefinition,
   WorkflowDestination,
   WorkflowRepository,
   RemoteWorkflowSource,
@@ -246,7 +248,10 @@ export class SqliteMediaRepository implements MediaRepository {
 interface RawWorkflowRow {
   readonly created_at: number;
   readonly description_template: string;
+  readonly definition_json: string | null;
   readonly enabled: number;
+  readonly execution_plan_json: string | null;
+  readonly execution_plan_version: string | null;
   readonly failure_policy: Workflow['failurePolicy'];
   readonly id: string;
   readonly name: string;
@@ -334,6 +339,19 @@ function workflowFromRow(
   destinations: readonly WorkflowDestination[],
   remoteSource?: RemoteWorkflowSource,
 ): Workflow {
+  const definition =
+    row.definition_json === null
+      ? legacyDefinition(row, destinations, remoteSource)
+      : (JSON.parse(row.definition_json) as WorkflowDefinition);
+  // Recompile on read so stored JSON remains an audit snapshot, never an executable command.
+  const plan = compileWorkflowExecutionPlan({
+    definition,
+    id: row.id,
+    name: row.name,
+    titleTemplate: row.title_template,
+    descriptionTemplate: row.description_template,
+    failurePolicy: row.failure_policy,
+  });
   return {
     id: row.id,
     name: row.name,
@@ -341,11 +359,35 @@ function workflowFromRow(
     sourceDirectory: row.source_directory,
     titleTemplate: row.title_template,
     descriptionTemplate: row.description_template,
+    definition,
+    plan,
     destinations,
     ...(remoteSource === undefined ? {} : { remoteSource }),
     failurePolicy: row.failure_policy,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
+  };
+}
+
+function legacyDefinition(
+  row: RawWorkflowRow,
+  destinations: readonly WorkflowDestination[],
+  remoteSource?: RemoteWorkflowSource,
+): WorkflowDefinition {
+  const source = {
+    id: 'source',
+    kind: 'source' as const,
+    sourceType: remoteSource === undefined ? ('watched_folder' as const) : ('remote' as const),
+  };
+  const destinationSteps = destinations.map((destination, position) => ({
+    id: `destination-${position + 1}`,
+    kind: 'destination' as const,
+    destination,
+  }));
+  return {
+    schemaVersion: 1,
+    steps: [source, ...destinationSteps],
+    edges: destinationSteps.map((step) => ({ from: source.id, to: step.id })),
   };
 }
 
@@ -396,6 +438,9 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
       workflow.titleTemplate,
       workflow.descriptionTemplate,
       workflow.failurePolicy,
+      JSON.stringify(workflow.definition),
+      JSON.stringify(workflow.plan),
+      workflow.plan.planVersion,
       workflow.createdAt.getTime(),
       workflow.updatedAt.getTime(),
       workflow.id,
@@ -406,13 +451,13 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         ? Number(
             client
               .prepare(
-                `UPDATE workflows SET name=?, enabled=?, source_directory=?, title_template=?, description_template=?, failure_policy=?, created_at=?, updated_at=? WHERE id=?`,
+                `UPDATE workflows SET name=?, enabled=?, source_directory=?, title_template=?, description_template=?, failure_policy=?, definition_json=?, execution_plan_json=?, execution_plan_version=?, created_at=?, updated_at=? WHERE id=?`,
               )
               .run(...values).changes,
           ) === 1
         : (client
             .prepare(
-              `INSERT INTO workflows (name, enabled, source_directory, title_template, description_template, failure_policy, created_at, updated_at, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO workflows (name, enabled, source_directory, title_template, description_template, failure_policy, definition_json, execution_plan_json, execution_plan_version, created_at, updated_at, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(...values),
           true);

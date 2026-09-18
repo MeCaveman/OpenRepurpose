@@ -772,15 +772,63 @@ export type WorkflowDestination =
   | InstagramWorkflowDestination
   | FacebookWorkflowDestination;
 
+/** The only step kinds accepted by the workflow compiler. Unknown JSON is never executable. */
+export type WorkflowStep =
+  | WorkflowSourceStep
+  | WorkflowFilterStep
+  | WorkflowTransformStep
+  | WorkflowScheduleStep
+  | WorkflowDestinationStep;
+
+export interface WorkflowSourceStep {
+  readonly id: string;
+  readonly kind: 'source';
+  readonly sourceType: 'remote' | 'watched_folder';
+}
+export interface WorkflowFilterStep {
+  readonly filters: SourceWorkflowFilters;
+  readonly id: string;
+  readonly kind: 'filter';
+}
+/** v0.5 intentionally supports only an explicit pass-through transform. */
+export interface WorkflowTransformStep {
+  readonly id: string;
+  readonly kind: 'transform';
+  readonly operation: 'pass_through';
+}
+/** A scheduling boundary is compiled, but scheduling owns dispatch timing. */
+export interface WorkflowScheduleStep {
+  readonly id: string;
+  readonly kind: 'schedule';
+  readonly scheduleId: string;
+}
+export interface WorkflowDestinationStep {
+  readonly destination: WorkflowDestination;
+  readonly id: string;
+  readonly kind: 'destination';
+}
+export interface WorkflowEdge {
+  readonly from: string;
+  readonly to: string;
+}
+export interface WorkflowDefinition {
+  readonly edges: readonly WorkflowEdge[];
+  readonly schemaVersion: 1;
+  readonly steps: readonly WorkflowStep[];
+}
+
 /** A durable source definition whose destinations execute as independent best-effort jobs. */
 export interface Workflow {
   readonly createdAt: Date;
   readonly descriptionTemplate: string;
+  /** Validated editor data. It is compiled before any execution is created. */
+  readonly definition: WorkflowDefinition;
   readonly destinations: readonly WorkflowDestination[];
   readonly enabled: boolean;
   readonly failurePolicy: WorkflowFailurePolicy;
   readonly id: string;
   readonly name: string;
+  readonly plan: WorkflowExecutionPlan;
   readonly remoteSource?: RemoteWorkflowSource;
   readonly sourceDirectory: string;
   readonly titleTemplate: string;
@@ -792,6 +840,8 @@ export interface WorkflowInput {
   readonly accountId?: string;
   readonly category?: string;
   readonly descriptionTemplate?: string;
+  /** Reserved for the structured editor introduced in Packet 5. */
+  readonly definition?: WorkflowDefinition;
   readonly destinations?: readonly WorkflowDestination[];
   readonly enabled?: boolean;
   readonly failurePolicy?: WorkflowFailurePolicy;
@@ -1644,12 +1694,141 @@ export function isOpenRepurposeManagedMedia(
 }
 
 export interface WorkflowExecutionPlan {
+  readonly definitionVersion: 1;
   readonly descriptionTemplate: string;
   readonly destinations: readonly WorkflowDestination[];
   readonly failurePolicy: WorkflowFailurePolicy;
   readonly id: string;
   readonly name: string;
+  readonly planVersion: 'workflow-plan-v1';
+  /** Topologically ordered, allow-listed operations for audit and future runners. */
+  readonly steps: readonly WorkflowStep[];
   readonly titleTemplate: string;
+}
+
+const workflowStepOrder: Readonly<Record<WorkflowStep['kind'], number>> = {
+  source: 0,
+  filter: 1,
+  transform: 2,
+  schedule: 3,
+  destination: 4,
+};
+
+/** Validates a workflow DAG independently of its UI representation. */
+export function validateWorkflowDefinition(definition: WorkflowDefinition): void {
+  if (definition.schemaVersion !== 1) throw new Error('Unsupported workflow definition version.');
+  if (definition.steps.length === 0) throw new Error('A workflow must contain steps.');
+  const steps = new Map<string, WorkflowStep>();
+  for (const step of definition.steps) {
+    if (step.id.trim().length === 0) throw new Error('A workflow step ID is required.');
+    if (steps.has(step.id)) throw new Error(`Duplicate workflow step ID: ${step.id}`);
+    if (step.kind === 'transform' && step.operation !== 'pass_through')
+      throw new Error('Unsupported workflow transform.');
+    if (step.kind === 'schedule' && step.scheduleId.trim().length === 0)
+      throw new Error('A workflow schedule step requires a schedule ID.');
+    steps.set(step.id, step);
+  }
+  const sources = definition.steps.filter((step) => step.kind === 'source');
+  if (sources.length !== 1) throw new Error('A workflow must contain exactly one source step.');
+  if (!definition.steps.some((step) => step.kind === 'destination'))
+    throw new Error('A workflow source must reach at least one destination.');
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, number>();
+  for (const step of definition.steps) {
+    outgoing.set(step.id, []);
+    incoming.set(step.id, 0);
+  }
+  const edgeKeys = new Set<string>();
+  for (const edge of definition.edges) {
+    const from = steps.get(edge.from);
+    const to = steps.get(edge.to);
+    if (from === undefined || to === undefined)
+      throw new Error('A workflow edge references an unknown step.');
+    if (from.id === to.id) throw new Error('A workflow cannot contain a self-referencing step.');
+    const key = `${edge.from}\u0000${edge.to}`;
+    if (edgeKeys.has(key)) throw new Error('A workflow cannot contain duplicate edges.');
+    edgeKeys.add(key);
+    if (workflowStepOrder[to.kind] <= workflowStepOrder[from.kind])
+      throw new Error(`Unsupported workflow step ordering: ${from.kind} to ${to.kind}.`);
+    outgoing.get(from.id)!.push(to.id);
+    incoming.set(to.id, (incoming.get(to.id) ?? 0) + 1);
+  }
+  if ((incoming.get(sources[0]!.id) ?? 0) !== 0)
+    throw new Error('A workflow source step cannot have incoming edges.');
+  const reachable = new Set<string>();
+  const visit = (id: string): void => {
+    if (reachable.has(id)) return;
+    reachable.add(id);
+    for (const next of outgoing.get(id) ?? []) visit(next);
+  };
+  visit(sources[0]!.id);
+  if (reachable.size !== definition.steps.length)
+    throw new Error('Every workflow step must be reachable from its source.');
+  if (!definition.steps.some((step) => step.kind === 'destination' && reachable.has(step.id)))
+    throw new Error('A workflow source must reach at least one destination.');
+  for (const step of definition.steps)
+    if (step.kind === 'destination' && (outgoing.get(step.id)?.length ?? 0) !== 0)
+      throw new Error('A workflow destination step cannot have outgoing edges.');
+}
+
+/** Compiles a typed DAG into the only plan format accepted by execution services. */
+export function compileWorkflowExecutionPlan(input: {
+  readonly definition: WorkflowDefinition;
+  readonly descriptionTemplate: string;
+  readonly failurePolicy: WorkflowFailurePolicy;
+  readonly id: string;
+  readonly name: string;
+  readonly titleTemplate: string;
+}): WorkflowExecutionPlan {
+  validateWorkflowDefinition(input.definition);
+  const destinations = input.definition.steps
+    .filter((step): step is WorkflowDestinationStep => step.kind === 'destination')
+    .map((step) => step.destination);
+  if (destinations.length === 0) throw new Error('A workflow plan requires a destination.');
+  for (const destination of destinations) validatePlanDestination(destination);
+  return Object.freeze({
+    planVersion: 'workflow-plan-v1' as const,
+    definitionVersion: 1 as const,
+    id: input.id,
+    name: input.name,
+    titleTemplate: input.titleTemplate,
+    descriptionTemplate: input.descriptionTemplate,
+    failurePolicy: input.failurePolicy,
+    destinations: Object.freeze([...destinations]),
+    steps: Object.freeze([...input.definition.steps]),
+  });
+}
+
+function validatePlanDestination(destination: WorkflowDestination): void {
+  if (destination.accountId.trim().length === 0)
+    throw new Error('A destination account is required.');
+  if (destination.destinationId === 'youtube') {
+    if (!(['private', 'public', 'unlisted'] as const).includes(destination.privacy))
+      throw new Error('Invalid YouTube privacy.');
+  } else if (destination.destinationId === 'tiktok') {
+    if (
+      !(
+        ['FOLLOWER_OF_CREATOR', 'MUTUAL_FOLLOW_FRIENDS', 'PUBLIC_TO_EVERYONE', 'SELF_ONLY'] as const
+      ).includes(destination.privacyLevel)
+    )
+      throw new Error('Invalid TikTok privacy level.');
+  } else if (
+    destination.destinationId !== 'instagram' &&
+    destination.destinationId !== 'facebook'
+  ) {
+    throw new Error('Unsupported workflow destination.');
+  }
+}
+
+/** Revalidates persisted plans before execution; deserialized JSON is never trusted as commands. */
+export function validateWorkflowExecutionPlan(plan: WorkflowExecutionPlan): void {
+  if (plan.planVersion !== 'workflow-plan-v1' || plan.definitionVersion !== 1)
+    throw new Error('Unsupported workflow execution plan version.');
+  if (plan.steps.length === 0 || plan.steps.filter((step) => step.kind === 'source').length !== 1)
+    throw new Error('Invalid workflow execution plan steps.');
+  if (!plan.steps.some((step) => step.kind === 'destination'))
+    throw new Error('Invalid workflow execution plan destination.');
+  for (const destination of plan.destinations) validatePlanDestination(destination);
 }
 
 export interface SourceWorkflowExecutionSnapshot {
@@ -1845,14 +2024,7 @@ export class SourceWorkflowCoordinator {
         continue;
       const executionId = randomUUID();
       const version = sourceWorkflowVersion(workflow);
-      const workflowPlan: WorkflowExecutionPlan = {
-        id: workflow.id,
-        name: workflow.name,
-        titleTemplate: workflow.titleTemplate,
-        descriptionTemplate: workflow.descriptionTemplate,
-        destinations: workflow.destinations,
-        failurePolicy: workflow.failurePolicy,
-      };
+      const workflowPlan = workflow.plan;
       const snapshot: SourceWorkflowExecutionSnapshot = {
         schemaVersion: 1,
         source: {
@@ -2097,6 +2269,32 @@ export interface WorkflowExecutionResult {
   readonly workflowId: string;
 }
 
+function legacyWorkflowDefinition(
+  sourceType: WorkflowSourceStep['sourceType'],
+  destinations: readonly WorkflowDestination[],
+  filters?: SourceWorkflowFilters,
+): WorkflowDefinition {
+  const source: WorkflowSourceStep = { id: 'source', kind: 'source', sourceType };
+  const filter: WorkflowFilterStep | undefined =
+    filters === undefined || Object.keys(filters).length === 0
+      ? undefined
+      : { id: 'filter', kind: 'filter', filters };
+  const previous = filter?.id ?? source.id;
+  const destinationSteps = destinations.map((destination, position): WorkflowDestinationStep => ({
+    id: `destination-${position + 1}`,
+    kind: 'destination',
+    destination,
+  }));
+  return {
+    schemaVersion: 1,
+    steps: [source, ...(filter === undefined ? [] : [filter]), ...destinationSteps],
+    edges: [
+      ...(filter === undefined ? [] : [{ from: source.id, to: filter.id }]),
+      ...destinationSteps.map((step) => ({ from: previous, to: step.id })),
+    ],
+  };
+}
+
 /** Workflow application service: validates user input and snapshots rendered metadata into jobs. */
 export class WorkflowService {
   public constructor(
@@ -2133,15 +2331,7 @@ export class WorkflowService {
   ): WorkflowExecutionResult | undefined {
     const workflow = this.workflows.findById(workflowId);
     if (workflow === undefined || !workflow.enabled) return undefined;
-    const plan: WorkflowExecutionPlan = {
-      id: workflow.id,
-      name: workflow.name,
-      titleTemplate: workflow.titleTemplate,
-      descriptionTemplate: workflow.descriptionTemplate,
-      destinations: workflow.destinations,
-      failurePolicy: workflow.failurePolicy,
-    };
-    return this.executeMedia(plan, media);
+    return this.executeMedia(workflow.plan, media);
   }
 
   /** Executes an immutable remote-source plan through the normal destination job fan-out. */
@@ -2160,6 +2350,7 @@ export class WorkflowService {
     source?: SourceWorkflowExecutionSnapshot['source'],
     intents?: readonly { readonly destinationKey: string; readonly idempotencyKey: string }[],
   ): WorkflowExecutionResult {
+    validateWorkflowExecutionPlan(workflow);
     const name = media.path.replace(/^.*[\\/]/, '');
     const stem = name.replace(/\.[^.]*$/, '');
     const duration =
@@ -2349,6 +2540,40 @@ export class WorkflowService {
       throw new Error('A workflow can contain each destination only once.');
     const remoteSource =
       input.remoteSource === undefined ? undefined : this.validateRemoteSource(input.remoteSource);
+    const definition =
+      input.definition ??
+      legacyWorkflowDefinition(
+        remoteSource === undefined ? 'watched_folder' : 'remote',
+        destinations,
+        remoteSource?.filters,
+      );
+    const expectedSourceType = remoteSource === undefined ? 'watched_folder' : 'remote';
+    const source = definition.steps.find(
+      (step): step is WorkflowSourceStep => step.kind === 'source',
+    );
+    if (source?.sourceType !== expectedSourceType)
+      throw new Error('The workflow source step must match the configured source.');
+    const definitionDestinations = definition.steps
+      .filter((step): step is WorkflowDestinationStep => step.kind === 'destination')
+      .map((step) => this.validateDestination(step.destination));
+    if (JSON.stringify(definitionDestinations) !== JSON.stringify(destinations))
+      throw new Error('Workflow definition destinations must match configured destinations.');
+    const normalizedDefinition: WorkflowDefinition = {
+      ...definition,
+      steps: definition.steps.map((step) =>
+        step.kind !== 'destination'
+          ? step
+          : { ...step, destination: this.validateDestination(step.destination) },
+      ),
+    };
+    const plan = compileWorkflowExecutionPlan({
+      definition: normalizedDefinition,
+      id,
+      name: input.name.trim(),
+      titleTemplate: input.titleTemplate,
+      descriptionTemplate: input.descriptionTemplate ?? '',
+      failurePolicy: 'best_effort',
+    });
     return {
       id,
       name: input.name.trim(),
@@ -2358,6 +2583,8 @@ export class WorkflowService {
       titleTemplate: input.titleTemplate,
       descriptionTemplate: input.descriptionTemplate ?? '',
       destinations,
+      definition: normalizedDefinition,
+      plan,
       failurePolicy: 'best_effort',
       createdAt,
       updatedAt,

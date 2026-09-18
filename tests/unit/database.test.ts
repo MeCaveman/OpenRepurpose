@@ -44,6 +44,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0014_execution_scoped_media' },
       { id: '0015_schedules' },
       { id: '0016_job_controls' },
+      { id: '0017_workflow_execution_plans' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -102,6 +103,13 @@ describe('SQLite migrations and repositories', () => {
         { accountId: 'youtube-account', destinationId: 'youtube', privacy: 'private' },
       ],
       failurePolicy: 'best_effort',
+      plan: { planVersion: 'workflow-plan-v1' },
+      definition: {
+        schemaVersion: 1,
+        steps: expect.arrayContaining([
+          expect.objectContaining({ kind: 'source', sourceType: 'watched_folder' }),
+        ]),
+      },
     });
     expect(() =>
       database.client
@@ -122,7 +130,7 @@ describe('SQLite migrations and repositories', () => {
 
     expect(
       fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toHaveLength(16);
+    ).toHaveLength(17);
     expect(
       fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
     ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);
@@ -132,6 +140,7 @@ describe('SQLite migrations and repositories', () => {
         { destinationId: 'youtube', accountId: 'youtube-v02', privacy: 'private' },
         { destinationId: 'tiktok', accountId: 'tiktok-v02', privacyLevel: 'SELF_ONLY' },
       ],
+      plan: { planVersion: 'workflow-plan-v1' },
     });
     expect(
       fixture.database.client
