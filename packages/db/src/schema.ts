@@ -278,6 +278,7 @@ export const sourceItems = sqliteTable(
     firstObservedAt: integer('first_observed_at', { mode: 'timestamp_ms' }).notNull(),
     lastObservedAt: integer('last_observed_at', { mode: 'timestamp_ms' }).notNull(),
     metadataJson: text('metadata_json').notNull(),
+    mediaDescriptorJson: text('media_descriptor_json'),
     lifecycleStatus: text('lifecycle_status', {
       enum: [
         'observed',
@@ -438,5 +439,34 @@ export const sourceMediaArtifacts = sqliteTable(
       table.cleanupState,
       table.updatedAt,
     ),
+  ],
+);
+
+export const sourceMediaResolutions = sqliteTable(
+  'source_media_resolutions',
+  {
+    sourceItemId: text('source_item_id')
+      .notNull()
+      .references(() => sourceItems.id, { onDelete: 'restrict' }),
+    executionId: text('execution_id')
+      .notNull()
+      .references(() => sourceWorkflowExecutions.id, { onDelete: 'restrict' }),
+    jobScopeId: text('job_scope_id').notNull(),
+    status: text('status', { enum: ['resolving', 'ready', 'failed', 'cancelled'] }).notNull(),
+    resolverId: text('resolver_id'),
+    managedPath: text('managed_path'),
+    mediaId: text('media_id').references(() => mediaAssets.id, { onDelete: 'set null' }),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('source_media_resolutions_item_execution_idx').on(
+      table.sourceItemId,
+      table.executionId,
+    ),
+    index('source_media_resolutions_recovery_idx').on(table.status, table.updatedAt),
   ],
 );

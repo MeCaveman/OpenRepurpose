@@ -5,9 +5,16 @@ import {
   type SourceAdapterContext,
   type SourceItemObservation,
   type SourceJsonValue,
+  type SourceMediaDescriptor,
+  type SourceMediaResolutionStrategy,
   type SourceRegistry,
 } from '@openrepurpose/platform-sdk';
-export type { SourceItemObservation, SourceJsonValue } from '@openrepurpose/platform-sdk';
+export type {
+  SourceItemObservation,
+  SourceJsonValue,
+  SourceMediaDescriptor,
+  SourceMediaResolutionStrategy,
+} from '@openrepurpose/platform-sdk';
 
 export type MediaAssetState = 'available' | 'missing';
 
@@ -49,6 +56,7 @@ export interface MediaProbe {
 
 export interface MediaRepository {
   create(asset: MediaAsset): MediaAsset;
+  findById(id: string): MediaAsset | undefined;
   findByFingerprint(fingerprint: string): MediaAsset | undefined;
   list(): readonly MediaAsset[];
 }
@@ -675,6 +683,7 @@ export interface RemoteSourceItem {
   readonly firstObservedAt: Date;
   readonly id: string;
   readonly lastObservedAt: Date;
+  readonly media?: SourceMediaDescriptor;
   readonly metadata: Readonly<Record<string, SourceJsonValue>>;
   readonly publishedAt?: Date;
   readonly sourceConnectionId: string;
@@ -918,6 +927,416 @@ export type SourceRetentionPolicy =
 
 export type SourceMediaOwnership =
   'user_owned_original' | 'openrepurpose_temporary' | 'openrepurpose_generated';
+
+export type MediaResolutionState = 'resolving' | 'ready' | 'failed' | 'cancelled';
+
+export interface SourceMediaResolution {
+  readonly completedAt?: Date;
+  readonly errorCode?: string;
+  readonly errorMessage?: string;
+  readonly executionId: string;
+  readonly jobScopeId: string;
+  readonly managedPath?: string;
+  readonly mediaId?: string;
+  readonly resolverId?: string;
+  readonly sourceItemId: string;
+  readonly startedAt: Date;
+  readonly status: MediaResolutionState;
+  readonly updatedAt: Date;
+}
+
+export interface SourceMediaArtifact {
+  readonly cleanupState:
+    | 'protected'
+    | 'not_eligible'
+    | 'eligible'
+    | 'scheduled'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'retained';
+  readonly deletedAt?: Date;
+  readonly executionId?: string;
+  readonly id: string;
+  readonly mediaId?: string;
+  readonly ownership: SourceMediaOwnership;
+  readonly path: string;
+  readonly sourceItemId: string;
+  readonly state: 'available' | 'missing' | 'deleted';
+  readonly updatedAt: Date;
+}
+
+export interface SourceMediaResolutionRepository {
+  begin(input: {
+    readonly executionId: string;
+    readonly jobScopeId: string;
+    readonly managedPath?: string;
+    readonly now: Date;
+    readonly resolverId?: string;
+    readonly sourceItemId: string;
+  }): SourceMediaResolution;
+  find(sourceItemId: string, executionId: string): SourceMediaResolution | undefined;
+  findArtifact(id: string): SourceMediaArtifact | undefined;
+  findArtifactForResolution(
+    sourceItemId: string,
+    executionId: string,
+  ): SourceMediaArtifact | undefined;
+  markCleanupCompleted(id: string, now: Date): SourceMediaArtifact | undefined;
+  markCleanupFailed(
+    id: string,
+    errorCode: string,
+    errorMessage: string,
+    now: Date,
+  ): SourceMediaArtifact | undefined;
+  markCleanupRunning(id: string, now: Date): SourceMediaArtifact | undefined;
+  markFailed(input: {
+    readonly errorCode: string;
+    readonly errorMessage: string;
+    readonly executionId: string;
+    readonly now: Date;
+    readonly sourceItemId: string;
+    readonly status: 'failed' | 'cancelled';
+  }): SourceMediaResolution;
+  markReady(input: {
+    readonly executionId: string;
+    readonly media: MediaAsset;
+    readonly now: Date;
+    readonly ownership: SourceMediaOwnership;
+    readonly sourceItemId: string;
+  }): { readonly artifact: SourceMediaArtifact; readonly resolution: SourceMediaResolution };
+}
+
+export interface ManagedTemporaryPath {
+  readonly finalPath: string;
+  readonly partialPath: string;
+}
+
+/** Storage boundary for OpenRepurpose-owned working files below the managed data root. */
+export interface ManagedTemporaryStorage {
+  cleanup(path: string): Promise<'deleted' | 'missing'>;
+  discard(paths: ManagedTemporaryPath): Promise<void>;
+  finalize(paths: ManagedTemporaryPath): Promise<string>;
+  isUsableFile(path: string): Promise<boolean>;
+  prepare(jobScopeId: string, extension?: string): Promise<ManagedTemporaryPath>;
+}
+
+export interface LocalOriginalHints {
+  readonly fingerprint?: string;
+  readonly mediaId?: string;
+  readonly path?: string;
+}
+
+export interface LocalOriginalMatcher {
+  find(input: {
+    readonly hints?: LocalOriginalHints;
+    readonly sourceItem: RemoteSourceItem;
+  }): Promise<MediaAsset | undefined>;
+}
+
+/** Matches only already-registered media and never copies or assumes ownership of the file. */
+export class RegisteredLocalOriginalMatcher implements LocalOriginalMatcher {
+  public constructor(private readonly media: MediaRepository) {}
+
+  public async find(input: {
+    readonly hints?: LocalOriginalHints;
+    readonly sourceItem: RemoteSourceItem;
+  }): Promise<MediaAsset | undefined> {
+    const hints = input.hints;
+    if (hints === undefined) return undefined;
+    const normalizedPath = hints.path?.replaceAll('\\', '/').toLowerCase();
+    return this.media.list().find((asset) => {
+      if (asset.state !== 'available') return false;
+      return (
+        (hints.mediaId !== undefined && asset.id === hints.mediaId) ||
+        (hints.fingerprint !== undefined && asset.fingerprint === hints.fingerprint) ||
+        (normalizedPath !== undefined &&
+          asset.path.replaceAll('\\', '/').toLowerCase() === normalizedPath)
+      );
+    });
+  }
+}
+
+export interface MediaResolverRequest {
+  readonly sourceItem: RemoteSourceItem;
+  readonly strategy: Exclude<SourceMediaResolutionStrategy, 'local_original'>;
+}
+
+export interface MediaResolverContext {
+  /** Resolver implementations must write only to this managed staging path. */
+  readonly destinationPath: string;
+  readonly signal: AbortSignal;
+}
+
+/** Replaceable boundary for official or explicitly enabled authorized media acquisition. */
+export interface MediaResolver {
+  readonly id: string;
+  canResolve(request: MediaResolverRequest): boolean;
+  resolve(request: MediaResolverRequest, context: MediaResolverContext): Promise<void>;
+}
+
+export class MediaResolutionError extends Error {
+  public constructor(
+    public readonly code: string,
+    public readonly retryable: boolean,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'MediaResolutionError';
+  }
+}
+
+export interface ResolveSourceMediaInput {
+  readonly executionId: string;
+  readonly jobScopeId: string;
+  readonly localOriginal?: LocalOriginalHints;
+  readonly outputExtension?: string;
+  readonly rightsConfirmed?: boolean;
+  readonly signal: AbortSignal;
+  readonly sourceItem: RemoteSourceItem;
+}
+
+export interface ResolvedSourceMedia {
+  readonly artifact: SourceMediaArtifact;
+  readonly media: MediaAsset;
+  readonly reusedLocalOriginal: boolean;
+}
+
+/**
+ * Durable resolution coordinator. Local originals always win; managed downloads are checkpointed
+ * before acquisition and registered through the same media-import path as user imports.
+ */
+export class MediaResolutionService {
+  public constructor(
+    private readonly resolutions: SourceMediaResolutionRepository,
+    private readonly originals: LocalOriginalMatcher,
+    private readonly resolvers: readonly MediaResolver[],
+    private readonly storage: ManagedTemporaryStorage,
+    private readonly importer: MediaImportService,
+    private readonly media: MediaRepository,
+    private readonly now: () => Date = () => new Date(),
+  ) {
+    const ids = resolvers.map((resolver) => resolver.id);
+    if (ids.some((id) => id.trim().length === 0) || new Set(ids).size !== ids.length)
+      throw new Error('Media resolver IDs must be non-empty and unique.');
+  }
+
+  public async resolve(input: ResolveSourceMediaInput): Promise<ResolvedSourceMedia> {
+    const checkpoint = this.resolutions.find(input.sourceItem.id, input.executionId);
+    if (checkpoint?.status === 'ready' && checkpoint.mediaId !== undefined) {
+      const existingMedia = this.media.findById(checkpoint.mediaId);
+      const artifact = this.resolutions.findArtifactForResolution(
+        checkpoint.sourceItemId,
+        checkpoint.executionId,
+      );
+      if (existingMedia !== undefined && artifact !== undefined)
+        return {
+          artifact,
+          media: existingMedia,
+          reusedLocalOriginal: artifact.ownership === 'user_owned_original',
+        };
+    }
+
+    if (input.signal.aborted) {
+      this.resolutions.begin({
+        sourceItemId: input.sourceItem.id,
+        executionId: input.executionId,
+        jobScopeId: input.jobScopeId,
+        now: this.now(),
+      });
+      this.resolutions.markFailed({
+        sourceItemId: input.sourceItem.id,
+        executionId: input.executionId,
+        status: 'cancelled',
+        errorCode: 'MEDIA_RESOLUTION_CANCELLED',
+        errorMessage: 'Media resolution was cancelled.',
+        now: this.now(),
+      });
+      throw new MediaResolutionError(
+        'MEDIA_RESOLUTION_CANCELLED',
+        false,
+        'Media resolution was cancelled.',
+      );
+    }
+    const original = await this.originals.find({
+      sourceItem: input.sourceItem,
+      ...(input.localOriginal === undefined ? {} : { hints: input.localOriginal }),
+    });
+    if (original !== undefined) {
+      this.resolutions.begin({
+        sourceItemId: input.sourceItem.id,
+        executionId: input.executionId,
+        jobScopeId: input.jobScopeId,
+        resolverId: 'local-original',
+        now: this.now(),
+      });
+      const ready = this.resolutions.markReady({
+        sourceItemId: input.sourceItem.id,
+        executionId: input.executionId,
+        media: original,
+        ownership: 'user_owned_original',
+        now: this.now(),
+      });
+      return { artifact: ready.artifact, media: original, reusedLocalOriginal: true };
+    }
+
+    const strategy = input.sourceItem.media?.resolutionStrategies.find(
+      (candidate): candidate is Exclude<SourceMediaResolutionStrategy, 'local_original'> =>
+        candidate !== 'local_original',
+    );
+    if (strategy === undefined)
+      throw await this.persistFailure(
+        input,
+        'MEDIA_RESOLVER_UNAVAILABLE',
+        false,
+        'No configured resolver can acquire this source item.',
+      );
+    if (
+      strategy === 'external_downloader' &&
+      input.sourceItem.media?.rightsRequirement === 'explicit_confirmation' &&
+      input.rightsConfirmed !== true
+    )
+      throw await this.persistFailure(
+        input,
+        'MEDIA_RIGHTS_CONFIRMATION_REQUIRED',
+        false,
+        'Explicit rights confirmation is required before external resolution.',
+      );
+    const request: MediaResolverRequest = { sourceItem: input.sourceItem, strategy };
+    const resolver = this.resolvers.find((candidate) => candidate.canResolve(request));
+    if (resolver === undefined)
+      throw await this.persistFailure(
+        input,
+        'MEDIA_RESOLVER_UNAVAILABLE',
+        false,
+        'No configured resolver can acquire this source item.',
+      );
+
+    const paths = await this.storage.prepare(input.jobScopeId, input.outputExtension);
+    this.resolutions.begin({
+      sourceItemId: input.sourceItem.id,
+      executionId: input.executionId,
+      jobScopeId: input.jobScopeId,
+      resolverId: resolver.id,
+      managedPath: paths.finalPath,
+      now: this.now(),
+    });
+    try {
+      if (!(await this.storage.isUsableFile(paths.finalPath))) {
+        await this.storage.discard(paths);
+        this.throwIfCancelled(input.signal);
+        await resolver.resolve(request, {
+          destinationPath: paths.partialPath,
+          signal: input.signal,
+        });
+        this.throwIfCancelled(input.signal);
+        await this.storage.finalize(paths);
+      }
+      const imported = await this.importer.import(paths.finalPath);
+      const ready = this.resolutions.markReady({
+        sourceItemId: input.sourceItem.id,
+        executionId: input.executionId,
+        media: imported.asset,
+        ownership: 'openrepurpose_temporary',
+        now: this.now(),
+      });
+      return { artifact: ready.artifact, media: imported.asset, reusedLocalOriginal: false };
+    } catch (error) {
+      await this.storage.discard(paths);
+      const cancelled = input.signal.aborted;
+      const resolutionError =
+        error instanceof MediaResolutionError
+          ? error
+          : new MediaResolutionError(
+              cancelled ? 'MEDIA_RESOLUTION_CANCELLED' : 'MEDIA_RESOLUTION_FAILED',
+              !cancelled,
+              cancelled
+                ? 'Media resolution was cancelled.'
+                : 'The source media could not be resolved.',
+            );
+      this.resolutions.markFailed({
+        sourceItemId: input.sourceItem.id,
+        executionId: input.executionId,
+        status: cancelled ? 'cancelled' : 'failed',
+        errorCode: resolutionError.code,
+        errorMessage: resolutionError.message,
+        now: this.now(),
+      });
+      throw resolutionError;
+    }
+  }
+
+  private async persistFailure(
+    input: ResolveSourceMediaInput,
+    code: string,
+    retryable: boolean,
+    message: string,
+  ): Promise<MediaResolutionError> {
+    this.resolutions.begin({
+      sourceItemId: input.sourceItem.id,
+      executionId: input.executionId,
+      jobScopeId: input.jobScopeId,
+      now: this.now(),
+    });
+    this.resolutions.markFailed({
+      sourceItemId: input.sourceItem.id,
+      executionId: input.executionId,
+      status: 'failed',
+      errorCode: code,
+      errorMessage: message,
+      now: this.now(),
+    });
+    return new MediaResolutionError(code, retryable, message);
+  }
+
+  private throwIfCancelled(signal: AbortSignal): void {
+    if (signal.aborted)
+      throw new MediaResolutionError(
+        'MEDIA_RESOLUTION_CANCELLED',
+        false,
+        'Media resolution was cancelled.',
+      );
+  }
+}
+
+export function retentionCleanupAt(
+  policy: SourceRetentionPolicy,
+  completedAt: Date,
+): Date | undefined {
+  if (policy.kind === 'keep_forever') return undefined;
+  if (policy.kind === 'delete_after_success') return completedAt;
+  if (!Number.isInteger(policy.durationSeconds) || policy.durationSeconds <= 0)
+    throw new Error('Retention duration must be a positive whole number of seconds.');
+  return new Date(completedAt.getTime() + policy.durationSeconds * 1_000);
+}
+
+export class SourceMediaCleanupService {
+  public constructor(
+    private readonly resolutions: SourceMediaResolutionRepository,
+    private readonly storage: ManagedTemporaryStorage,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  public async cleanupArtifact(id: string): Promise<'deleted' | 'missing' | 'protected'> {
+    const artifact = this.resolutions.findArtifact(id);
+    if (artifact === undefined) return 'missing';
+    if (artifact.ownership === 'user_owned_original') return 'protected';
+    if (artifact.cleanupState === 'completed') return 'missing';
+    this.resolutions.markCleanupRunning(id, this.now());
+    try {
+      const result = await this.storage.cleanup(artifact.path);
+      this.resolutions.markCleanupCompleted(id, this.now());
+      return result;
+    } catch (error) {
+      this.resolutions.markCleanupFailed(
+        id,
+        'MEDIA_CLEANUP_FAILED',
+        error instanceof Error ? error.message : 'Managed media cleanup failed.',
+        this.now(),
+      );
+      throw error;
+    }
+  }
+}
 
 export interface SourceDestinationState {
   readonly required: boolean;

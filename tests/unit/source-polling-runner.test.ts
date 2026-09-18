@@ -35,19 +35,23 @@ describe('source polling runner', () => {
 
     const item = database.client
       .prepare(
-        'SELECT external_id, lifecycle_status, resolution_status, metadata_json FROM source_items',
+        `SELECT external_id, lifecycle_status, resolution_status, metadata_json,
+         media_descriptor_json FROM source_items`,
       )
       .get() as {
       external_id: string;
       lifecycle_status: string;
       resolution_status: string;
       metadata_json: string;
+      media_descriptor_json: string;
     };
     expect(item).toEqual({
       external_id: 'item-1',
       lifecycle_status: 'observed',
       resolution_status: 'unresolved',
       metadata_json: '{"title":"First item"}',
+      media_descriptor_json:
+        '{"availability":"available","resolutionStrategies":["local_original","official_download"],"rightsRequirement":"connection_authorization"}',
     });
     expect(jobs.list()).toHaveLength(1);
     expect(jobs.list()[0]).toMatchObject({

@@ -1,18 +1,115 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, lstat, realpath } from 'node:fs/promises';
+import { access, lstat, mkdir, realpath, rename, rm } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { delimiter, isAbsolute, join, normalize, resolve } from 'node:path';
+import { delimiter, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import type {
   LocalFileInspector,
+  ManagedTemporaryPath,
+  ManagedTemporaryStorage,
   MediaProbe,
   MediaProbeMetadata,
   SourceCursorRepository,
   WorkflowService,
 } from '@openrepurpose/core';
 import type { MediaImportService } from '@openrepurpose/core';
+
+function isPathInside(root: string, candidate: string): boolean {
+  const pathFromRoot = relative(root, candidate);
+  return pathFromRoot.length > 0 && !pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot);
+}
+
+function safeScopeId(value: string): string {
+  if (value === '.' || value === '..' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value))
+    throw new Error('A managed temporary scope must be a safe identifier.');
+  return value;
+}
+
+function safeExtension(value: string | undefined): string {
+  if (value === undefined || value === '') return '.bin';
+  const extension = value.startsWith('.') ? value : `.${value}`;
+  if (!/^\.[a-zA-Z0-9]{1,10}$/.test(extension))
+    throw new Error('A managed media extension must contain only letters and numbers.');
+  return extension.toLowerCase();
+}
+
+/** Job/execution-scoped storage rooted at `<dataDirectory>/storage/temp`. */
+export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
+  public readonly root: string;
+
+  public constructor(dataDirectory: string) {
+    if (!isAbsolute(dataDirectory))
+      throw new Error('The application data directory must be absolute.');
+    this.root = resolve(dataDirectory, 'storage', 'temp');
+  }
+
+  public async prepare(jobScopeId: string, extension?: string): Promise<ManagedTemporaryPath> {
+    const scopeDirectory = resolve(this.root, safeScopeId(jobScopeId));
+    if (!isPathInside(this.root, scopeDirectory))
+      throw new Error('Managed temporary path escaped its root.');
+    await mkdir(scopeDirectory, { recursive: true });
+    const finalPath = resolve(scopeDirectory, `source${safeExtension(extension)}`);
+    this.assertManaged(finalPath);
+    return { finalPath, partialPath: `${finalPath}.partial` };
+  }
+
+  public async isUsableFile(path: string): Promise<boolean> {
+    this.assertManaged(path);
+    try {
+      const details = await lstat(path);
+      return details.isFile() && !details.isSymbolicLink() && details.size > 0;
+    } catch (error) {
+      if (isMissingFileError(error)) return false;
+      throw error;
+    }
+  }
+
+  public async finalize(paths: ManagedTemporaryPath): Promise<string> {
+    this.assertManaged(paths.partialPath);
+    this.assertManaged(paths.finalPath);
+    const details = await lstat(paths.partialPath);
+    if (!details.isFile() || details.isSymbolicLink() || details.size <= 0)
+      throw new Error('Resolver output must be a non-empty regular file.');
+    await rename(paths.partialPath, paths.finalPath);
+    return paths.finalPath;
+  }
+
+  public async discard(paths: ManagedTemporaryPath): Promise<void> {
+    this.assertManaged(paths.partialPath);
+    this.assertManaged(paths.finalPath);
+    await Promise.all([
+      rm(paths.partialPath, { force: true, recursive: true }),
+      rm(paths.finalPath, { force: true, recursive: true }),
+    ]);
+  }
+
+  public async cleanup(path: string): Promise<'deleted' | 'missing'> {
+    const managedPath = this.assertManaged(path);
+    try {
+      await lstat(managedPath);
+    } catch (error) {
+      if (isMissingFileError(error)) return 'missing';
+      throw error;
+    }
+    await rm(managedPath, { recursive: true, force: true });
+    return 'deleted';
+  }
+
+  private assertManaged(path: string): string {
+    const candidate = resolve(path);
+    if (!isPathInside(this.root, candidate))
+      throw new Error('Refusing to access a path outside managed temporary storage.');
+    return candidate;
+  }
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return (
+    error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
 
 export interface ExecutableDiscoveryOptions {
   readonly environment?: NodeJS.ProcessEnv;

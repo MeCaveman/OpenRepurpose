@@ -39,6 +39,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0009_meta_credentials_targets' },
       { id: '0010_meta_workflow_destinations' },
       { id: '0011_source_domain' },
+      { id: '0012_media_resolution' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -117,7 +118,7 @@ describe('SQLite migrations and repositories', () => {
 
     expect(
       fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toHaveLength(11);
+    ).toHaveLength(12);
     expect(
       fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
     ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);
@@ -187,6 +188,7 @@ describe('SQLite migrations and repositories', () => {
       { name: 'source_execution_destinations' },
       { name: 'source_items' },
       { name: 'source_media_artifacts' },
+      { name: 'source_media_resolutions' },
       { name: 'source_workflow_executions' },
     ]);
   });

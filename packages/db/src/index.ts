@@ -22,6 +22,11 @@ import type {
   JsonValue,
   MediaAsset,
   MediaRepository,
+  SourceMediaArtifact,
+  SourceMediaDescriptor,
+  SourceMediaOwnership,
+  SourceMediaResolution,
+  SourceMediaResolutionRepository,
   MetaCredential,
   MetaCredentialRepository,
   MetaCredentialStatus,
@@ -63,6 +68,7 @@ export {
   sourceExecutionDestinations,
   sourceItems,
   sourceMediaArtifacts,
+  sourceMediaResolutions,
   sourceWorkflowExecutions,
   workflows,
   workflowDestinations,
@@ -156,6 +162,10 @@ export class SqliteMediaRepository implements MediaRepository {
   public create(asset: MediaAsset): MediaAsset {
     this.database.db.insert(mediaAssets).values(this.toRow(asset)).run();
     return asset;
+  }
+  public findById(id: string): MediaAsset | undefined {
+    const row = this.database.db.select().from(mediaAssets).where(eq(mediaAssets.id, id)).get();
+    return row === undefined ? undefined : this.toAsset(row);
   }
   public findByFingerprint(fingerprint: string): MediaAsset | undefined {
     const row = this.database.db
@@ -489,6 +499,7 @@ interface RawRemoteSourceItemRow {
   readonly id: string;
   readonly last_observed_at: number;
   readonly metadata_json: string;
+  readonly media_descriptor_json: string | null;
   readonly published_at: number | null;
   readonly source_connection_id: string;
   readonly updated_at: number;
@@ -525,6 +536,9 @@ function remoteSourceItemFromRow(row: RawRemoteSourceItemRow): RemoteSourceItem 
     externalId: row.external_id,
     dedupeKey: row.dedupe_key,
     metadata: JSON.parse(row.metadata_json) as Record<string, SourceJsonValue>,
+    ...(row.media_descriptor_json === null
+      ? {}
+      : { media: JSON.parse(row.media_descriptor_json) as SourceMediaDescriptor }),
     firstObservedAt: new Date(row.first_observed_at),
     lastObservedAt: new Date(row.last_observed_at),
     updatedAt: new Date(row.updated_at),
@@ -616,9 +630,9 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
           .prepare(
             `INSERT INTO source_items (
               id, source_connection_id, external_id, dedupe_key, event_id, published_at,
-              first_observed_at, last_observed_at, metadata_json, lifecycle_status,
+              first_observed_at, last_observed_at, metadata_json, media_descriptor_json, lifecycle_status,
               resolution_status, linked_media_id, completed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'observed', 'unresolved', NULL, NULL, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'observed', 'unresolved', NULL, NULL, ?)`,
           )
           .run(
             id,
@@ -630,6 +644,7 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
             input.now.getTime(),
             input.now.getTime(),
             JSON.stringify(input.item.metadata),
+            input.item.media === undefined ? null : JSON.stringify(input.item.media),
             input.now.getTime(),
           );
         const row = client
@@ -640,13 +655,14 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
       }
       client
         .prepare(
-          `UPDATE source_items SET event_id = ?, published_at = ?, metadata_json = ?,
+          `UPDATE source_items SET event_id = ?, published_at = ?, metadata_json = ?, media_descriptor_json = ?,
            last_observed_at = ?, updated_at = ? WHERE id = ?`,
         )
         .run(
           input.item.eventId ?? null,
           input.item.publishedAt === undefined ? null : Date.parse(input.item.publishedAt),
           JSON.stringify(input.item.metadata),
+          input.item.media === undefined ? null : JSON.stringify(input.item.media),
           input.now.getTime(),
           input.now.getTime(),
           existing.id,
@@ -667,6 +683,285 @@ export class SqliteSourcePollingRepository implements SourcePollingRepository {
       .prepare('SELECT * FROM source_connections WHERE id = ?')
       .get(id) as RawSourceConnectionRow | undefined;
     return row === undefined ? undefined : sourceConnectionFromRow(row);
+  }
+}
+
+interface RawSourceMediaResolutionRow {
+  readonly completed_at: number | null;
+  readonly error_code: string | null;
+  readonly error_message: string | null;
+  readonly execution_id: string;
+  readonly job_scope_id: string;
+  readonly managed_path: string | null;
+  readonly media_id: string | null;
+  readonly resolver_id: string | null;
+  readonly source_item_id: string;
+  readonly started_at: number;
+  readonly status: SourceMediaResolution['status'];
+  readonly updated_at: number;
+}
+
+interface RawSourceMediaArtifactRow {
+  readonly cleanup_state: SourceMediaArtifact['cleanupState'];
+  readonly deleted_at: number | null;
+  readonly execution_id: string | null;
+  readonly id: string;
+  readonly media_id: string | null;
+  readonly ownership: SourceMediaOwnership;
+  readonly path: string;
+  readonly source_item_id: string;
+  readonly state: SourceMediaArtifact['state'];
+  readonly updated_at: number;
+}
+
+function sourceMediaResolutionFromRow(row: RawSourceMediaResolutionRow): SourceMediaResolution {
+  return {
+    sourceItemId: row.source_item_id,
+    executionId: row.execution_id,
+    jobScopeId: row.job_scope_id,
+    status: row.status,
+    startedAt: new Date(row.started_at),
+    updatedAt: new Date(row.updated_at),
+    ...(row.resolver_id === null ? {} : { resolverId: row.resolver_id }),
+    ...(row.managed_path === null ? {} : { managedPath: row.managed_path }),
+    ...(row.media_id === null ? {} : { mediaId: row.media_id }),
+    ...(row.error_code === null ? {} : { errorCode: row.error_code }),
+    ...(row.error_message === null ? {} : { errorMessage: row.error_message }),
+    ...(row.completed_at === null ? {} : { completedAt: new Date(row.completed_at) }),
+  };
+}
+
+function sourceMediaArtifactFromRow(row: RawSourceMediaArtifactRow): SourceMediaArtifact {
+  return {
+    id: row.id,
+    sourceItemId: row.source_item_id,
+    path: row.path,
+    ownership: row.ownership,
+    state: row.state,
+    cleanupState: row.cleanup_state,
+    updatedAt: new Date(row.updated_at),
+    ...(row.execution_id === null ? {} : { executionId: row.execution_id }),
+    ...(row.media_id === null ? {} : { mediaId: row.media_id }),
+    ...(row.deleted_at === null ? {} : { deletedAt: new Date(row.deleted_at) }),
+  };
+}
+
+/** Durable resolution and artifact lifecycle state shared by restart recovery and cleanup. */
+export class SqliteSourceMediaResolutionRepository implements SourceMediaResolutionRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public begin(input: {
+    readonly executionId: string;
+    readonly jobScopeId: string;
+    readonly managedPath?: string;
+    readonly now: Date;
+    readonly resolverId?: string;
+    readonly sourceItemId: string;
+  }): SourceMediaResolution {
+    this.database.client
+      .prepare(
+        `INSERT INTO source_media_resolutions (
+          source_item_id, execution_id, job_scope_id, status, resolver_id, managed_path,
+          started_at, updated_at
+        ) VALUES (?, ?, ?, 'resolving', ?, ?, ?, ?)
+        ON CONFLICT(source_item_id, execution_id) DO UPDATE SET
+          job_scope_id = excluded.job_scope_id, status = 'resolving',
+          resolver_id = excluded.resolver_id,
+          managed_path = COALESCE(excluded.managed_path, source_media_resolutions.managed_path),
+          media_id = NULL, error_code = NULL, error_message = NULL,
+          updated_at = excluded.updated_at, completed_at = NULL`,
+      )
+      .run(
+        input.sourceItemId,
+        input.executionId,
+        input.jobScopeId,
+        input.resolverId ?? null,
+        input.managedPath ?? null,
+        input.now.getTime(),
+        input.now.getTime(),
+      );
+    this.database.client
+      .prepare(
+        `UPDATE source_items SET lifecycle_status = 'resolving', resolution_status = 'resolving',
+         updated_at = ? WHERE id = ?`,
+      )
+      .run(input.now.getTime(), input.sourceItemId);
+    return this.require(input.sourceItemId, input.executionId);
+  }
+
+  public find(sourceItemId: string, executionId: string): SourceMediaResolution | undefined {
+    const row = this.database.client
+      .prepare(
+        'SELECT * FROM source_media_resolutions WHERE source_item_id = ? AND execution_id = ?',
+      )
+      .get(sourceItemId, executionId) as RawSourceMediaResolutionRow | undefined;
+    return row === undefined ? undefined : sourceMediaResolutionFromRow(row);
+  }
+
+  public findArtifact(id: string): SourceMediaArtifact | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM source_media_artifacts WHERE id = ?')
+      .get(id) as RawSourceMediaArtifactRow | undefined;
+    return row === undefined ? undefined : sourceMediaArtifactFromRow(row);
+  }
+
+  public findArtifactForResolution(
+    sourceItemId: string,
+    executionId: string,
+  ): SourceMediaArtifact | undefined {
+    const row = this.database.client
+      .prepare(
+        `SELECT * FROM source_media_artifacts
+         WHERE source_item_id = ? AND execution_id = ? ORDER BY created_at ASC LIMIT 1`,
+      )
+      .get(sourceItemId, executionId) as RawSourceMediaArtifactRow | undefined;
+    return row === undefined ? undefined : sourceMediaArtifactFromRow(row);
+  }
+
+  public markReady(input: {
+    readonly executionId: string;
+    readonly media: MediaAsset;
+    readonly now: Date;
+    readonly ownership: SourceMediaOwnership;
+    readonly sourceItemId: string;
+  }): { readonly artifact: SourceMediaArtifact; readonly resolution: SourceMediaResolution } {
+    const artifactId = `${input.sourceItemId}:${input.executionId}`;
+    const cleanupState = input.ownership === 'user_owned_original' ? 'protected' : 'not_eligible';
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      client
+        .prepare(
+          `UPDATE source_media_resolutions SET status = 'ready', media_id = ?, error_code = NULL,
+           error_message = NULL, updated_at = ?, completed_at = ?
+           WHERE source_item_id = ? AND execution_id = ?`,
+        )
+        .run(
+          input.media.id,
+          input.now.getTime(),
+          input.now.getTime(),
+          input.sourceItemId,
+          input.executionId,
+        );
+      client
+        .prepare(
+          `UPDATE source_items SET lifecycle_status = 'media_ready', resolution_status = 'ready',
+           linked_media_id = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(input.media.id, input.now.getTime(), input.sourceItemId);
+      client
+        .prepare(
+          `INSERT INTO source_media_artifacts (
+            id, source_item_id, execution_id, media_id, path, ownership, state, cleanup_state,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'available', ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET media_id = excluded.media_id, state = 'available',
+            updated_at = excluded.updated_at, deleted_at = NULL`,
+        )
+        .run(
+          artifactId,
+          input.sourceItemId,
+          input.executionId,
+          input.media.id,
+          input.media.path,
+          input.ownership,
+          cleanupState,
+          input.now.getTime(),
+          input.now.getTime(),
+        );
+      client.exec('COMMIT;');
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+    return {
+      resolution: this.require(input.sourceItemId, input.executionId),
+      artifact: this.requireArtifact(artifactId),
+    };
+  }
+
+  public markFailed(input: {
+    readonly errorCode: string;
+    readonly errorMessage: string;
+    readonly executionId: string;
+    readonly now: Date;
+    readonly sourceItemId: string;
+    readonly status: 'failed' | 'cancelled';
+  }): SourceMediaResolution {
+    this.database.client
+      .prepare(
+        `UPDATE source_media_resolutions SET status = ?, media_id = NULL, error_code = ?,
+         error_message = ?, updated_at = ?, completed_at = ?
+         WHERE source_item_id = ? AND execution_id = ?`,
+      )
+      .run(
+        input.status,
+        input.errorCode,
+        input.errorMessage,
+        input.now.getTime(),
+        input.now.getTime(),
+        input.sourceItemId,
+        input.executionId,
+      );
+    this.database.client
+      .prepare(
+        `UPDATE source_items SET lifecycle_status = 'failed', resolution_status = 'failed',
+         updated_at = ? WHERE id = ?`,
+      )
+      .run(input.now.getTime(), input.sourceItemId);
+    return this.require(input.sourceItemId, input.executionId);
+  }
+
+  public markCleanupRunning(id: string, now: Date): SourceMediaArtifact | undefined {
+    return this.updateCleanup(id, "cleanup_state = 'running', updated_at = ?", [now.getTime()]);
+  }
+
+  public markCleanupCompleted(id: string, now: Date): SourceMediaArtifact | undefined {
+    return this.updateCleanup(
+      id,
+      "cleanup_state = 'completed', state = 'deleted', deleted_at = ?, updated_at = ?",
+      [now.getTime(), now.getTime()],
+    );
+  }
+
+  public markCleanupFailed(
+    id: string,
+    errorCode: string,
+    errorMessage: string,
+    now: Date,
+  ): SourceMediaArtifact | undefined {
+    const artifact = this.findArtifact(id);
+    if (artifact?.executionId !== undefined)
+      this.database.client
+        .prepare(
+          `UPDATE source_workflow_executions SET cleanup_status = 'failed',
+           cleanup_error_code = ?, cleanup_error_message = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(errorCode, errorMessage, now.getTime(), artifact.executionId);
+    return this.updateCleanup(id, "cleanup_state = 'failed', updated_at = ?", [now.getTime()]);
+  }
+
+  private updateCleanup(
+    id: string,
+    assignment: string,
+    values: readonly (number | string)[],
+  ): SourceMediaArtifact | undefined {
+    this.database.client
+      .prepare(`UPDATE source_media_artifacts SET ${assignment} WHERE id = ?`)
+      .run(...values, id);
+    return this.findArtifact(id);
+  }
+
+  private require(sourceItemId: string, executionId: string): SourceMediaResolution {
+    const resolution = this.find(sourceItemId, executionId);
+    if (resolution === undefined) throw new Error('Source media resolution checkpoint is missing.');
+    return resolution;
+  }
+
+  private requireArtifact(id: string): SourceMediaArtifact {
+    const artifact = this.findArtifact(id);
+    if (artifact === undefined) throw new Error('Source media artifact checkpoint is missing.');
+    return artifact;
   }
 }
 
