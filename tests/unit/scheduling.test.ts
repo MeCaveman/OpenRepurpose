@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import { FakeClock, resolveOneTimeLocal, ScheduleService } from '@openrepurpose/core';
 import { SqliteScheduleRepository, SqliteSourcePollingRepository } from '@openrepurpose/db';
 import { createTemporaryDatabase } from '@openrepurpose/testkit';
 import type { TemporaryDatabase } from '@openrepurpose/testkit';
+import { createCli } from '../../apps/cli/src/index.js';
+import type { Environment } from '@openrepurpose/shared';
 
 describe('persistent schedules', () => {
   let temporary: TemporaryDatabase | undefined;
@@ -88,5 +91,55 @@ describe('persistent schedules', () => {
     clock.set(new Date('2026-01-01T05:02:00.000Z'));
     await service.runOnce();
     expect(schedules.find(schedule.id)?.status).toBe('completed');
+  });
+
+  it('lists and shows schedules through the CLI', async () => {
+    temporary = createTemporaryDatabase();
+    const clock = new FakeClock(new Date('2026-01-01T00:00:00.000Z'));
+    const sources = new SqliteSourcePollingRepository(temporary.database);
+    const source = sources.createConnection({
+      adapterId: 'youtube',
+      configuration: { accountId: 'a' },
+      displayName: 'Source',
+      externalSourceId: 'c',
+      now: clock.now(),
+    });
+    const schedule = new ScheduleService(
+      new SqliteScheduleRepository(temporary.database),
+      sources,
+      clock,
+    ).create({
+      definition: { kind: 'once', requestedLocalTime: '2026-01-01T00:01' },
+      timeZone: 'America/New_York',
+      target: { kind: 'source_poll', version: 1, sourceConnectionId: source.id },
+    });
+    const environment: Environment = {
+      APP_CONFIG_DIR: join(temporary.directory, 'config'),
+      APP_DATA_DIR: temporary.directory,
+      APP_TEMP_DIR: join(temporary.directory, 'temp'),
+      DATABASE_URL: join(temporary.directory, 'openrepurpose.sqlite'),
+    };
+    const output: string[] = [];
+
+    await createCli({ environment, write: (value) => output.push(value) }).parseAsync([
+      'node',
+      'openrepurpose',
+      'schedule',
+      'list',
+      '--json',
+    ]);
+    expect(JSON.parse(output.at(-1) ?? '[]')).toMatchObject([
+      { id: schedule.id, timeZone: 'America/New_York' },
+    ]);
+
+    await createCli({ environment, write: (value) => output.push(value) }).parseAsync([
+      'node',
+      'openrepurpose',
+      'schedule',
+      'show',
+      schedule.id,
+      '--json',
+    ]);
+    expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({ id: schedule.id, status: 'active' });
   });
 });

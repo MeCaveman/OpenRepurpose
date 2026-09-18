@@ -59,6 +59,7 @@ export interface ScheduleOccurrence {
 export interface ScheduleRepository {
   create(schedule: Schedule): Schedule;
   find(id: string): Schedule | undefined;
+  list(): readonly Schedule[];
   listDue(now: Date, limit: number): readonly Schedule[];
   listPendingDispatch(limit: number): readonly ScheduleOccurrence[];
   materialize(input: {
@@ -163,6 +164,14 @@ export class ScheduleService {
     private readonly sourcePolls: SourcePollScheduleRequester,
     private readonly clock: Clock = systemClock,
   ) {}
+
+  public list(): readonly Schedule[] {
+    return this.repository.list();
+  }
+
+  public show(id: string): Schedule | undefined {
+    return this.repository.find(id);
+  }
 
   public create(input: {
     readonly definition:

@@ -613,4 +613,55 @@ describe('persistent jobs', () => {
     ]);
     expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({ job: { id: created.id } });
   });
+
+  it('supports CLI retry and persistent queue pause/resume controls', async () => {
+    temporary = createTemporaryDatabase();
+    const repository = new SqliteJobRepository(temporary.database);
+    const created = new JobService(repository).create({ type: 'fake.cli', input: {} }).job;
+    const now = new Date();
+    expect(
+      repository.claimNext(['fake.cli'], 'cli-test-worker', now, new Date(now.getTime() + 1_000)),
+    ).toBeDefined();
+    repository.fail(
+      created.id,
+      'cli-test-worker',
+      { code: 'TEST_FAILURE', message: 'Test failure', retryable: false },
+      now,
+    );
+    const environment: Environment = {
+      APP_CONFIG_DIR: join(temporary.directory, 'config'),
+      APP_DATA_DIR: temporary.directory,
+      APP_TEMP_DIR: join(temporary.directory, 'temp'),
+      DATABASE_URL: testConfig(temporary.directory).paths.databasePath,
+    };
+    const output: string[] = [];
+
+    await createCli({ environment, write: (value) => output.push(value) }).parseAsync([
+      'node',
+      'openrepurpose',
+      'jobs',
+      'retry',
+      created.id,
+      '--json',
+    ]);
+    expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({ id: created.id, status: 'pending' });
+
+    await createCli({ environment, write: (value) => output.push(value) }).parseAsync([
+      'node',
+      'openrepurpose',
+      'jobs',
+      'pause',
+      '--json',
+    ]);
+    expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({ mode: 'paused' });
+
+    await createCli({ environment, write: (value) => output.push(value) }).parseAsync([
+      'node',
+      'openrepurpose',
+      'jobs',
+      'resume',
+      '--json',
+    ]);
+    expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({ mode: 'running' });
+  });
 });

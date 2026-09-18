@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import {
   JobService,
   MediaImportService,
+  ScheduleService,
   SourceService,
   WorkflowService,
 } from '@openrepurpose/core';
@@ -15,6 +16,7 @@ import {
   SqliteJobRepository,
   SqliteMediaRepository,
   SqliteOAuthAuthorizationRequestRepository,
+  SqliteScheduleRepository,
   SqliteSourcePollingRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
@@ -122,6 +124,17 @@ function sourceContext(environment: Environment) {
   const database = openDatabase(config.paths.databasePath);
   runMigrations(database);
   return { database, service: new SourceService(new SqliteSourcePollingRepository(database)) };
+}
+
+function scheduleContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  const sources = new SqliteSourcePollingRepository(database);
+  return {
+    database,
+    schedules: new ScheduleService(new SqliteScheduleRepository(database), sources),
+  };
 }
 
 function accountContext(environment: Environment) {
@@ -513,6 +526,19 @@ export function createCli(options: CreateCliOptions = {}): Command {
       }
     });
   jobs
+    .command('retry <job-id>')
+    .option('--json', 'write JSON')
+    .action((id: string, options: { json?: boolean }) => {
+      const context = jobContext(environment);
+      try {
+        const job = context.service.retry(id);
+        if (job === undefined) throw new Error(`Job not found or not failed: ${id}`);
+        write(options.json ? `${JSON.stringify(job)}\n` : `${job.id}\t${job.status}\n`);
+      } finally {
+        context.database.close();
+      }
+    });
+  jobs
     .command('cancel <job-id>')
     .option('--json', 'write JSON')
     .action((id: string, options: { json?: boolean }) => {
@@ -521,6 +547,66 @@ export function createCli(options: CreateCliOptions = {}): Command {
         const job = context.service.cancel(id);
         if (job === undefined) throw new Error(`Job not found: ${id}`);
         write(options.json ? `${JSON.stringify(job)}\n` : `${job.id}\t${job.status}\n`);
+      } finally {
+        context.database.close();
+      }
+    });
+  for (const action of ['pause', 'resume'] as const)
+    jobs
+      .command(action)
+      .option('--json', 'write JSON')
+      .action((options: { json?: boolean }) => {
+        const context = jobContext(environment);
+        try {
+          const queue =
+            action === 'pause' ? context.service.pauseQueue() : context.service.resumeQueue();
+          write(options.json ? `${JSON.stringify(queue)}\n` : `${queue.mode}\n`);
+        } finally {
+          context.database.close();
+        }
+      });
+
+  const schedules = program.command('schedule').description('Inspect durable schedules');
+  schedules
+    .command('list')
+    .option('--json', 'write JSON')
+    .action((options: { json?: boolean }) => {
+      const context = scheduleContext(environment);
+      try {
+        const results = context.schedules.list();
+        write(
+          options.json
+            ? `${JSON.stringify(results)}\n`
+            : results
+                .map(
+                  (schedule) =>
+                    `${schedule.id}\t${schedule.status}\t${schedule.timeZone}\t${schedule.nextOccurrenceAt?.toISOString() ?? '-'}\t${schedule.target.kind}`,
+                )
+                .join('\n') + (results.length > 0 ? '\n' : ''),
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  schedules
+    .command('show <schedule-id>')
+    .option('--json', 'write JSON')
+    .action((id: string, options: { json?: boolean }) => {
+      const context = scheduleContext(environment);
+      try {
+        const schedule = context.schedules.show(id);
+        if (schedule === undefined) throw new Error(`Schedule not found: ${id}`);
+        write(
+          options.json
+            ? `${JSON.stringify(schedule)}\n`
+            : [
+                `${schedule.id}\t${schedule.status}\t${schedule.timeZone}`,
+                `target: ${schedule.target.kind}\t${schedule.target.sourceConnectionId}`,
+                `next: ${schedule.nextOccurrenceAt?.toISOString() ?? '-'}`,
+                `last: ${schedule.lastOccurrenceAt?.toISOString() ?? '-'}`,
+                `definition: ${JSON.stringify(schedule.definition)}`,
+              ].join('\n') + '\n',
+        );
       } finally {
         context.database.close();
       }

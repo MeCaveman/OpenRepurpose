@@ -758,6 +758,13 @@ export class SqliteScheduleRepository implements ScheduleRepository {
       RawScheduleRow | undefined;
     return row === undefined ? undefined : scheduleFromRow(row);
   }
+  public list(): readonly Schedule[] {
+    return (
+      this.database.client
+        .prepare('SELECT * FROM schedules ORDER BY created_at ASC, id ASC')
+        .all() as unknown as RawScheduleRow[]
+    ).map(scheduleFromRow);
+  }
   public listDue(now: Date, limit: number): readonly Schedule[] {
     return (
       this.database.client
