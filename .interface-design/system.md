@@ -407,4 +407,4 @@ Visual-system-specific contracts are:
 
 ## Current implementation note
 
-Phase 5 installed the token foundation and connected only global styling infrastructure. Existing v0.5 pages and components have not yet been migrated to the design system. This specification authorizes future migration; it does not itself redesign any page or alter application behavior.
+Phase 5 installed the token foundation. Phase 7 added the shared primitive layer at `apps/web/src/components/ui/` and refactored the existing error boundary and workflow editor to consume the applicable primitives. Route-level v0.5 pages remain unmigrated. This specification authorizes their future migration; it does not itself alter application behavior.

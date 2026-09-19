@@ -4,6 +4,16 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
+      'react/jsx-dev-runtime': fileURLToPath(
+        new URL('./apps/web/node_modules/react/jsx-dev-runtime.js', import.meta.url),
+      ),
+      'react/jsx-runtime': fileURLToPath(
+        new URL('./apps/web/node_modules/react/jsx-runtime.js', import.meta.url),
+      ),
+      'react-dom/server': fileURLToPath(
+        new URL('./apps/web/node_modules/react-dom/server.node.js', import.meta.url),
+      ),
+      react: fileURLToPath(new URL('./apps/web/node_modules/react/index.js', import.meta.url)),
       '@openrepurpose/meta': fileURLToPath(
         new URL('./integrations/meta/src/index.ts', import.meta.url),
       ),

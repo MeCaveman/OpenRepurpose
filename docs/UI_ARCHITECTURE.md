@@ -4,7 +4,7 @@
 **Design specification:** `.interface-design/system.md`  
 **Frontend rules:** `apps/web/AGENTS.md`
 
-This document defines how frontend code implements the permanent OpenRepurpose design system. It separates the repository's current v0.5 structure from the target structure to be introduced incrementally during page migration. Phase 6 creates documentation only.
+This document defines how frontend code implements the permanent OpenRepurpose design system. It separates the repository's current v0.5 structure from the target structure to be introduced incrementally during page migration.
 
 ## Current implementation
 
@@ -14,8 +14,9 @@ The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 | -------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Browser entry                                | `apps/web/src/main.tsx`                      | Mounts `ErrorBoundary` and `App`                                                                                            |
 | Application, routing, data access, and pages | `apps/web/src/App.tsx`                       | A single application component using `window.location`, history events, direct API requests, and conditional page rendering |
-| Render failure boundary                      | `apps/web/src/components/ErrorBoundary.tsx`  | Shared class error boundary                                                                                                 |
-| Workflow editor                              | `apps/web/src/components/WorkflowEditor.tsx` | Shared workflow-specific editor and view types                                                                              |
+| Render failure boundary                      | `apps/web/src/components/ErrorBoundary.tsx`  | Shared class error boundary composed from `ErrorState` and `Button` primitives                                              |
+| Workflow editor                              | `apps/web/src/components/WorkflowEditor.tsx` | Shared workflow-specific editor and view types; consumes the primitive layer                                                |
+| UI primitives                                | `apps/web/src/components/ui/`                | Accessible, token-backed, domain-neutral controls and their internal style helpers                                          |
 | Global CSS entry                             | `apps/web/src/styles.css`                    | Imports Tailwind and token layers; applies global focus, selection, font, surface, and reduced-motion behavior              |
 | Reference tokens                             | `apps/web/src/styles/tokens/reference.css`   | Raw values                                                                                                                  |
 | Semantic tokens                              | `apps/web/src/styles/tokens/semantic.css`    | Dark/light meanings plus Tailwind and shadcn-compatible aliases                                                             |
@@ -23,7 +24,7 @@ The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 
 The current routes are `/`, `/setup`, `/accounts`, `/sources`, `/media`, `/workflows`, `/jobs`, and `/settings`, plus the existing unknown-route fallback. Routing semantics are currently owned by `App.tsx`; this document does not change them.
 
-There are no current `components/ui`, `components/layout`, `components/patterns`, `features`, or extracted page directories. The target locations below are explicit migration targets, not claims about the existing repository.
+The primitive layer now exists. There are no current `components/layout`, `components/patterns`, `features`, or extracted page directories. Those locations remain explicit migration targets, not claims about the existing repository.
 
 ## Permanent layer model
 
@@ -46,9 +47,9 @@ Lower layers must not import pages, features, application API clients, or domain
 
 **Responsibility:** Accessible, domain-neutral controls such as buttons, icon buttons, fields, selects, checkboxes, badges, tables, dialogs, sheets, alerts, toasts, tooltips, skeletons, and focus/visually-hidden helpers.
 
-**Current:** No dedicated primitive layer exists. v0.5 uses inline React markup and Tailwind utility strings in `App.tsx` and `WorkflowEditor.tsx`.
+**Current:** `apps/web/src/components/ui/` contains the Phase 7 primitives justified by v0.5: `Alert`, `Badge`, `Button`, `Checkbox`, `ErrorState`, `FormField`, `Input`, `Panel`, `Select`, `Spinner`, and `Textarea`. `index.ts` is the public primitive entry point. `control-styles.ts` and `utils.ts` are private implementation helpers. The primitives use native semantics, React, Tailwind CSS, and the canonical OpenRepurpose tokens; no second component or styling framework was added.
 
-**Target:** `apps/web/src/components/ui/`, introduced only as components are migrated. This follows the repository's required shadcn/ui primitive approach without adding another styling framework. Generated or adapted shadcn components must consume the existing Tailwind aliases, which resolve to canonical OpenRepurpose tokens.
+**Target:** Extend this same directory only when a migrated component demonstrates a real requirement. Stateful composite controls such as dialogs, popovers, and tabs should use an accessible shadcn-compatible headless primitive when first required, rather than introducing custom interaction machinery preemptively. Any generated or adapted component must consume the existing Tailwind aliases, which resolve to canonical OpenRepurpose tokens.
 
 Primitive rules:
 
@@ -102,7 +103,7 @@ Features call existing APIs and application services through typed frontend boun
 
 ## Current-to-target migration rule
 
-The target directories are created only when Phase 7 or later migrates a real component. Do not scaffold empty architecture. Extract along stable boundaries and keep each migration behavior-preserving.
+The remaining target directories are created only when a later phase migrates a real component. Do not scaffold empty architecture. Extract along stable boundaries and keep each migration behavior-preserving.
 
 A reasonable sequence is:
 
@@ -260,7 +261,7 @@ These decisions are intentionally unresolved because v0.5 does not yet require o
 
 - Whether pathname/history routing should remain custom or move to a routing library during modularization.
 - Whether future frontend scale justifies a shared data-fetching/cache library; no such dependency exists today.
-- The exact installation/scaffolding mechanism for shadcn/ui primitives; the semantic compatibility aliases already exist.
+- Which accessible shadcn-compatible headless dependency to use when the first stateful composite primitive such as a dialog or popover is required; native controls cover the current Phase 7 set.
 - The repository asset mechanism and licensing record for self-hosted Fira Sans and Fira Mono binaries.
 - Whether a future graphical workflow canvas needs a dedicated library; the current editor does not establish that requirement.
 

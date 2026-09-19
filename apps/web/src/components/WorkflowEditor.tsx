@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 
+import { Alert, Badge, Button, Checkbox, FormField, Input, Panel, Select, Textarea } from './ui';
+
 export type WorkflowDefinitionView = {
   schemaVersion: 1;
   steps: readonly WorkflowStepView[];
@@ -72,6 +74,7 @@ export function WorkflowEditor({
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [destinations, setDestinations] = useState<WorkflowDestinationView[]>([]);
   const [validationError, setValidationError] = useState<string>();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const targetOptions = useMemo(
     () => [
@@ -162,191 +165,183 @@ export function WorkflowEditor({
         to: `destination-${index + 1}`,
       })),
     ];
-    await onSubmit({
-      name: name.trim(),
-      ...(remoteSourceId.length === 0
-        ? { sourceDirectory: sourceDirectory.trim() }
-        : {
-            remoteSource: {
-              connectionId: remoteSourceId,
-              retentionPolicy: {
-                kind: retention,
-                ...(retention === 'keep_for_duration'
-                  ? { durationSeconds: Number(retentionHours) * 3600 }
-                  : {}),
+    setIsSubmitting(true);
+    try {
+      await onSubmit({
+        name: name.trim(),
+        ...(remoteSourceId.length === 0
+          ? { sourceDirectory: sourceDirectory.trim() }
+          : {
+              remoteSource: {
+                connectionId: remoteSourceId,
+                retentionPolicy: {
+                  kind: retention,
+                  ...(retention === 'keep_for_duration'
+                    ? { durationSeconds: Number(retentionHours) * 3600 }
+                    : {}),
+                },
+                rightsConfirmed,
+                ...(filter === undefined ? {} : { filters: filter.filters }),
               },
-              rightsConfirmed,
-              ...(filter === undefined ? {} : { filters: filter.filters }),
-            },
-          }),
-      titleTemplate,
-      descriptionTemplate,
-      destinations,
-      definition: { schemaVersion: 1, steps, edges },
-      enabled: true,
-    });
+            }),
+        titleTemplate,
+        descriptionTemplate,
+        destinations,
+        definition: { schemaVersion: 1, steps, edges },
+        enabled: true,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <form className="mt-5 grid gap-5" onSubmit={submit}>
+    <form
+      className="mt-[var(--or-space-5)] grid gap-[var(--or-field-group-gap-setup)]"
+      onSubmit={submit}
+    >
       {validationError !== undefined && (
-        <p className="rounded-lg border border-rose-300/30 bg-rose-950/30 p-3 text-sm text-rose-200">
+        <Alert title="Workflow needs attention" variant="error">
           {validationError}
-        </p>
+        </Alert>
       )}
-      <label className="grid gap-1 text-sm">
-        <span className="text-slate-300">Workflow name</span>
-        <input
-          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-          onChange={(event) => setName(event.target.value)}
-          required
-          value={name}
-        />
-      </label>
-      <section className="grid gap-3 rounded-lg border border-cyan-300/20 bg-cyan-950/10 p-4">
+      <FormField label="Workflow name" required>
+        <Input onChange={(event) => setName(event.target.value)} value={name} />
+      </FormField>
+      <Panel className="grid gap-[var(--or-space-3)]">
         <div>
-          <h3 className="font-medium text-cyan-100">1 · Source</h3>
-          <p className="mt-1 text-xs text-slate-400">
+          <h3 className="font-medium text-[var(--or-text-primary)]">1 · Source</h3>
+          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
             Start with local files or an authorized source connection.
           </p>
         </div>
-        <select
-          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-sm"
-          value={remoteSourceId}
-          onChange={(event) => setRemoteSourceId(event.target.value)}
-        >
-          <option value="">Watched folder</option>
-          {sources
-            .filter((source) => source.status === 'active')
-            .map((source) => (
-              <option key={source.id} value={source.id}>
-                {source.displayName}
-              </option>
-            ))}
-        </select>
+        <FormField label="Source type">
+          <Select
+            value={remoteSourceId}
+            onChange={(event) => setRemoteSourceId(event.target.value)}
+          >
+            <option value="">Watched folder</option>
+            {sources
+              .filter((source) => source.status === 'active')
+              .map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.displayName}
+                </option>
+              ))}
+          </Select>
+        </FormField>
         {remoteSourceId.length === 0 ? (
-          <input
-            className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-sm"
-            onChange={(event) => setSourceDirectory(event.target.value)}
-            placeholder="C:\\Media\\watched"
-            required
-            value={sourceDirectory}
-          />
+          <FormField label="Watched folder" required>
+            <Input
+              onChange={(event) => setSourceDirectory(event.target.value)}
+              placeholder="C:\\Media\\watched"
+              value={sourceDirectory}
+            />
+          </FormField>
         ) : (
           <>
-            <select
-              className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-sm"
-              value={retention}
-              onChange={(event) => setRetention(event.target.value)}
-            >
-              <option value="delete_after_success">Delete after destinations succeed</option>
-              <option value="keep_for_duration">Keep for a duration</option>
-              <option value="keep_forever">Keep forever</option>
-            </select>
+            <FormField label="Source retention">
+              <Select value={retention} onChange={(event) => setRetention(event.target.value)}>
+                <option value="delete_after_success">Delete after destinations succeed</option>
+                <option value="keep_for_duration">Keep for a duration</option>
+                <option value="keep_forever">Keep forever</option>
+              </Select>
+            </FormField>
             {retention === 'keep_for_duration' && (
-              <input
-                className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-sm"
-                min="1"
-                type="number"
-                value={retentionHours}
-                onChange={(event) => setRetentionHours(event.target.value)}
-              />
+              <FormField label="Retention hours" required>
+                <Input
+                  min="1"
+                  type="number"
+                  value={retentionHours}
+                  onChange={(event) => setRetentionHours(event.target.value)}
+                />
+              </FormField>
             )}
-            <label className="flex gap-2 text-sm text-amber-100">
-              <input
-                checked={rightsConfirmed}
-                onChange={(event) => setRightsConfirmed(event.target.checked)}
-                type="checkbox"
-              />
-              I own this source media or am authorized to reuse it.
-            </label>
+            <Checkbox
+              checked={rightsConfirmed}
+              label="I own this source media or am authorized to reuse it."
+              onChange={(event) => setRightsConfirmed(event.target.checked)}
+            />
           </>
         )}
-      </section>
-      <section className="grid gap-3 rounded-lg border border-violet-300/20 bg-violet-950/10 p-4">
+      </Panel>
+      <Panel className="grid gap-[var(--or-space-3)]">
         <div>
-          <h3 className="font-medium text-violet-100">
-            2 · Filter <span className="text-xs font-normal text-slate-400">optional</span>
+          <h3 className="font-medium text-[var(--or-text-primary)]">
+            2 · Filter{' '}
+            <span className="text-xs font-normal text-[var(--or-text-tertiary)]">optional</span>
           </h3>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
             Only remote sources can use a title filter in v0.5.
           </p>
         </div>
-        <label className="flex gap-2 text-sm">
-          <input
-            checked={filterEnabled}
-            disabled={remoteSourceId.length === 0}
-            onChange={(event) => setFilterEnabled(event.target.checked)}
-            type="checkbox"
-          />
-          Enable title filter
-        </label>
+        <Checkbox
+          checked={filterEnabled}
+          disabled={remoteSourceId.length === 0}
+          label="Enable title filter"
+          onChange={(event) => setFilterEnabled(event.target.checked)}
+        />
         {filterEnabled && (
-          <input
-            className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-sm"
-            onChange={(event) => setFilterTitle(event.target.value)}
-            placeholder="Title contains…"
-            value={filterTitle}
-          />
+          <FormField label="Title contains">
+            <Input
+              onChange={(event) => setFilterTitle(event.target.value)}
+              placeholder="Text to match"
+              value={filterTitle}
+            />
+          </FormField>
         )}
-      </section>
-      <section className="grid gap-3 rounded-lg border border-amber-300/20 bg-amber-950/10 p-4">
+      </Panel>
+      <Panel className="grid gap-[var(--or-space-3)]">
         <div>
-          <h3 className="font-medium text-amber-100">
-            3 · Schedule <span className="text-xs font-normal text-slate-400">optional</span>
+          <h3 className="font-medium text-[var(--or-text-primary)]">
+            3 · Schedule{' '}
+            <span className="text-xs font-normal text-[var(--or-text-tertiary)]">optional</span>
           </h3>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
             Attach an existing durable schedule by ID. Timing and timezone remain owned by the
             scheduler.
           </p>
         </div>
-        <label className="flex gap-2 text-sm">
-          <input
-            checked={scheduleEnabled}
-            onChange={(event) => setScheduleEnabled(event.target.checked)}
-            type="checkbox"
-          />
-          Hold this workflow at a schedule boundary
-        </label>
+        <Checkbox
+          checked={scheduleEnabled}
+          label="Hold this workflow at a schedule boundary"
+          onChange={(event) => setScheduleEnabled(event.target.checked)}
+        />
         {scheduleEnabled && (
-          <input
-            className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-sm"
-            onChange={(event) => setScheduleId(event.target.value)}
-            placeholder="Schedule ID"
-            value={scheduleId}
-          />
+          <FormField label="Schedule ID" required>
+            <Input onChange={(event) => setScheduleId(event.target.value)} value={scheduleId} />
+          </FormField>
         )}
-      </section>
-      <section className="grid gap-3 rounded-lg border border-fuchsia-300/20 bg-fuchsia-950/10 p-4">
+      </Panel>
+      <Panel className="grid gap-[var(--or-space-3)]">
         <div>
-          <h3 className="font-medium text-fuchsia-100">
-            Transform <span className="text-xs font-normal text-slate-400">placeholder</span>
+          <h3 className="font-medium text-[var(--or-text-primary)]">
+            Transform{' '}
+            <span className="text-xs font-normal text-[var(--or-text-tertiary)]">placeholder</span>
           </h3>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
             v0.5 stores a pass-through transform boundary; media operations arrive in v0.6.
           </p>
         </div>
-        <label className="flex gap-2 text-sm">
-          <input
-            checked={transformEnabled}
-            onChange={(event) => setTransformEnabled(event.target.checked)}
-            type="checkbox"
-          />
-          Include pass-through transform step
-        </label>
-      </section>
-      <section className="grid gap-3 rounded-lg border border-emerald-300/20 bg-emerald-950/10 p-4">
+        <Checkbox
+          checked={transformEnabled}
+          label="Include pass-through transform step"
+          onChange={(event) => setTransformEnabled(event.target.checked)}
+        />
+      </Panel>
+      <Panel className="grid gap-[var(--or-space-3)]">
         <div>
-          <h3 className="font-medium text-emerald-100">4 · Destinations</h3>
-          <p className="mt-1 text-xs text-slate-400">
+          <h3 className="font-medium text-[var(--or-text-primary)]">4 · Destinations</h3>
+          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
             Each destination is explicit; unavailable Meta targets stay visible instead of being
             silently replaced.
           </p>
         </div>
         {destinations.map((destination, index) => (
           <div className="flex gap-2" key={index}>
-            <select
-              className="min-w-0 flex-1 rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-sm"
+            <Select
+              aria-label={`Destination ${index + 1}`}
+              className="min-w-0 flex-1"
               value={`${destination.destinationId}:${destination.accountId}`}
               onChange={(event) => updateDestination(index, event.target.value)}
             >
@@ -357,47 +352,35 @@ export function WorkflowEditor({
                   {option.disabled ? ' · unavailable' : ''}
                 </option>
               ))}
-            </select>
-            <button
-              className="rounded-lg border border-white/15 px-3 text-sm text-slate-300"
+            </Select>
+            <Button
               onClick={() =>
                 setDestinations((current) => current.filter((_, position) => position !== index))
               }
-              type="button"
+              size="sm"
+              variant="ghost"
             >
               Remove
-            </button>
+            </Button>
           </div>
         ))}
-        <button
-          className="w-fit rounded-lg border border-emerald-300/30 px-3 py-2 text-sm text-emerald-100"
-          onClick={addDestination}
-          type="button"
-        >
+        <Button className="w-fit" onClick={addDestination}>
           + Add destination
-        </button>
-      </section>
-      <section className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/60 p-4">
+        </Button>
+      </Panel>
+      <Panel className="grid gap-[var(--or-space-3)]" surface="inset">
         <h3 className="font-medium">Metadata templates</h3>
-        <label className="grid gap-1 text-sm">
-          <span className="text-slate-300">Title template</span>
-          <input
-            className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-            onChange={(event) => setTitleTemplate(event.target.value)}
-            required
-            value={titleTemplate}
-          />
-        </label>
-        <label className="grid gap-1 text-sm">
-          <span className="text-slate-300">Description template</span>
-          <textarea
-            className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
+        <FormField label="Title template" required>
+          <Input onChange={(event) => setTitleTemplate(event.target.value)} value={titleTemplate} />
+        </FormField>
+        <FormField label="Description template">
+          <Textarea
             onChange={(event) => setDescriptionTemplate(event.target.value)}
             value={descriptionTemplate}
           />
-        </label>
-      </section>
-      <section className="rounded-lg border border-white/10 bg-slate-900/50 p-4">
+        </FormField>
+      </Panel>
+      <Panel>
         <h3 className="font-medium">Readable workflow summary</h3>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
           {[
@@ -410,25 +393,29 @@ export function WorkflowEditor({
               : destinations.map((_, index) => `Destination ${index + 1}`)),
           ].map((label, index, all) => (
             <span className="flex items-center gap-2" key={label}>
-              <span className="rounded-full border border-white/15 bg-slate-950 px-3 py-1.5">
-                {label}
-              </span>
-              {index < all.length - 1 && <span className="text-slate-500">→</span>}
+              <Badge>{label}</Badge>
+              {index < all.length - 1 && (
+                <span aria-hidden="true" className="text-[var(--or-route-default)]">
+                  →
+                </span>
+              )}
             </span>
           ))}
         </div>
-        <p className="mt-3 text-xs text-slate-500">
+        <p className="mt-3 text-xs text-[var(--or-text-tertiary)]">
           The saved definition is compiled and validated by the application core before persistence.
         </p>
-      </section>
+      </Panel>
       <div className="flex items-center gap-3">
-        <button
-          className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
+        <Button
+          isLoading={isSubmitting}
+          loadingLabel="Saving workflow"
           type="submit"
+          variant="primary"
         >
           Save workflow
-        </button>
-        <span className="text-xs text-slate-500">
+        </Button>
+        <span className="text-xs text-[var(--or-text-tertiary)]">
           Invalid or disconnected graphs are rejected by the core.
         </span>
       </div>
