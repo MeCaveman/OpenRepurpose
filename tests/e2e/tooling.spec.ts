@@ -34,6 +34,29 @@ test('React shell navigates between local tool sections', async ({ page }) => {
   );
 });
 
+test('overview routes operators through existing source, workflow, and destination views', async ({
+  page,
+}) => {
+  await serveProductionAssets(page);
+  await page.goto('/');
+
+  const sequence = page.getByRole('list', { name: 'Route setup sequence' });
+  await expect(sequence.getByRole('link')).toHaveCount(3);
+  await expect(sequence.getByRole('link').nth(0)).toContainText('Sources');
+  await expect(sequence.getByRole('link').nth(1)).toContainText('Workflows');
+  await expect(sequence.getByRole('link').nth(2)).toContainText('Destinations');
+
+  await page.setViewportSize({ height: 800, width: 320 });
+  await expect(sequence).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  await sequence.getByRole('link', { name: /Sources/ }).click();
+  await expect(page).toHaveURL(/\/sources$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sources');
+});
+
 test('application shell prioritizes the workspace at desktop and compact widths', async ({
   page,
 }) => {

@@ -21,6 +21,7 @@ import {
   type ResourceNavigationItem,
 } from './components/layout';
 import { Button } from './components/ui';
+import { OverviewPage } from './features/overview';
 import { SetupPage } from './features/setup';
 
 const pages: Readonly<
@@ -1608,6 +1609,8 @@ export function App() {
                 </section>
               )}
             </div>
+          ) : pathname === '/' ? (
+            <OverviewPage onNavigate={navigate} />
           ) : (
             <p className="text-sm text-slate-400">
               This area will grow in its owning roadmap packet.
