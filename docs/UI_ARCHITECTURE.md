@@ -17,6 +17,7 @@ The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 | Render failure boundary                      | `apps/web/src/components/ErrorBoundary.tsx`  | Shared class error boundary composed from `ErrorState` and `Button` primitives                                              |
 | Workflow editor                              | `apps/web/src/components/WorkflowEditor.tsx` | Shared workflow-specific editor and view types; consumes the primitive layer                                                |
 | UI primitives                                | `apps/web/src/components/ui/`                | Accessible, token-backed, domain-neutral controls and their internal style helpers                                          |
+| Domain patterns                              | `apps/web/src/components/patterns/`          | Reusable platform identity, connection, workflow-route, job-status, and resource-empty-state presentation                   |
 | Global CSS entry                             | `apps/web/src/styles.css`                    | Imports Tailwind and token layers; applies global focus, selection, font, surface, and reduced-motion behavior              |
 | Reference tokens                             | `apps/web/src/styles/tokens/reference.css`   | Raw values                                                                                                                  |
 | Semantic tokens                              | `apps/web/src/styles/tokens/semantic.css`    | Dark/light meanings plus Tailwind and shadcn-compatible aliases                                                             |
@@ -24,7 +25,7 @@ The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 
 The current routes are `/`, `/setup`, `/accounts`, `/sources`, `/media`, `/workflows`, `/jobs`, and `/settings`, plus the existing unknown-route fallback. Routing semantics are currently owned by `App.tsx`; this document does not change them.
 
-The primitive layer now exists. There are no current `components/layout`, `components/patterns`, `features`, or extracted page directories. Those locations remain explicit migration targets, not claims about the existing repository.
+The primitive and domain-pattern layers now exist. There are no current `components/layout`, `features`, or extracted page directories. Those locations remain explicit migration targets, not claims about the existing repository.
 
 ## Permanent layer model
 
@@ -80,9 +81,9 @@ Layout components:
 
 **Responsibility:** Reusable product-specific presentations such as account connection rows, source summaries, workflow nodes/routes, job status/progress, destination capability notices, media summaries, operational empty states, and platform identity marks.
 
-**Current:** `apps/web/src/components/WorkflowEditor.tsx` is the only extracted domain-specific component. Other patterns are embedded in `App.tsx`.
+**Current:** `apps/web/src/components/patterns/` contains the Phase 8 patterns justified by v0.5: `PlatformIdentity`, `ConnectionStatus`, `ConnectionCard`, `WorkflowStatus`, `WorkflowNode`, `WorkflowRoute`, `WorkflowCard`, `JobStatus`, and `ResourceEmptyState`. Its `index.ts` is the public pattern entry point. `platform-metadata.ts` owns the restrained platform display mapping separately from generic connection and route presentation. The existing workflow editor and limited repeated shells in `App.tsx` consume these patterns; route-level page composition remains in `App.tsx`.
 
-**Target:** `apps/web/src/components/patterns/` for patterns reused across feature families. A pattern used only within one cohesive feature remains inside that feature rather than being promoted prematurely.
+**Target:** Extend the existing `apps/web/src/components/patterns/` layer for patterns reused across feature families. A pattern used only within one cohesive feature remains inside that feature rather than being promoted prematurely.
 
 Domain-pattern rules:
 
@@ -109,7 +110,7 @@ A reasonable sequence is:
 
 1. Establish shared primitives needed by the existing surface.
 2. Extract the existing shell into layout components without changing route behavior.
-3. Extract repeated status, form, list/table, and feedback patterns.
+3. Continue replacing repeated status, form, list/table, and feedback patterns as their owning pages migrate.
 4. Move one route at a time from `App.tsx` into a feature module.
 5. Move API translation and feature state with that route while keeping domain logic on the application/core side.
 

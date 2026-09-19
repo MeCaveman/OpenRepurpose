@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
-import { Alert, Badge, Button, Checkbox, FormField, Input, Panel, Select, Textarea } from './ui';
+import { WorkflowRoute } from './patterns';
+import { Alert, Button, Checkbox, FormField, Input, Panel, Select, Textarea } from './ui';
 
 export type WorkflowDefinitionView = {
   schemaVersion: 1;
@@ -382,25 +383,52 @@ export function WorkflowEditor({
       </Panel>
       <Panel>
         <h3 className="font-medium">Readable workflow summary</h3>
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          {[
-            'Source',
-            ...(filterEnabled ? ['Filter'] : []),
-            ...(transformEnabled ? ['Transform'] : []),
-            ...(scheduleEnabled ? ['Schedule'] : []),
-            ...(destinations.length === 0
-              ? ['Destination']
-              : destinations.map((_, index) => `Destination ${index + 1}`)),
-          ].map((label, index, all) => (
-            <span className="flex items-center gap-2" key={label}>
-              <Badge>{label}</Badge>
-              {index < all.length - 1 && (
-                <span aria-hidden="true" className="text-[var(--or-route-default)]">
-                  →
-                </span>
-              )}
-            </span>
-          ))}
+        <div className="mt-[var(--or-space-3)]">
+          <WorkflowRoute
+            destinations={destinations.map((destination, index) => ({
+              kind: 'destination',
+              label:
+                targetOptions.find(
+                  (option) =>
+                    option.value === `${destination.destinationId}:${destination.accountId}`,
+                )?.label ?? `Destination ${index + 1}`,
+              platform: destination.destinationId,
+            }))}
+            source={{
+              detail:
+                remoteSourceId.length === 0
+                  ? sourceDirectory || 'Folder not selected'
+                  : 'Remote source',
+              kind: 'source',
+              label:
+                remoteSourceId.length === 0
+                  ? 'Watched folder'
+                  : (sources.find((source) => source.id === remoteSourceId)?.displayName ??
+                    'Remote source'),
+              ...(remoteSourceId.length === 0 ? { platform: 'local' } : {}),
+            }}
+            stages={[
+              ...(filterEnabled
+                ? [
+                    {
+                      detail: filterTitle || 'Title rule not configured',
+                      kind: 'filter' as const,
+                      label: 'Title filter',
+                    },
+                  ]
+                : []),
+              ...(transformEnabled ? [{ kind: 'transform' as const, label: 'Pass-through' }] : []),
+              ...(scheduleEnabled
+                ? [
+                    {
+                      detail: scheduleId || 'Schedule not selected',
+                      kind: 'schedule' as const,
+                      label: 'Schedule boundary',
+                    },
+                  ]
+                : []),
+            ]}
+          />
         </div>
         <p className="mt-3 text-xs text-[var(--or-text-tertiary)]">
           The saved definition is compiled and validated by the application core before persistence.

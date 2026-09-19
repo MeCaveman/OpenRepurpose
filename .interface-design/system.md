@@ -407,4 +407,4 @@ Visual-system-specific contracts are:
 
 ## Current implementation note
 
-Phase 5 installed the token foundation. Phase 7 added the shared primitive layer at `apps/web/src/components/ui/` and refactored the existing error boundary and workflow editor to consume the applicable primitives. Route-level v0.5 pages remain unmigrated. This specification authorizes their future migration; it does not itself alter application behavior.
+Phase 5 installed the token foundation. Phase 7 added the shared primitive layer at `apps/web/src/components/ui/`. Phase 8 added the v0.5-justified domain-pattern layer at `apps/web/src/components/patterns/`: restrained platform identity, connection presentation, job and workflow status, resource empty states, and the read-only source-to-stage-to-destination workflow route. The existing editor and limited repeated page fragments consume these layers, while route-level page composition remains unmigrated. These patterns implement the visual vocabulary already specified above, so the design-system version remains 1.0.

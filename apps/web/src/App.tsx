@@ -4,6 +4,15 @@ import {
   type WorkflowEditorValue,
   type WorkflowDefinitionView,
 } from './components/WorkflowEditor';
+import {
+  ConnectionCard,
+  JobStatus,
+  ResourceEmptyState,
+  WorkflowCard,
+  type WorkflowRouteData,
+  type WorkflowRouteNodeData,
+} from './components/patterns';
+import { Button } from './components/ui';
 
 const pages: Readonly<
   Record<string, { readonly description: string; readonly eyebrow: string; readonly title: string }>
@@ -187,6 +196,59 @@ type TikTokAccountCapabilities = {
 type TikTokCapabilityView =
   | { capabilities: TikTokAccountCapabilities; error?: never }
   | { capabilities?: never; error: string };
+
+function toWorkflowRouteData(workflow: WorkflowItem): WorkflowRouteData {
+  const sourceLabel =
+    workflow.sourceDirectory || workflow.remoteSource?.connectionId || 'Remote source';
+  const nodeState = workflow.enabled ? ('default' as const) : ('disabled' as const);
+  const source: WorkflowRouteNodeData = {
+    detail: workflow.remoteSource === undefined ? 'Watched folder' : 'Remote source',
+    kind: 'source',
+    label: sourceLabel,
+    state: nodeState,
+    ...(workflow.remoteSource === undefined ? { platform: 'local' } : {}),
+  };
+  const stages: WorkflowRouteNodeData[] = [];
+  const destinations: WorkflowRouteNodeData[] = [];
+
+  for (const step of workflow.definition?.steps ?? []) {
+    if (step.kind === 'filter') {
+      stages.push({ kind: 'filter', label: 'Filter', state: nodeState });
+    } else if (step.kind === 'transform') {
+      stages.push({ kind: 'transform', label: 'Pass-through', state: nodeState });
+    } else if (step.kind === 'schedule') {
+      stages.push({
+        detail: step.scheduleId,
+        kind: 'schedule',
+        label: 'Schedule',
+        state: nodeState,
+      });
+    } else if (step.kind === 'destination') {
+      destinations.push({
+        detail: step.destination.accountId || 'Account not selected',
+        kind: 'destination',
+        label: step.destination.destinationId,
+        platform: step.destination.destinationId,
+        state: nodeState,
+      });
+    }
+  }
+
+  if (destinations.length === 0) {
+    destinations.push(
+      ...workflow.destinations.map((destination) => ({
+        detail: destination.accountId || 'Account not selected',
+        kind: 'destination' as const,
+        label: destination.destinationId,
+        platform: destination.destinationId,
+        state: nodeState,
+      })),
+    );
+  }
+
+  return { destinations, source, stages };
+}
+
 function usePathname(): string {
   const [pathname, setPathname] = useState(window.location.pathname);
   useEffect(() => {
@@ -996,36 +1058,24 @@ export function App() {
                       {accounts.map((account) => {
                         const tiktokView = tiktokCapabilities[account.id];
                         return (
-                          <article
-                            className="rounded-xl border border-white/10 bg-slate-950 p-5"
-                            key={account.id}
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div>
-                                <h3 className="font-medium">
-                                  {account.displayName}{' '}
-                                  <span className="text-xs uppercase tracking-wide text-slate-500">
-                                    {account.provider}
-                                  </span>
-                                </h3>
-                                <p className="mt-1 font-mono text-xs text-slate-500">
-                                  {account.externalId}
-                                </p>
-                              </div>
-                              <span
-                                className={
-                                  account.status === 'connected'
-                                    ? 'text-emerald-200'
-                                    : 'text-amber-200'
-                                }
+                          <ConnectionCard
+                            actions={
+                              <Button
+                                onClick={() => void removeAccount(account.id)}
+                                size="sm"
+                                variant="danger"
                               >
-                                {account.status === 'connected'
-                                  ? 'Connected'
-                                  : 'Reconnect required'}
-                              </span>
-                            </div>
+                                Remove local connection
+                              </Button>
+                            }
+                            externalId={account.externalId}
+                            key={account.id}
+                            name={account.displayName}
+                            platform={account.provider}
+                            status={account.status === 'connected' ? 'connected' : 'attention'}
+                          >
                             {account.provider === 'youtube' ? (
-                              <p className="mt-4 text-sm text-slate-300">
+                              <p>
                                 Upload:{' '}
                                 {account.capabilities.includes('youtube.video.upload')
                                   ? 'allowed'
@@ -1036,7 +1086,7 @@ export function App() {
                                   : 'not granted'}
                               </p>
                             ) : tiktokView?.capabilities !== undefined ? (
-                              <div className="mt-4 space-y-2 text-sm text-slate-300">
+                              <div className="space-y-2">
                                 <p>
                                   Granted scopes: {tiktokView.capabilities.grantedScopes.join(', ')}
                                 </p>
@@ -1066,27 +1116,24 @@ export function App() {
                                 </p>
                               </div>
                             ) : tiktokView?.error !== undefined ? (
-                              <p className="mt-4 text-sm text-amber-200">{tiktokView.error}</p>
+                              <p className="text-[var(--or-status-warning-fg)]">
+                                {tiktokView.error}
+                              </p>
                             ) : (
-                              <p className="mt-4 text-sm text-slate-400">
+                              <p className="text-[var(--or-text-tertiary)]">
                                 Loading live TikTok posting availability…
                               </p>
                             )}
-                            <button
-                              className="mt-4 text-sm text-rose-200 hover:underline"
-                              onClick={() => void removeAccount(account.id)}
-                              type="button"
-                            >
-                              Remove local connection
-                            </button>
-                          </article>
+                          </ConnectionCard>
                         );
                       })}
                     </div>
                     {accounts.length === 0 && (
-                      <p className="mt-3 text-sm text-slate-400">
-                        No publishing account is connected.
-                      </p>
+                      <ResourceEmptyState
+                        className="mt-3"
+                        description="Connect a publishing account before choosing it as a workflow destination."
+                        title="No publishing accounts"
+                      />
                     )}
                   </section>
                   <p className="text-sm leading-6 text-amber-200/80">
@@ -1224,50 +1271,32 @@ export function App() {
                   <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
                     <h2 className="font-semibold">Saved workflows</h2>
                     <div className="mt-3 grid gap-3">
-                      {workflows.map((workflow) => (
-                        <article
-                          className="rounded-lg border border-white/10 p-4"
-                          key={workflow.id}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <h3 className="font-medium">{workflow.name}</h3>
-                              <p className="mt-1 text-xs text-slate-400">
-                                {workflow.sourceDirectory ||
-                                  workflow.remoteSource?.connectionId ||
-                                  'remote source'}{' '}
-                                · {workflow.enabled ? 'enabled' : 'disabled'}
-                              </p>
-                            </div>
-                            <span className="text-xs text-cyan-200">
-                              {workflow.definition?.steps
-                                .map((step) =>
-                                  step.kind === 'source'
-                                    ? 'Source'
-                                    : step.kind === 'filter'
-                                      ? 'Filter'
-                                      : step.kind === 'transform'
-                                        ? 'Transform'
-                                        : step.kind === 'schedule'
-                                          ? `Schedule (${step.scheduleId})`
-                                          : `Destination (${step.destination.destinationId})`,
-                                )
-                                .join(' → ') ??
-                                workflow.destinations
-                                  .map(
-                                    (destination) =>
-                                      `${destination.destinationId}:${destination.accountId}`,
-                                  )
-                                  .join(', ')}
-                            </span>
-                          </div>
-                        </article>
-                      ))}
+                      {workflows.map((workflow) => {
+                        const route = toWorkflowRouteData(workflow);
+
+                        return (
+                          <WorkflowCard
+                            destinations={route.destinations}
+                            enabled={workflow.enabled}
+                            key={workflow.id}
+                            name={workflow.name}
+                            source={route.source}
+                            sourceLabel={
+                              workflow.sourceDirectory ||
+                              workflow.remoteSource?.connectionId ||
+                              'Remote source'
+                            }
+                            stages={route.stages ?? []}
+                          />
+                        );
+                      })}
                     </div>
                     {workflows.length === 0 && (
-                      <p className="mt-3 text-sm text-slate-400">
-                        No workflows have been saved yet.
-                      </p>
+                      <ResourceEmptyState
+                        className="mt-3"
+                        description="Create a route from a source through any processing stages to one or more destinations."
+                        title="No saved workflows"
+                      />
                     )}
                   </section>
                 </div>
@@ -1406,7 +1435,10 @@ export function App() {
                     </tbody>
                   </table>
                   {media.length === 0 && (
-                    <p className="text-sm text-slate-400">No local media has been imported yet.</p>
+                    <ResourceEmptyState
+                      description="Import a local media file to inspect it and prepare a publish job."
+                      title="No local media has been imported yet."
+                    />
                   )}
                   {publishMediaId !== undefined && (
                     <form
@@ -1583,7 +1615,9 @@ export function App() {
                                 </span>
                               )}
                             </td>
-                            <td className="pr-4">{job.status}</td>
+                            <td className="pr-4">
+                              <JobStatus status={job.status} />
+                            </td>
                             <td className="pr-4">
                               {job.attemptCount}/{job.maxAttempts}
                             </td>
@@ -1591,16 +1625,17 @@ export function App() {
                               {(job.status === 'pending' ||
                                 job.status === 'retrying' ||
                                 job.status === 'running') && (
-                                <button
-                                  className="rounded-lg border border-rose-300/30 px-3 py-1.5 text-xs text-rose-200"
+                                <Button
                                   disabled={job.cancellationRequestedAt !== undefined}
                                   onClick={() => void cancelJob(job.id)}
+                                  size="sm"
                                   type="button"
+                                  variant="danger"
                                 >
                                   {job.cancellationRequestedAt === undefined
                                     ? 'Cancel'
                                     : 'Cancelling…'}
-                                </button>
+                                </Button>
                               )}
                             </td>
                           </tr>
@@ -1609,7 +1644,10 @@ export function App() {
                     </table>
                   </div>
                   {jobs.length === 0 && (
-                    <p className="text-sm text-slate-400">No jobs have been queued yet.</p>
+                    <ResourceEmptyState
+                      description="Jobs will appear here when a workflow or direct publish operation is queued."
+                      title="No queued jobs"
+                    />
                   )}
                   {selectedJobId !== undefined && (
                     <section className="rounded-xl border border-white/10 bg-slate-950 p-4">
@@ -1618,7 +1656,10 @@ export function App() {
                       <ol className="mt-4 space-y-2 text-sm">
                         {attempts.map((attempt) => (
                           <li className="rounded-lg bg-white/5 p-3" key={attempt.attemptNumber}>
-                            #{attempt.attemptNumber} · {attempt.status}
+                            <JobStatus
+                              label={`#${attempt.attemptNumber} · ${attempt.status}`}
+                              status={attempt.status}
+                            />
                             {attempt.errorCode !== undefined && (
                               <span className="block text-xs text-rose-300">
                                 {attempt.errorCode}: {attempt.errorMessage}
@@ -1628,7 +1669,11 @@ export function App() {
                         ))}
                       </ol>
                       {attempts.length === 0 && (
-                        <p className="mt-3 text-sm text-slate-400">No attempts have started.</p>
+                        <ResourceEmptyState
+                          className="mt-3"
+                          description="Attempt details will appear when the selected job begins processing."
+                          title="No attempts"
+                        />
                       )}
                     </section>
                   )}
