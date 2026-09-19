@@ -1,4 +1,5 @@
 export { AccountsPage } from './accounts-page';
+export { AccountsRoute } from './accounts-route';
 export type {
   AccountsPageProps,
   AccountView,

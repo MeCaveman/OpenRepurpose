@@ -1,4 +1,5 @@
 export { WorkflowsPage } from './workflows-page';
+export { WorkflowsRoute } from './workflows-route';
 export type {
   WorkflowAccountView,
   WorkflowDestinationView,

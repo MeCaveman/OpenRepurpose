@@ -266,6 +266,7 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
   );
   let queued = false;
   let queuedRequest: unknown;
+  let jobListRequests = 0;
   await page.route('**/api/media/import', (route) =>
     route.fulfill({
       status: 201,
@@ -293,8 +294,9 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
       }),
     });
   });
-  await page.route('**/api/jobs', (route) =>
-    route.fulfill({
+  await page.route('**/api/jobs', (route) => {
+    jobListRequests += 1;
+    return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         jobs: queued
@@ -309,8 +311,8 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
             ]
           : [],
       }),
-    }),
-  );
+    });
+  });
 
   await page.goto('/media');
   await page.getByLabel('Local file path').fill('C:\\clips\\episode one.mp4');
@@ -353,6 +355,7 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
     accountId: 'account-1',
     metadata: { title: 'Episode one', description: '', privacy: 'private' },
   });
+  expect(jobListRequests).toBe(0);
 });
 
 test('watched-folder workflow contract leads to a queued upload', async ({ page }) => {

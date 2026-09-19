@@ -95,8 +95,18 @@ test('unknown routes provide a direct workbench recovery path', async ({ page })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(
     'This local view does not exist.',
   );
+  await expect(page.getByRole('link', { name: 'Settings' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Return to the local workbench' })).toBeVisible();
   await page.getByRole('link', { name: 'Open Dashboard' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Your media pipeline');
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/not-a-current-view$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+    'This local view does not exist.',
+  );
+  await page.goForward();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole('heading', { level: 1 })).toContainText('Your media pipeline');
 });
