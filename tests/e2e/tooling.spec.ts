@@ -88,6 +88,19 @@ test('settings maps existing configuration without inventing controls', async ({
   );
 });
 
+test('unknown routes provide a direct workbench recovery path', async ({ page }) => {
+  await serveProductionAssets(page);
+  await page.goto('/not-a-current-view');
+
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+    'This local view does not exist.',
+  );
+  await expect(page.getByRole('heading', { name: 'Return to the local workbench' })).toBeVisible();
+  await page.getByRole('link', { name: 'Open Dashboard' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Your media pipeline');
+});
+
 test('application shell prioritizes the workspace at desktop and compact widths', async ({
   page,
 }) => {

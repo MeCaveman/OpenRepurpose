@@ -1,0 +1,591 @@
+import type { FormEventHandler } from 'react';
+
+import { PlatformIdentity, ResourceEmptyState } from '../../components/patterns';
+import {
+  Alert,
+  Badge,
+  Button,
+  Checkbox,
+  FormField,
+  Input,
+  Panel,
+  Select,
+  Spinner,
+  Textarea,
+} from '../../components/ui';
+import type { BadgeVariant } from '../../components/ui';
+
+export type MediaPublishPlatform = 'tiktok' | 'youtube';
+
+export interface MediaAssetView {
+  readonly id: string;
+  readonly metadata: {
+    readonly durationSeconds?: number;
+    readonly height?: number;
+    readonly width?: number;
+  };
+  readonly path: string;
+  readonly state: string;
+}
+
+export interface MediaAccountView {
+  readonly displayName: string;
+  readonly id: string;
+  readonly provider: string;
+}
+
+export interface MediaPublishDraft {
+  readonly accountId: string;
+  readonly caption: string;
+  readonly captionMaxLength: number | undefined;
+  readonly description: string;
+  readonly disableComment: boolean;
+  readonly disableDuet: boolean;
+  readonly disableStitch: boolean;
+  readonly mediaId: string | undefined;
+  readonly platform: MediaPublishPlatform;
+  readonly privacy: string;
+  readonly privacyOptions: readonly string[];
+  readonly title: string;
+}
+
+export interface MediaPageProps {
+  readonly accounts: readonly MediaAccountView[];
+  readonly activeAction: string | undefined;
+  readonly error: string | undefined;
+  readonly importPath: string;
+  readonly isLoading: boolean;
+  readonly media: readonly MediaAssetView[];
+  readonly onAccountIdChange: (value: string) => void;
+  readonly onBeginPublish: (asset: MediaAssetView, platform: MediaPublishPlatform) => void;
+  readonly onCancelPublish: () => void;
+  readonly onCaptionChange: (value: string) => void;
+  readonly onDescriptionChange: (value: string) => void;
+  readonly onDisableCommentChange: (value: boolean) => void;
+  readonly onDisableDuetChange: (value: boolean) => void;
+  readonly onDisableStitchChange: (value: boolean) => void;
+  readonly onImport: FormEventHandler<HTMLFormElement>;
+  readonly onImportPathChange: (value: string) => void;
+  readonly onPrivacyChange: (value: string) => void;
+  readonly onPublish: FormEventHandler<HTMLFormElement>;
+  readonly onTitleChange: (value: string) => void;
+  readonly publish: MediaPublishDraft;
+}
+
+function filename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function humanize(value: string): string {
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(' ');
+}
+
+function mediaStateVariant(state: string): BadgeVariant {
+  if (state === 'available' || state === 'ready' || state === 'imported') return 'success';
+  if (state === 'processing' || state === 'probing') return 'info';
+  if (state === 'failed' || state === 'unavailable') return 'error';
+  return 'neutral';
+}
+
+function MediaState({ state }: { readonly state: string }) {
+  return <Badge variant={mediaStateVariant(state)}>{humanize(state)}</Badge>;
+}
+
+function formatTechnicalDetails(asset: MediaAssetView): string {
+  const dimensions = `${asset.metadata.width ?? '—'}×${asset.metadata.height ?? '—'}`;
+  const duration =
+    asset.metadata.durationSeconds === undefined
+      ? '—'
+      : new Intl.NumberFormat(undefined, {
+          maximumFractionDigits: 1,
+          minimumFractionDigits: 1,
+        }).format(asset.metadata.durationSeconds);
+  return `${dimensions} · ${duration}\u00a0s`;
+}
+
+function MediaIdentity({ asset }: { readonly asset: MediaAssetView }) {
+  const name = filename(asset.path);
+
+  return (
+    <div className="min-w-0">
+      <p className="break-words font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
+        {name}
+      </p>
+      <code
+        className="mt-[var(--or-space-1)] block break-all font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]"
+        title={asset.path}
+        translate="no"
+      >
+        {asset.path}
+      </code>
+    </div>
+  );
+}
+
+function PublishActions({
+  activeAction,
+  asset,
+  hasTikTokAccount,
+  onBeginPublish,
+}: {
+  readonly activeAction: string | undefined;
+  readonly asset: MediaAssetView;
+  readonly hasTikTokAccount: boolean;
+  readonly onBeginPublish: MediaPageProps['onBeginPublish'];
+}) {
+  const disabled = activeAction !== undefined;
+
+  return (
+    <div className="flex flex-wrap gap-[var(--or-space-2)]">
+      <Button
+        disabled={disabled}
+        onClick={() => onBeginPublish(asset, 'youtube')}
+        size="sm"
+        variant="secondary"
+      >
+        Publish to YouTube
+      </Button>
+      {hasTikTokAccount && (
+        <Button
+          disabled={disabled}
+          onClick={() => onBeginPublish(asset, 'tiktok')}
+          size="sm"
+          variant="secondary"
+        >
+          Publish to TikTok
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function MediaTable({
+  activeAction,
+  hasTikTokAccount,
+  media,
+  onBeginPublish,
+}: Pick<MediaPageProps, 'activeAction' | 'media' | 'onBeginPublish'> & {
+  readonly hasTikTokAccount: boolean;
+}) {
+  return (
+    <Panel className="hidden overflow-x-auto md:block" padding="none">
+      <table className="w-full text-left [font-size:var(--or-type-interface-size)]">
+        <thead className="h-[var(--or-table-header-height)] bg-[var(--or-bg-workspace)] text-[var(--or-text-tertiary)]">
+          <tr>
+            <th className="px-[var(--or-table-cell-padding-inline)] font-medium" scope="col">
+              File
+            </th>
+            <th className="px-[var(--or-table-cell-padding-inline)] font-medium" scope="col">
+              Technical details
+            </th>
+            <th className="px-[var(--or-table-cell-padding-inline)] font-medium" scope="col">
+              State
+            </th>
+            <th className="px-[var(--or-table-cell-padding-inline)] font-medium" scope="col">
+              Publish
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {media.map((asset) => (
+            <tr
+              className="border-t border-[var(--or-border-subtle)] align-top hover:bg-[var(--or-bg-hover)]"
+              key={asset.id}
+            >
+              <td className="max-w-[24rem] px-[var(--or-table-cell-padding-inline)] py-[var(--or-space-3)]">
+                <MediaIdentity asset={asset} />
+              </td>
+              <td className="px-[var(--or-table-cell-padding-inline)] py-[var(--or-space-3)] font-[family-name:var(--or-font-technical)] text-[var(--or-text-secondary)] tabular-nums whitespace-nowrap">
+                {formatTechnicalDetails(asset)}
+              </td>
+              <td className="px-[var(--or-table-cell-padding-inline)] py-[var(--or-space-3)]">
+                <MediaState state={asset.state} />
+              </td>
+              <td className="px-[var(--or-table-cell-padding-inline)] py-[var(--or-space-3)]">
+                <PublishActions
+                  activeAction={activeAction}
+                  asset={asset}
+                  hasTikTokAccount={hasTikTokAccount}
+                  onBeginPublish={onBeginPublish}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+
+function MediaList({
+  activeAction,
+  hasTikTokAccount,
+  media,
+  onBeginPublish,
+}: Pick<MediaPageProps, 'activeAction' | 'media' | 'onBeginPublish'> & {
+  readonly hasTikTokAccount: boolean;
+}) {
+  return (
+    <div className="grid gap-[var(--or-space-3)] md:hidden">
+      {media.map((asset) => (
+        <Panel key={asset.id}>
+          <div className="flex min-w-0 items-start justify-between gap-[var(--or-space-3)]">
+            <MediaIdentity asset={asset} />
+            <MediaState state={asset.state} />
+          </div>
+          <p className="mt-[var(--or-space-3)] font-[family-name:var(--or-font-technical)] text-[var(--or-text-secondary)] tabular-nums [font-size:var(--or-type-metadata-size)]">
+            {formatTechnicalDetails(asset)}
+          </p>
+          <div className="mt-[var(--or-space-4)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-3)]">
+            <PublishActions
+              activeAction={activeAction}
+              asset={asset}
+              hasTikTokAccount={hasTikTokAccount}
+              onBeginPublish={onBeginPublish}
+            />
+          </div>
+        </Panel>
+      ))}
+    </div>
+  );
+}
+
+function PublishPanel({
+  accounts,
+  activeAction,
+  asset,
+  onAccountIdChange,
+  onCancelPublish,
+  onCaptionChange,
+  onDescriptionChange,
+  onDisableCommentChange,
+  onDisableDuetChange,
+  onDisableStitchChange,
+  onPrivacyChange,
+  onPublish,
+  onTitleChange,
+  publish,
+}: Omit<
+  MediaPageProps,
+  | 'error'
+  | 'importPath'
+  | 'isLoading'
+  | 'media'
+  | 'onBeginPublish'
+  | 'onImport'
+  | 'onImportPathChange'
+> & {
+  readonly asset: MediaAssetView | undefined;
+}) {
+  const platformAccounts = accounts.filter((account) => account.provider === publish.platform);
+  const isPublishing = activeAction === `publish:${publish.platform}`;
+  const platformLabel = publish.platform === 'youtube' ? 'YouTube' : 'TikTok';
+
+  return (
+    <Panel
+      aria-labelledby="publish-preparation-heading"
+      className="xl:sticky xl:top-[var(--or-space-4)]"
+      surface="raised"
+    >
+      <header className="flex items-start justify-between gap-[var(--or-space-3)]">
+        <div className="min-w-0">
+          <div className="flex items-center gap-[var(--or-space-3)]">
+            <PlatformIdentity platform={publish.platform} showLabel={false} />
+            <h3
+              className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
+              id="publish-preparation-heading"
+            >
+              Queue {platformLabel} {publish.platform === 'youtube' ? 'upload' : 'post'}
+            </h3>
+          </div>
+          {asset !== undefined && (
+            <code
+              className="mt-[var(--or-space-2)] block break-all font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]"
+              translate="no"
+            >
+              {asset.path}
+            </code>
+          )}
+        </div>
+        <Button onClick={onCancelPublish} size="sm" variant="ghost">
+          Close
+        </Button>
+      </header>
+
+      {platformAccounts.length === 0 && (
+        <Alert
+          className="mt-[var(--or-space-4)]"
+          title="Connected account required"
+          variant="warning"
+        >
+          Connect a {platformLabel} account before queuing this publish job.
+        </Alert>
+      )}
+
+      <form
+        className="mt-[var(--or-space-5)] grid gap-[var(--or-field-group-gap)]"
+        onSubmit={onPublish}
+      >
+        <FormField label="Connected account" required>
+          <Select
+            name="accountId"
+            onChange={(event) => onAccountIdChange(event.target.value)}
+            value={publish.accountId}
+          >
+            <option value="">Select a {platformLabel} account</option>
+            {platformAccounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.displayName}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+
+        {publish.platform === 'youtube' ? (
+          <>
+            <FormField label="Title" required>
+              <Input
+                name="title"
+                onChange={(event) => onTitleChange(event.target.value)}
+                value={publish.title}
+              />
+            </FormField>
+            <FormField label="Description">
+              <Textarea
+                name="description"
+                onChange={(event) => onDescriptionChange(event.target.value)}
+                value={publish.description}
+              />
+            </FormField>
+          </>
+        ) : (
+          <>
+            <FormField label="Caption" required>
+              <Textarea
+                maxLength={publish.captionMaxLength}
+                name="caption"
+                onChange={(event) => onCaptionChange(event.target.value)}
+                value={publish.caption}
+              />
+            </FormField>
+            <FormField
+              description="Only privacy levels currently offered by this creator are available."
+              label="Privacy"
+              required
+            >
+              <Select
+                name="privacyLevel"
+                onChange={(event) => onPrivacyChange(event.target.value)}
+                value={publish.privacy}
+              >
+                {publish.privacyOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            <fieldset className="grid gap-[var(--or-space-1)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-3)]">
+              <legend className="mb-[var(--or-space-2)] font-medium text-[var(--or-text-secondary)] [font-size:var(--or-type-interface-size)]">
+                Interactions
+              </legend>
+              <Checkbox
+                checked={publish.disableComment}
+                label="Disable comments"
+                name="disableComment"
+                onChange={(event) => onDisableCommentChange(event.target.checked)}
+              />
+              <Checkbox
+                checked={publish.disableDuet}
+                label="Disable duet"
+                name="disableDuet"
+                onChange={(event) => onDisableDuetChange(event.target.checked)}
+              />
+              <Checkbox
+                checked={publish.disableStitch}
+                label="Disable stitch"
+                name="disableStitch"
+                onChange={(event) => onDisableStitchChange(event.target.checked)}
+              />
+            </fieldset>
+          </>
+        )}
+
+        <div className="flex flex-wrap gap-[var(--or-space-2)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-4)]">
+          <Button isLoading={isPublishing} loadingLabel="Queuing…" type="submit" variant="primary">
+            Queue {publish.platform === 'youtube' ? 'upload' : 'post'}
+          </Button>
+          <Button
+            disabled={isPublishing}
+            onClick={onCancelPublish}
+            type="button"
+            variant="secondary"
+          >
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </Panel>
+  );
+}
+
+export function MediaPage({
+  accounts,
+  activeAction,
+  error,
+  importPath,
+  isLoading,
+  media,
+  onAccountIdChange,
+  onBeginPublish,
+  onCancelPublish,
+  onCaptionChange,
+  onDescriptionChange,
+  onDisableCommentChange,
+  onDisableDuetChange,
+  onDisableStitchChange,
+  onImport,
+  onImportPathChange,
+  onPrivacyChange,
+  onPublish,
+  onTitleChange,
+  publish,
+}: MediaPageProps) {
+  const hasTikTokAccount = accounts.some((account) => account.provider === 'tiktok');
+  const selectedAsset = media.find((asset) => asset.id === publish.mediaId);
+  const publishOpen = publish.mediaId !== undefined;
+
+  return (
+    <div className="grid gap-[var(--or-space-6)]">
+      {error !== undefined && (
+        <Alert title="Media request failed" variant="error">
+          {error}
+        </Alert>
+      )}
+
+      <div
+        className={`grid items-start gap-[var(--or-space-5)] ${publishOpen ? 'xl:grid-cols-[minmax(0,1fr)_var(--or-shell-inspector-width)]' : ''}`}
+      >
+        <div
+          className={`min-w-0 ${publishOpen ? 'hidden xl:grid xl:gap-[var(--or-space-6)]' : 'grid gap-[var(--or-space-6)]'}`}
+        >
+          <Panel aria-labelledby="local-import-heading" surface="inset">
+            <h2
+              className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
+              id="local-import-heading"
+            >
+              Import local original
+            </h2>
+            <p className="mt-[var(--or-space-2)] max-w-[var(--or-empty-state-max-width)] text-pretty text-[var(--or-text-secondary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-body-line)]">
+              Reference a media file you own or are authorized to reuse. OpenRepurpose will inspect
+              it locally with ffprobe.
+            </p>
+            <form
+              className="mt-[var(--or-space-4)] flex flex-col items-end gap-[var(--or-space-3)] sm:flex-row"
+              onSubmit={onImport}
+            >
+              <FormField className="w-full flex-1" label="Local file path" required>
+                <Input
+                  autoComplete="off"
+                  name="path"
+                  onChange={(event) => onImportPathChange(event.target.value)}
+                  placeholder="C:\\Media\\video file.mp4"
+                  spellCheck={false}
+                  value={importPath}
+                />
+              </FormField>
+              <Button
+                className="w-full sm:w-auto"
+                isLoading={activeAction === 'import'}
+                loadingLabel="Importing…"
+                type="submit"
+                variant="primary"
+              >
+                Import
+              </Button>
+            </form>
+          </Panel>
+
+          <section aria-labelledby="media-ledger-heading">
+            <header className="mb-[var(--or-space-4)] flex flex-wrap items-end justify-between gap-[var(--or-space-3)]">
+              <div>
+                <p className="font-[family-name:var(--or-font-technical)] font-semibold tracking-[var(--or-type-eyebrow-tracking)] text-[var(--or-text-accent)] uppercase [font-size:var(--or-type-eyebrow-size)] [line-height:var(--or-type-eyebrow-line)]">
+                  Local inventory
+                </p>
+                <h2
+                  className="mt-[var(--or-space-1)] font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
+                  id="media-ledger-heading"
+                >
+                  Media ledger
+                </h2>
+                <p className="mt-[var(--or-space-2)] text-pretty text-[var(--or-text-secondary)] [font-size:var(--or-type-body-size)] [line-height:var(--or-type-body-line)]">
+                  Inspect persisted file identity and technical metadata before queuing a direct
+                  publish job.
+                </p>
+              </div>
+              {!isLoading && (
+                <Badge variant="neutral">
+                  {media.length} {media.length === 1 ? 'asset' : 'assets'}
+                </Badge>
+              )}
+            </header>
+
+            {isLoading ? (
+              <Panel
+                aria-live="polite"
+                className="flex items-center gap-[var(--or-space-3)]"
+                role="status"
+              >
+                <Spinner />
+                <p className="[font-size:var(--or-type-interface-size)]">Loading local media…</p>
+              </Panel>
+            ) : media.length === 0 ? (
+              <ResourceEmptyState
+                description="Import a local media file to inspect it and prepare a publish job."
+                title="No local media has been imported yet."
+              />
+            ) : (
+              <>
+                <MediaTable
+                  activeAction={activeAction}
+                  hasTikTokAccount={hasTikTokAccount}
+                  media={media}
+                  onBeginPublish={onBeginPublish}
+                />
+                <MediaList
+                  activeAction={activeAction}
+                  hasTikTokAccount={hasTikTokAccount}
+                  media={media}
+                  onBeginPublish={onBeginPublish}
+                />
+              </>
+            )}
+          </section>
+        </div>
+
+        {publishOpen && (
+          <PublishPanel
+            accounts={accounts}
+            activeAction={activeAction}
+            asset={selectedAsset}
+            onAccountIdChange={onAccountIdChange}
+            onCancelPublish={onCancelPublish}
+            onCaptionChange={onCaptionChange}
+            onDescriptionChange={onDescriptionChange}
+            onDisableCommentChange={onDisableCommentChange}
+            onDisableDuetChange={onDisableDuetChange}
+            onDisableStitchChange={onDisableStitchChange}
+            onPrivacyChange={onPrivacyChange}
+            onPublish={onPublish}
+            onTitleChange={onTitleChange}
+            publish={publish}
+          />
+        )}
+      </div>
+    </div>
+  );
+}

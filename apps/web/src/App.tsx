@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { ResourceEmptyState } from './components/patterns';
 import {
   ApplicationShell,
   PageHeader,
@@ -10,6 +9,8 @@ import {
 } from './components/layout';
 import { AccountsPage } from './features/accounts';
 import { JobsPage, type JobAttemptView, type JobView } from './features/jobs';
+import { MediaPage, type MediaAssetView, type MediaPublishPlatform } from './features/media';
+import { NotFoundPage } from './features/not-found';
 import { OverviewPage } from './features/overview';
 import { SettingsPage } from './features/settings';
 import { SetupPage } from './features/setup';
@@ -74,12 +75,6 @@ const navigation: readonly ResourceNavigationItem[] = [
   { href: '/jobs', icon: 'jobs', label: 'Jobs' },
   { href: '/settings', icon: 'settings', label: 'Settings' },
 ];
-type MediaItem = {
-  id: string;
-  path: string;
-  state: string;
-  metadata: { durationSeconds?: number; width?: number; height?: number };
-};
 type AccountItem = {
   capabilities: readonly string[];
   displayName: string;
@@ -197,7 +192,7 @@ export function App() {
     title: 'This local view does not exist.',
     description: 'Choose a section from the navigation to continue.',
   };
-  const [media, setMedia] = useState<readonly MediaItem[]>([]);
+  const [media, setMedia] = useState<readonly MediaAssetView[]>([]);
   const [jobs, setJobs] = useState<readonly JobView[]>([]);
   const [attempts, setAttempts] = useState<readonly JobAttemptView[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string>();
@@ -207,6 +202,8 @@ export function App() {
   const [activeJobAction, setActiveJobAction] = useState<string>();
   const [error, setError] = useState<string>();
   const [importPath, setImportPath] = useState('');
+  const [isMediaLoading, setIsMediaLoading] = useState(false);
+  const [activeMediaAction, setActiveMediaAction] = useState<string>();
   const [accounts, setAccounts] = useState<readonly AccountItem[]>([]);
   const [youtubeStatus, setYoutubeStatus] = useState<YouTubeCredentialStatus>();
   const [youtubeClientId, setYoutubeClientId] = useState('');
@@ -247,7 +244,7 @@ export function App() {
   const loadMedia = async () => {
     const response = await fetch('/api/media');
     if (!response.ok) throw new Error('Media library is unavailable.');
-    const body = (await response.json()) as { media: readonly MediaItem[] };
+    const body = (await response.json()) as { media: readonly MediaAssetView[] };
     setMedia(body.media);
   };
   const loadJobs = async () => {
@@ -350,10 +347,14 @@ export function App() {
     }
   };
   useEffect(() => {
-    if (pathname === '/media')
-      void Promise.all([loadMedia(), loadAccounts()]).catch((failure: unknown) =>
-        setError(failure instanceof Error ? failure.message : 'Could not load media.'),
-      );
+    if (pathname === '/media') {
+      setIsMediaLoading(true);
+      void Promise.all([loadMedia(), loadAccounts()])
+        .catch((failure: unknown) =>
+          setError(failure instanceof Error ? failure.message : 'Could not load media.'),
+        )
+        .finally(() => setIsMediaLoading(false));
+    }
     if (pathname === '/jobs') {
       setIsJobsLoading(true);
       void loadJobs()
@@ -397,6 +398,7 @@ export function App() {
   const importMedia = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(undefined);
+    setActiveMediaAction('import');
     try {
       const session = await fetch('/api/session');
       const { csrfToken } = (await session.json()) as { csrfToken: string };
@@ -410,6 +412,8 @@ export function App() {
       await loadMedia();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Import failed.');
+    } finally {
+      setActiveMediaAction(undefined);
     }
   };
   const cancelJob = async (jobId: string) => {
@@ -435,6 +439,7 @@ export function App() {
     event.preventDefault();
     if (publishMediaId === undefined) return;
     setError(undefined);
+    setActiveMediaAction('publish:youtube');
     try {
       const response = await fetch('/api/publish/youtube', {
         method: 'POST',
@@ -453,12 +458,15 @@ export function App() {
       setError(
         failure instanceof Error ? failure.message : 'The YouTube upload could not be queued.',
       );
+    } finally {
+      setActiveMediaAction(undefined);
     }
   };
   const queueTikTokPublish = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (publishMediaId === undefined) return;
     setError(undefined);
+    setActiveMediaAction('publish:tiktok');
     try {
       const response = await fetch('/api/publish/tiktok', {
         method: 'POST',
@@ -481,7 +489,26 @@ export function App() {
       await loadJobs();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'The TikTok post could not be queued.');
+    } finally {
+      setActiveMediaAction(undefined);
     }
+  };
+  const beginMediaPublish = (asset: MediaAssetView, platform: MediaPublishPlatform) => {
+    const name = asset.path.split(/[\\/]/).pop() ?? 'Untitled video';
+    setPublishMediaId(asset.id);
+    setPublishPlatform(platform);
+    setPublishCaption(name.replace(/\.[^.]+$/, ''));
+    if (platform === 'youtube') {
+      setPublishTitle(name.replace(/\.[^.]+$/, ''));
+      setPublishDescription('');
+      setPublishAccountId(accounts[0]?.id ?? '');
+      return;
+    }
+    setPublishAccountId(accounts.find((account) => account.provider === 'tiktok')?.id ?? '');
+    const capability = Object.values(tiktokCapabilities).find(
+      (view) => view.capabilities !== undefined,
+    )?.capabilities;
+    setPublishPrivacy(capability?.privacyLevelOptions[0] ?? 'SELF_ONLY');
   };
   const createWorkflow = async (value: WorkflowEditorValue) => {
     setError(undefined);
@@ -763,7 +790,11 @@ export function App() {
             />
           }
           labelledBy="workspace-title"
-          mode={pathname === '/setup' || pathname === '/settings' ? 'setup' : 'default'}
+          mode={
+            pathname === '/setup' || pathname === '/settings' || pages[pathname] === undefined
+              ? 'setup'
+              : 'default'
+          }
         >
           {pathname === '/accounts' ? (
             <AccountsPage
@@ -842,227 +873,44 @@ export function App() {
           ) : pathname === '/setup' ? (
             <SetupPage error={error} tiktokStatus={tiktokStatus} youtubeStatus={youtubeStatus} />
           ) : pathname === '/media' ? (
-            <div className="space-y-6">
-              <form className="flex flex-col gap-3 sm:flex-row" onSubmit={importMedia}>
-                <label className="sr-only" htmlFor="media-path">
-                  Local file path
-                </label>
-                <input
-                  className="min-w-0 flex-1 rounded-lg border border-white/15 bg-slate-950 px-3 py-2 text-sm"
-                  id="media-path"
-                  onChange={(event) => setImportPath(event.target.value)}
-                  placeholder="C:\\Media\\video file.mp4"
-                  required
-                  value={importPath}
-                />
-                <button
-                  className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
-                  type="submit"
-                >
-                  Import
-                </button>
-              </form>
-              {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
-              <table className="w-full text-left text-sm">
-                <thead className="text-slate-400">
-                  <tr>
-                    <th>File</th>
-                    <th>Details</th>
-                    <th>State</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {media.map((asset) => (
-                    <tr className="border-t border-white/10" key={asset.id}>
-                      <td className="max-w-sm truncate py-3" title={asset.path}>
-                        {asset.path}
-                      </td>
-                      <td>
-                        {asset.metadata.width ?? '—'}×{asset.metadata.height ?? '—'} ·{' '}
-                        {asset.metadata.durationSeconds?.toFixed(1) ?? '—'}s
-                      </td>
-                      <td className="text-emerald-200">{asset.state}</td>
-                      <td>
-                        <button
-                          className="rounded-lg border border-cyan-300/30 px-3 py-1.5 text-xs text-cyan-200"
-                          onClick={() => {
-                            const name = asset.path.split(/[\\/]/).pop() ?? 'Untitled video';
-                            setPublishMediaId(asset.id);
-                            setPublishPlatform('youtube');
-                            setPublishTitle(name.replace(/\.[^.]+$/, ''));
-                            setPublishCaption(name.replace(/\.[^.]+$/, ''));
-                            setPublishDescription('');
-                            setPublishAccountId(accounts[0]?.id ?? '');
-                          }}
-                          type="button"
-                        >
-                          Publish to YouTube
-                        </button>
-                        {accounts.some((account) => account.provider === 'tiktok') && (
-                          <button
-                            className="ml-2 rounded-lg border border-fuchsia-300/30 px-3 py-1.5 text-xs text-fuchsia-200"
-                            onClick={() => {
-                              const name = asset.path.split(/[\\/]/).pop() ?? 'Untitled video';
-                              setPublishMediaId(asset.id);
-                              setPublishPlatform('tiktok');
-                              setPublishCaption(name.replace(/\.[^.]+$/, ''));
-                              setPublishAccountId(
-                                accounts.find((account) => account.provider === 'tiktok')?.id ?? '',
-                              );
-                              const capability = Object.values(tiktokCapabilities).find(
-                                (view) => view.capabilities !== undefined,
-                              )?.capabilities;
-                              setPublishPrivacy(capability?.privacyLevelOptions[0] ?? 'SELF_ONLY');
-                            }}
-                            type="button"
-                          >
-                            Publish to TikTok
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {media.length === 0 && (
-                <ResourceEmptyState
-                  description="Import a local media file to inspect it and prepare a publish job."
-                  title="No local media has been imported yet."
-                />
-              )}
-              {publishMediaId !== undefined && (
-                <form
-                  className="grid gap-3 rounded-xl border border-cyan-300/20 bg-slate-950 p-5"
-                  onSubmit={
-                    publishPlatform === 'youtube' ? queueYouTubePublish : queueTikTokPublish
-                  }
-                >
-                  <h2 className="font-semibold">
-                    Queue {publishPlatform === 'youtube' ? 'YouTube upload' : 'TikTok post'}
-                  </h2>
-                  <label className="grid gap-1 text-sm" htmlFor="publish-account">
-                    <span className="text-slate-300">Connected account</span>
-                    <select
-                      className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                      id="publish-account"
-                      onChange={(event) => setPublishAccountId(event.target.value)}
-                      required
-                      value={publishAccountId}
-                    >
-                      <option value="">
-                        Select a {publishPlatform === 'youtube' ? 'YouTube' : 'TikTok'} account
-                      </option>
-                      {accounts
-                        .filter((account) => account.provider === publishPlatform)
-                        .map((account) => (
-                          <option key={account.id} value={account.id}>
-                            {account.displayName}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  {publishPlatform === 'youtube' ? (
-                    <label className="grid gap-1 text-sm" htmlFor="publish-title">
-                      <span className="text-slate-300">Title</span>
-                      <input
-                        className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                        id="publish-title"
-                        onChange={(event) => setPublishTitle(event.target.value)}
-                        required
-                        value={publishTitle}
-                      />
-                    </label>
-                  ) : (
-                    <>
-                      <label className="grid gap-1 text-sm" htmlFor="publish-caption">
-                        <span className="text-slate-300">Caption</span>
-                        <textarea
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="publish-caption"
-                          maxLength={
-                            Object.values(tiktokCapabilities).find((view) => view.capabilities)
-                              ?.capabilities?.media?.captionMaxUtf16CodeUnits
-                          }
-                          onChange={(event) => setPublishCaption(event.target.value)}
-                          required
-                          value={publishCaption}
-                        />
-                      </label>
-                      <label className="grid gap-1 text-sm" htmlFor="publish-privacy">
-                        <span className="text-slate-300">Privacy (offered by this creator)</span>
-                        <select
-                          className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                          id="publish-privacy"
-                          onChange={(event) => setPublishPrivacy(event.target.value)}
-                          required
-                          value={publishPrivacy}
-                        >
-                          {(
-                            tiktokCapabilities[publishAccountId]?.capabilities
-                              ?.privacyLevelOptions ?? []
-                          ).map((option) => (
-                            <option key={option} value={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="flex gap-2 text-sm">
-                        <input
-                          checked={disableComment}
-                          onChange={(event) => setDisableComment(event.target.checked)}
-                          type="checkbox"
-                        />{' '}
-                        Disable comments
-                      </label>
-                      <label className="flex gap-2 text-sm">
-                        <input
-                          checked={disableDuet}
-                          onChange={(event) => setDisableDuet(event.target.checked)}
-                          type="checkbox"
-                        />{' '}
-                        Disable duet
-                      </label>
-                      <label className="flex gap-2 text-sm">
-                        <input
-                          checked={disableStitch}
-                          onChange={(event) => setDisableStitch(event.target.checked)}
-                          type="checkbox"
-                        />{' '}
-                        Disable stitch
-                      </label>
-                    </>
-                  )}
-                  {publishPlatform === 'youtube' && (
-                    <label className="grid gap-1 text-sm" htmlFor="publish-description">
-                      <span className="text-slate-300">Description</span>
-                      <textarea
-                        className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                        id="publish-description"
-                        onChange={(event) => setPublishDescription(event.target.value)}
-                        value={publishDescription}
-                      />
-                    </label>
-                  )}
-                  <div className="flex gap-3">
-                    <button
-                      className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
-                      type="submit"
-                    >
-                      Queue upload
-                    </button>
-                    <button
-                      className="rounded-lg border border-white/15 px-4 py-2 text-sm"
-                      onClick={() => setPublishMediaId(undefined)}
-                      type="button"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
+            <MediaPage
+              accounts={accounts}
+              activeAction={activeMediaAction}
+              error={error}
+              importPath={importPath}
+              isLoading={isMediaLoading}
+              media={media}
+              onAccountIdChange={setPublishAccountId}
+              onBeginPublish={beginMediaPublish}
+              onCancelPublish={() => setPublishMediaId(undefined)}
+              onCaptionChange={setPublishCaption}
+              onDescriptionChange={setPublishDescription}
+              onDisableCommentChange={setDisableComment}
+              onDisableDuetChange={setDisableDuet}
+              onDisableStitchChange={setDisableStitch}
+              onImport={importMedia}
+              onImportPathChange={setImportPath}
+              onPrivacyChange={setPublishPrivacy}
+              onPublish={publishPlatform === 'youtube' ? queueYouTubePublish : queueTikTokPublish}
+              onTitleChange={setPublishTitle}
+              publish={{
+                accountId: publishAccountId,
+                caption: publishCaption,
+                captionMaxLength: Object.values(tiktokCapabilities).find(
+                  (view) => view.capabilities,
+                )?.capabilities?.media?.captionMaxUtf16CodeUnits,
+                description: publishDescription,
+                disableComment,
+                disableDuet,
+                disableStitch,
+                mediaId: publishMediaId,
+                platform: publishPlatform,
+                privacy: publishPrivacy,
+                privacyOptions:
+                  tiktokCapabilities[publishAccountId]?.capabilities?.privacyLevelOptions ?? [],
+                title: publishTitle,
+              }}
+            />
           ) : pathname === '/jobs' ? (
             <JobsPage
               activeAction={activeJobAction}
@@ -1086,9 +934,7 @@ export function App() {
           ) : pathname === '/' ? (
             <OverviewPage onNavigate={navigate} />
           ) : (
-            <p className="text-sm text-slate-400">
-              This area will grow in its owning roadmap packet.
-            </p>
+            <NotFoundPage onNavigate={navigate} />
           )}
         </Workspace>
       </div>

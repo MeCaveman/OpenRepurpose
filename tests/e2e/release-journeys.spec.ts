@@ -235,6 +235,7 @@ test('remote source journey preserves polling controls and media lifecycle detai
 
 test('manual import to publish queues one YouTube upload', async ({ page }) => {
   await serveProductionAssets(page);
+  await page.setViewportSize({ height: 1080, width: 1920 });
   await page.route('**/api/media', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ media: [] }) }),
   );
@@ -264,6 +265,7 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
   );
   let queued = false;
+  let queuedRequest: unknown;
   await page.route('**/api/media/import', (route) =>
     route.fulfill({
       status: 201,
@@ -281,6 +283,7 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
   );
   await page.route('**/api/publish/youtube', async (route) => {
     queued = true;
+    queuedRequest = route.request().postDataJSON();
     await route.fulfill({
       status: 201,
       contentType: 'application/json',
@@ -332,10 +335,24 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
   );
   await page.reload();
   await page.getByRole('button', { name: 'Publish to YouTube' }).click();
+  await expect(page.getByRole('heading', { name: 'Queue YouTube upload' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.setViewportSize({ height: 800, width: 320 });
+  await expect(page.getByRole('button', { name: 'Publish to YouTube' })).toBeHidden();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
   await page.getByLabel('Title').fill('Episode one');
   await page.getByLabel('Connected account').selectOption('account-1');
   await page.getByRole('button', { name: 'Queue upload' }).click();
   await expect.poll(() => queued).toBe(true);
+  expect(queuedRequest).toEqual({
+    mediaId: 'media-1',
+    accountId: 'account-1',
+    metadata: { title: 'Episode one', description: '', privacy: 'private' },
+  });
 });
 
 test('watched-folder workflow contract leads to a queued upload', async ({ page }) => {
