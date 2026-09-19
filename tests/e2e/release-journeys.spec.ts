@@ -134,6 +134,105 @@ test('Meta accounts journey keeps Facebook Pages and Instagram targets distinct'
   );
 });
 
+test('remote source journey preserves polling controls and media lifecycle detail', async ({
+  page,
+}) => {
+  await serveProductionAssets(page);
+  await page.route('**/api/accounts', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        accounts: [
+          {
+            id: 'account-1',
+            displayName: 'Workshop Channel',
+            externalId: 'channel-owner-1',
+            provider: 'youtube',
+            status: 'connected',
+            capabilities: ['youtube.identity.read'],
+          },
+        ],
+        tiktok: {
+          configured: false,
+          clientSecretConfigured: false,
+          flow: 'desktop',
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/tiktok/oauth/callback',
+        },
+        youtube: {
+          configured: true,
+          clientSecretConfigured: true,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/youtube/oauth/callback',
+        },
+      }),
+    }),
+  );
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
+  );
+  let pollRequested = false;
+  await page.route('**/api/sources/source-1/poll', async (route) => {
+    pollRequested = route.request().method() === 'POST';
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ source: { id: 'source-1', status: 'active' } }),
+    });
+  });
+  await page.route('**/api/sources/source-1', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        source: { id: 'source-1', status: 'active' },
+        items: [
+          {
+            id: 'item-1',
+            externalId: 'video-1',
+            metadata: { title: 'Workshop introduction' },
+            lifecycleStatus: 'observed',
+            resolutionStatus: 'unavailable',
+            cleanupStatus: 'not_eligible',
+          },
+        ],
+      }),
+    }),
+  );
+  await page.route('**/api/sources', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        sources: [
+          {
+            adapterId: 'youtube',
+            displayName: 'Workshop uploads',
+            id: 'source-1',
+            lastPollAt: '2026-09-19T10:15:00.000Z',
+            lastSuccessfulPollAt: '2026-09-19T10:15:00.000Z',
+            status: 'active',
+          },
+        ],
+      }),
+    }),
+  );
+
+  await page.goto('/sources');
+  await expect(page.getByRole('heading', { name: 'Add a YouTube upload source' })).toBeVisible();
+  await expect(page.getByRole('option', { name: 'Workshop Channel' })).toBeAttached();
+  await expect(page.getByRole('heading', { name: 'Workshop uploads' })).toBeVisible();
+  await expect(page.getByText('Active', { exact: true })).toBeVisible();
+  await expect(page.getByText('Workshop introduction')).toBeVisible();
+  await expect(page.getByText('Resolution · Unavailable')).toBeVisible();
+  await expect(page.getByText('Local original required')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Poll now' }).click();
+  await expect.poll(() => pollRequested).toBe(true);
+
+  await page.setViewportSize({ height: 800, width: 320 });
+  await expect(page.getByRole('button', { name: 'Poll now' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});
+
 test('manual import to publish queues one YouTube upload', async ({ page }) => {
   await serveProductionAssets(page);
   await page.route('**/api/media', (route) =>

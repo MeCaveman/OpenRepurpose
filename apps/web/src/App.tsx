@@ -23,6 +23,7 @@ import { Button } from './components/ui';
 import { AccountsPage } from './features/accounts';
 import { OverviewPage } from './features/overview';
 import { SetupPage } from './features/setup';
+import { SourcesPage } from './features/sources';
 
 const pages: Readonly<
   Record<string, { readonly description: string; readonly eyebrow: string; readonly title: string }>
@@ -303,6 +304,8 @@ export function App() {
   const [sourceAccountId, setSourceAccountId] = useState('');
   const [sourceChannelId, setSourceChannelId] = useState('');
   const [sourceName, setSourceName] = useState('');
+  const [activeSourceAction, setActiveSourceAction] = useState<string>();
+  const [isSourcesLoading, setIsSourcesLoading] = useState(false);
   const [tiktokCapabilities, setTikTokCapabilities] = useState<
     Readonly<Record<string, TikTokCapabilityView>>
   >({});
@@ -423,10 +426,14 @@ export function App() {
       void loadSetup().catch((failure: unknown) =>
         setError(failure instanceof Error ? failure.message : 'Could not load setup status.'),
       );
-    if (pathname === '/sources')
-      void Promise.all([loadAccounts(), loadSources()]).catch((failure: unknown) =>
-        setError(failure instanceof Error ? failure.message : 'Could not load sources.'),
-      );
+    if (pathname === '/sources') {
+      setIsSourcesLoading(true);
+      void Promise.all([loadAccounts(), loadSources()])
+        .catch((failure: unknown) =>
+          setError(failure instanceof Error ? failure.message : 'Could not load sources.'),
+        )
+        .finally(() => setIsSourcesLoading(false));
+    }
     if (pathname === '/workflows')
       void Promise.all([loadAccounts(), loadWorkflows(), loadSources()]).catch((failure: unknown) =>
         setError(failure instanceof Error ? failure.message : 'Could not load workflows.'),
@@ -542,6 +549,8 @@ export function App() {
   };
   const addYouTubeSource = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setError(undefined);
+    setActiveSourceAction('add');
     try {
       const response = await fetch('/api/sources/youtube', {
         method: 'POST',
@@ -561,9 +570,13 @@ export function App() {
       await loadSources();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Could not add source.');
+    } finally {
+      setActiveSourceAction(undefined);
     }
   };
   const sourceAction = async (id: string, action: 'poll' | 'pause' | 'resume') => {
+    setError(undefined);
+    setActiveSourceAction(`${action}:${id}`);
     try {
       const response = await fetch(`/api/sources/${encodeURIComponent(id)}/${action}`, {
         method: 'POST',
@@ -573,6 +586,8 @@ export function App() {
       await loadSources();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Source update failed.');
+    } finally {
+      setActiveSourceAction(undefined);
     }
   };
   const csrfToken = async () => {
@@ -844,115 +859,25 @@ export function App() {
               }}
             />
           ) : pathname === '/sources' ? (
-            <div className="space-y-6">
-              {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
-              <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
-                <h2 className="font-semibold">Add a YouTube upload source</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Detection uses the YouTube Data API uploads playlist. It does not download video
-                  bytes.
-                </p>
-                <form className="mt-4 grid gap-3" onSubmit={addYouTubeSource}>
-                  <select
-                    className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                    required
-                    value={sourceAccountId}
-                    onChange={(event) => setSourceAccountId(event.target.value)}
-                  >
-                    <option value="">Select connected YouTube account</option>
-                    {accounts
-                      .filter(
-                        (account) =>
-                          account.provider === 'youtube' && account.status === 'connected',
-                      )
-                      .map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.displayName}
-                        </option>
-                      ))}
-                  </select>
-                  <input
-                    className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                    placeholder="YouTube channel ID"
-                    required
-                    value={sourceChannelId}
-                    onChange={(event) => setSourceChannelId(event.target.value)}
-                  />
-                  <input
-                    className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                    placeholder="Optional local display name"
-                    value={sourceName}
-                    onChange={(event) => setSourceName(event.target.value)}
-                  />
-                  <button
-                    className="w-fit rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
-                    type="submit"
-                  >
-                    Add source
-                  </button>
-                </form>
-              </section>
-              {sources.map((source) => (
-                <section
-                  className="rounded-xl border border-white/10 bg-slate-950 p-5"
-                  key={source.id}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <h2 className="font-semibold">{source.displayName}</h2>
-                      <p className="mt-1 text-xs text-slate-400">
-                        {source.adapterId} · {source.status} · last successful poll:{' '}
-                        {source.lastSuccessfulPollAt ?? 'never'}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        className="rounded border border-cyan-300/30 px-3 py-1 text-xs text-cyan-200"
-                        onClick={() => void sourceAction(source.id, 'poll')}
-                        type="button"
-                      >
-                        Poll now
-                      </button>
-                      <button
-                        className="rounded border border-white/15 px-3 py-1 text-xs"
-                        onClick={() =>
-                          void sourceAction(
-                            source.id,
-                            source.status === 'active' ? 'pause' : 'resume',
-                          )
-                        }
-                        type="button"
-                      >
-                        {source.status === 'active' ? 'Pause' : 'Resume'}
-                      </button>
-                    </div>
-                  </div>
-                  {source.lastPollErrorMessage !== undefined && (
-                    <p className="mt-3 text-sm text-rose-300">
-                      Last error ({source.lastPollErrorCode}): {source.lastPollErrorMessage}
-                    </p>
-                  )}
-                  <div className="mt-4 grid gap-2">
-                    {(sourceItems[source.id] ?? []).map((item) => (
-                      <article className="rounded-lg border border-white/10 p-3" key={item.id}>
-                        <p className="font-medium">{item.metadata.title ?? item.externalId}</p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          Resolution: {item.resolutionStatus} · lifecycle: {item.lifecycleStatus} ·
-                          cleanup: {item.cleanupStatus ?? 'not eligible'}
-                        </p>
-                        {item.resolutionStatus === 'unavailable' && (
-                          <p className="mt-2 text-sm text-amber-200">
-                            This item cannot be resolved automatically. Link an authorized local
-                            original; OpenRepurpose will not download protected or unauthorized
-                            content.
-                          </p>
-                        )}
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
+            <SourcesPage
+              accounts={accounts}
+              activeAction={activeSourceAction}
+              draft={{
+                accountId: sourceAccountId,
+                channelId: sourceChannelId,
+                displayName: sourceName,
+              }}
+              error={error}
+              isLoading={isSourcesLoading}
+              itemsBySource={sourceItems}
+              onAccountIdChange={setSourceAccountId}
+              onAddSource={addYouTubeSource}
+              onChannelIdChange={setSourceChannelId}
+              onDisplayNameChange={setSourceName}
+              onNavigateAccounts={(event) => navigate(event, '/accounts')}
+              onSourceAction={(sourceId, action) => void sourceAction(sourceId, action)}
+              sources={sources}
+            />
           ) : pathname === '/workflows' ? (
             <div className="space-y-6">
               {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}

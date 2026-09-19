@@ -10,6 +10,8 @@ export { PlatformIdentity } from './platform-identity';
 export type { PlatformIdentityProps } from './platform-identity';
 export { ResourceEmptyState } from './resource-empty-state';
 export type { ResourceEmptyStateProps } from './resource-empty-state';
+export { SourceStatus } from './source-status';
+export type { KnownSourceStatus, SourceStatusProps } from './source-status';
 export { WorkflowCard } from './workflow-card';
 export type { WorkflowCardProps } from './workflow-card';
 export { WorkflowNode } from './workflow-node';
