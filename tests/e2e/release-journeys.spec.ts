@@ -59,6 +59,14 @@ test('Meta accounts journey keeps Facebook Pages and Instagram targets distinct'
   page,
 }) => {
   await serveProductionAssets(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
+  );
+  let targetUpdate: { enabled: boolean } | undefined;
+  await page.route('**/api/accounts/meta/targets/page-target-1', async (route) => {
+    targetUpdate = route.request().postDataJSON() as { enabled: boolean };
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
+  });
   await page.route('**/api/accounts', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -103,6 +111,9 @@ test('Meta accounts journey keeps Facebook Pages and Instagram targets distinct'
     }),
   );
   await page.goto('/accounts');
+  await expect(page.getByRole('heading', { name: 'Platform connections' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Google OAuth credentials' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'TikTok Login Kit credentials' })).toBeVisible();
   await expect(page.getByText('Meta Creator')).toBeVisible();
   await expect(page.getByText('Northwind Page')).toBeVisible();
   await expect(page.getByText('Facebook Page target')).toBeVisible();
@@ -110,6 +121,17 @@ test('Meta accounts journey keeps Facebook Pages and Instagram targets distinct'
   await expect(page.getByText('Instagram professional target')).toBeVisible();
   await expect(page.getByText('@northwind_reels')).toBeVisible();
   await expect(page.getByRole('checkbox')).toHaveCount(2);
+  await page.getByRole('checkbox', { name: /Northwind Page/ }).click();
+  await expect.poll(() => targetUpdate).toEqual({ enabled: false });
+
+  await page.setViewportSize({ height: 800, width: 320 });
+  await expect(
+    page.getByRole('heading', { name: 'Meta app and publishing targets' }),
+  ).toBeVisible();
+  await expect(page.getByText('Northwind Page')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 });
 
 test('manual import to publish queues one YouTube upload', async ({ page }) => {

@@ -5,7 +5,6 @@ import {
   type WorkflowDefinitionView,
 } from './components/WorkflowEditor';
 import {
-  ConnectionCard,
   JobStatus,
   ResourceEmptyState,
   WorkflowCard,
@@ -21,6 +20,7 @@ import {
   type ResourceNavigationItem,
 } from './components/layout';
 import { Button } from './components/ui';
+import { AccountsPage } from './features/accounts';
 import { OverviewPage } from './features/overview';
 import { SetupPage } from './features/setup';
 
@@ -40,7 +40,7 @@ const pages: Readonly<
   '/accounts': {
     eyebrow: 'Destinations',
     title: 'Accounts',
-    description: 'Connected publishing accounts will be managed here.',
+    description: 'Configure credentials, publishing targets, and connected platform identities.',
   },
   '/sources': {
     eyebrow: 'Remote ingestion',
@@ -294,6 +294,7 @@ export function App() {
   const [metaClientSecret, setMetaClientSecret] = useState('');
   const [metaCredentials, setMetaCredentials] = useState<readonly MetaCredentialItem[]>([]);
   const [metaTargets, setMetaTargets] = useState<readonly MetaTargetItem[]>([]);
+  const [activeAccountAction, setActiveAccountAction] = useState<string>();
   const [workflows, setWorkflows] = useState<readonly WorkflowItem[]>([]);
   const [sources, setSources] = useState<readonly SourceItemSummary[]>([]);
   const [sourceItems, setSourceItems] = useState<Readonly<Record<string, readonly SourceItem[]>>>(
@@ -582,6 +583,7 @@ export function App() {
   const saveYouTubeCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(undefined);
+    setActiveAccountAction('youtube-save');
     try {
       const response = await fetch('/api/accounts/youtube/credentials', {
         method: 'POST',
@@ -600,10 +602,13 @@ export function App() {
       setError(
         failure instanceof Error ? failure.message : 'YouTube credentials could not be saved.',
       );
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   const connectYouTube = async () => {
     setError(undefined);
+    setActiveAccountAction('youtube-connect');
     try {
       const response = await fetch('/api/accounts/youtube/oauth/start', {
         method: 'POST',
@@ -617,10 +622,14 @@ export function App() {
       setError(
         failure instanceof Error ? failure.message : 'YouTube authorization could not be started.',
       );
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   const saveMetaCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setError(undefined);
+    setActiveAccountAction('meta-save');
     try {
       const response = await fetch('/api/accounts/meta/credentials', {
         method: 'POST',
@@ -637,9 +646,13 @@ export function App() {
       await loadAccounts();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Meta credentials could not be saved.');
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   const connectMeta = async () => {
+    setError(undefined);
+    setActiveAccountAction('meta-connect');
     try {
       const response = await fetch('/api/accounts/meta/oauth/start', {
         method: 'POST',
@@ -653,9 +666,13 @@ export function App() {
       setError(
         failure instanceof Error ? failure.message : 'Meta authorization could not be started.',
       );
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   const setMetaTarget = async (target: MetaTargetItem, enabled: boolean) => {
+    setError(undefined);
+    setActiveAccountAction(`meta-target:${target.id}`);
     try {
       const response = await fetch(`/api/accounts/meta/targets/${encodeURIComponent(target.id)}`, {
         method: 'PATCH',
@@ -666,9 +683,13 @@ export function App() {
       await loadAccounts();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Meta target could not be updated.');
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   const rediscoverMetaTargets = async (credentialId: string) => {
+    setError(undefined);
+    setActiveAccountAction(`meta-refresh:${credentialId}`);
     try {
       const response = await fetch(
         `/api/accounts/meta/${encodeURIComponent(credentialId)}/discover`,
@@ -682,11 +703,14 @@ export function App() {
       await loadAccounts();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Meta targets could not be refreshed.');
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   const saveTikTokCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(undefined);
+    setActiveAccountAction('tiktok-save');
     try {
       const response = await fetch('/api/accounts/tiktok/credentials', {
         method: 'POST',
@@ -702,10 +726,13 @@ export function App() {
       setError(
         failure instanceof Error ? failure.message : 'TikTok credentials could not be saved.',
       );
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   const connectTikTok = async () => {
     setError(undefined);
+    setActiveAccountAction('tiktok-connect');
     try {
       const response = await fetch('/api/accounts/tiktok/oauth/start', {
         method: 'POST',
@@ -719,10 +746,13 @@ export function App() {
       setError(
         failure instanceof Error ? failure.message : 'TikTok authorization could not be started.',
       );
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   const removeAccount = async (accountId: string) => {
     setError(undefined);
+    setActiveAccountAction(`account-remove:${accountId}`);
     try {
       const response = await fetch(`/api/accounts/${encodeURIComponent(accountId)}`, {
         method: 'DELETE',
@@ -732,6 +762,8 @@ export function App() {
       await loadAccounts();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'The account could not be removed.');
+    } finally {
+      setActiveAccountAction(undefined);
     }
   };
   return (
@@ -768,365 +800,49 @@ export function App() {
           mode={pathname === '/setup' ? 'setup' : 'default'}
         >
           {pathname === '/accounts' ? (
-            <div className="space-y-8">
-              {new URLSearchParams(window.location.search).get('youtube') === 'connected' && (
-                <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-200">
-                  YouTube connected successfully.
-                </p>
-              )}
-              {new URLSearchParams(window.location.search).get('youtube') === 'error' && (
-                <p className="rounded-lg border border-rose-300/20 bg-rose-300/10 p-3 text-sm text-rose-200">
-                  YouTube connection failed. Check the credential setup and try again.
-                </p>
-              )}
-              {new URLSearchParams(window.location.search).get('tiktok') === 'connected' && (
-                <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-200">
-                  TikTok connected successfully.
-                </p>
-              )}
-              {new URLSearchParams(window.location.search).get('tiktok') === 'error' && (
-                <p className="rounded-lg border border-rose-300/20 bg-rose-300/10 p-3 text-sm text-rose-200">
-                  TikTok connection failed. Check the credential setup and granted scopes.
-                </p>
-              )}
-              {new URLSearchParams(window.location.search).get('meta') === 'connected' && (
-                <p className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-200">
-                  Meta connected successfully. Available Pages and linked Instagram professional
-                  accounts were discovered.
-                </p>
-              )}
-              {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
-              <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
-                <h2 className="font-semibold">Google OAuth credentials</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Use your own Google Cloud desktop OAuth client. Values are encrypted locally and
-                  are never returned to this page.
-                </p>
-                <form className="mt-5 grid gap-3" onSubmit={saveYouTubeCredentials}>
-                  <label className="grid gap-1 text-sm" htmlFor="youtube-client-id">
-                    <span className="text-slate-300">Client ID</span>
-                    <input
-                      className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                      id="youtube-client-id"
-                      onChange={(event) => setYoutubeClientId(event.target.value)}
-                      placeholder="…apps.googleusercontent.com"
-                      required
-                      value={youtubeClientId}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm" htmlFor="youtube-client-secret">
-                    <span className="text-slate-300">Client secret (optional)</span>
-                    <input
-                      autoComplete="new-password"
-                      className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                      id="youtube-client-secret"
-                      onChange={(event) => setYoutubeClientSecret(event.target.value)}
-                      type="password"
-                      value={youtubeClientSecret}
-                    />
-                  </label>
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
-                      type="submit"
-                    >
-                      Save credentials
-                    </button>
-                    <button
-                      className="rounded-lg border border-cyan-300/30 px-4 py-2 text-sm text-cyan-200 disabled:opacity-40"
-                      disabled={youtubeStatus?.configured !== true}
-                      onClick={() => void connectYouTube()}
-                      type="button"
-                    >
-                      Connect YouTube
-                    </button>
-                  </div>
-                </form>
-                <p className="mt-4 break-all text-xs text-slate-500">
-                  Callback: {youtubeStatus?.redirectUri ?? 'Loading…'}
-                </p>
-              </section>
-              <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
-                <h2 className="font-semibold">Meta app and publishing targets</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Connect one Meta identity, then independently enable its Facebook Pages and linked
-                  Instagram professional accounts. App secrets and tokens remain encrypted locally.
-                </p>
-                <form className="mt-5 grid gap-3" onSubmit={saveMetaCredentials}>
-                  <label className="grid gap-1 text-sm" htmlFor="meta-client-id">
-                    <span className="text-slate-300">Meta app ID</span>
-                    <input
-                      className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                      id="meta-client-id"
-                      onChange={(event) => setMetaClientId(event.target.value)}
-                      required
-                      value={metaClientId}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm" htmlFor="meta-client-secret">
-                    <span className="text-slate-300">Meta app secret</span>
-                    <input
-                      autoComplete="new-password"
-                      className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                      id="meta-client-secret"
-                      onChange={(event) => setMetaClientSecret(event.target.value)}
-                      required
-                      type="password"
-                      value={metaClientSecret}
-                    />
-                  </label>
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
-                      type="submit"
-                    >
-                      Save Meta credentials
-                    </button>
-                    <button
-                      className="rounded-lg border border-cyan-300/30 px-4 py-2 text-sm text-cyan-200 disabled:opacity-40"
-                      disabled={metaStatus?.configured !== true}
-                      onClick={() => void connectMeta()}
-                      type="button"
-                    >
-                      Connect Meta
-                    </button>
-                  </div>
-                </form>
-                <p className="mt-4 break-all text-xs text-slate-500">
-                  Callback: {metaStatus?.redirectUri ?? 'Loading…'}
-                </p>
-                {metaCredentials.map((credential) => (
-                  <div className="mt-4 rounded-lg border border-white/10 p-4" key={credential.id}>
-                    <p className="font-medium">
-                      {credential.displayName}{' '}
-                      <span className="text-xs text-slate-500">
-                        Meta identity · {credential.status}
-                      </span>
-                    </p>
-                    <p className="mt-2 text-xs text-slate-400">
-                      Credential identity: {credential.externalId} · granted permissions:{' '}
-                      {credential.scopes.length === 0
-                        ? 'none reported'
-                        : credential.scopes.join(', ')}
-                    </p>
-                    {credential.status !== 'connected' && (
-                      <p className="mt-2 text-sm text-amber-200">
-                        Permission blocker: reconnect this Meta identity before publishing.
-                      </p>
-                    )}
-                    <button
-                      className="mt-3 rounded-lg border border-cyan-300/30 px-3 py-1.5 text-xs text-cyan-200"
-                      onClick={() => void rediscoverMetaTargets(credential.id)}
-                      type="button"
-                    >
-                      Refresh available targets
-                    </button>
-                    {metaTargets
-                      .filter((target) => target.credentialId === credential.id)
-                      .sort(
-                        (left, right) =>
-                          left.kind.localeCompare(right.kind) ||
-                          left.displayName.localeCompare(right.displayName),
-                      )
-                      .map((target) => (
-                        <div className="mt-3 rounded-lg border border-white/10 p-3" key={target.id}>
-                          <label className="flex items-start gap-3 text-sm">
-                            <input
-                              checked={target.enabled}
-                              disabled={target.availability !== 'available'}
-                              onChange={(event) => void setMetaTarget(target, event.target.checked)}
-                              type="checkbox"
-                            />
-                            <span>
-                              <span className="font-medium">{target.displayName}</span>{' '}
-                              <span className="text-xs uppercase text-slate-500">
-                                {target.kind === 'facebook_page'
-                                  ? 'Facebook Page target'
-                                  : 'Instagram professional target'}
-                              </span>
-                              {target.username !== undefined && (
-                                <span className="block text-slate-400">@{target.username}</span>
-                              )}
-                              <span
-                                className={
-                                  target.availability === 'available'
-                                    ? 'block text-emerald-200'
-                                    : 'block text-amber-200'
-                                }
-                              >
-                                {target.availability === 'available'
-                                  ? 'Available for publishing'
-                                  : 'Unavailable'}
-                              </span>
-                              {target.blocker !== undefined && (
-                                <span className="block text-amber-200">
-                                  Permission/review blocker: {target.blocker}
-                                </span>
-                              )}
-                            </span>
-                          </label>
-                        </div>
-                      ))}
-                    {metaTargets.filter((target) => target.credentialId === credential.id)
-                      .length === 0 && (
-                      <p className="mt-3 text-sm text-amber-200">
-                        No Page or linked Instagram professional targets are available. Check Meta
-                        app review, Page roles, and account eligibility.
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </section>
-              <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="font-semibold">TikTok Login Kit credentials</h2>
-                    <p className="mt-2 text-sm leading-6 text-slate-400">
-                      Use your own TikTok developer app with Login Kit and Content Posting API.
-                      Credentials and tokens stay encrypted on this machine.
-                    </p>
-                  </div>
-                  <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs text-amber-200">
-                    Unaudited apps: private only
-                  </span>
-                </div>
-                <form className="mt-5 grid gap-3" onSubmit={saveTikTokCredentials}>
-                  <label className="grid gap-1 text-sm" htmlFor="tiktok-client-key">
-                    <span className="text-slate-300">Client key</span>
-                    <input
-                      className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                      id="tiktok-client-key"
-                      onChange={(event) => setTikTokClientKey(event.target.value)}
-                      required
-                      value={tiktokClientKey}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm" htmlFor="tiktok-client-secret">
-                    <span className="text-slate-300">Client secret</span>
-                    <input
-                      autoComplete="new-password"
-                      className="rounded-lg border border-white/15 bg-slate-900 px-3 py-2"
-                      id="tiktok-client-secret"
-                      onChange={(event) => setTikTokClientSecret(event.target.value)}
-                      required
-                      type="password"
-                      value={tiktokClientSecret}
-                    />
-                  </label>
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950"
-                      type="submit"
-                    >
-                      Save TikTok credentials
-                    </button>
-                    <button
-                      className="rounded-lg border border-cyan-300/30 px-4 py-2 text-sm text-cyan-200 disabled:opacity-40"
-                      disabled={tiktokStatus?.configured !== true}
-                      onClick={() => void connectTikTok()}
-                      type="button"
-                    >
-                      Connect TikTok
-                    </button>
-                  </div>
-                </form>
-                <p className="mt-4 break-all text-xs text-slate-500">
-                  {tiktokStatus?.flow === 'desktop' ? 'Desktop + PKCE' : 'HTTPS web'} callback:{' '}
-                  {tiktokStatus?.redirectUri ?? 'Loading…'}
-                </p>
-                <p className="mt-3 text-sm leading-6 text-amber-200/80">
-                  Request <code>user.info.basic</code> and <code>video.publish</code> in the TikTok
-                  portal. TikTok does not expose app-audit status through creator-info; non-private
-                  posting requires a successful TikTok audit and is never assumed.
-                </p>
-              </section>
-              <section>
-                <h2 className="font-semibold">Connected accounts</h2>
-                <div className="mt-3 grid gap-3">
-                  {accounts.map((account) => {
-                    const tiktokView = tiktokCapabilities[account.id];
-                    return (
-                      <ConnectionCard
-                        actions={
-                          <Button
-                            onClick={() => void removeAccount(account.id)}
-                            size="sm"
-                            variant="danger"
-                          >
-                            Remove local connection
-                          </Button>
-                        }
-                        externalId={account.externalId}
-                        key={account.id}
-                        name={account.displayName}
-                        platform={account.provider}
-                        status={account.status === 'connected' ? 'connected' : 'attention'}
-                      >
-                        {account.provider === 'youtube' ? (
-                          <p>
-                            Upload:{' '}
-                            {account.capabilities.includes('youtube.video.upload')
-                              ? 'allowed'
-                              : 'not granted'}{' '}
-                            · Identity:{' '}
-                            {account.capabilities.includes('youtube.identity.read')
-                              ? 'available'
-                              : 'not granted'}
-                          </p>
-                        ) : tiktokView?.capabilities !== undefined ? (
-                          <div className="space-y-2">
-                            <p>
-                              Granted scopes: {tiktokView.capabilities.grantedScopes.join(', ')}
-                            </p>
-                            <p>
-                              Direct Post:{' '}
-                              {tiktokView.capabilities.directPostAvailable
-                                ? 'available for this creator'
-                                : 'video.publish not granted'}
-                            </p>
-                            {tiktokView.capabilities.creator !== undefined && (
-                              <p>
-                                Live creator: @{tiktokView.capabilities.creator.username} · up to{' '}
-                                {tiktokView.capabilities.media?.maxVideoDurationSeconds}s ·{' '}
-                                {tiktokView.capabilities.privacyLevelOptions.join(', ')}
-                              </p>
-                            )}
-                            <p className="text-amber-200/80">
-                              Public posting:{' '}
-                              {tiktokView.capabilities.publicPostingAvailability ===
-                              'requires_audit_confirmation'
-                                ? 'creator allows it, but TikTok app audit must be confirmed'
-                                : tiktokView.capabilities.publicPostingAvailability ===
-                                    'unavailable_for_creator'
-                                  ? 'not offered for this creator'
-                                  : 'not authorized'}
-                              . Unaudited clients are private-only.
-                            </p>
-                          </div>
-                        ) : tiktokView?.error !== undefined ? (
-                          <p className="text-[var(--or-status-warning-fg)]">{tiktokView.error}</p>
-                        ) : (
-                          <p className="text-[var(--or-text-tertiary)]">
-                            Loading live TikTok posting availability…
-                          </p>
-                        )}
-                      </ConnectionCard>
-                    );
-                  })}
-                </div>
-                {accounts.length === 0 && (
-                  <ResourceEmptyState
-                    className="mt-3"
-                    description="Connect a publishing account before choosing it as a workflow destination."
-                    title="No publishing accounts"
-                  />
-                )}
-              </section>
-              <p className="text-sm leading-6 text-amber-200/80">
-                Google may limit uploads from unverified API projects. OpenRepurpose shows granted
-                capabilities but cannot override Google audit or visibility rules.
-              </p>
-            </div>
+            <AccountsPage
+              accounts={accounts}
+              activeAction={activeAccountAction}
+              error={error}
+              feedback={{
+                meta: new URLSearchParams(window.location.search).get('meta'),
+                tiktok: new URLSearchParams(window.location.search).get('tiktok'),
+                youtube: new URLSearchParams(window.location.search).get('youtube'),
+              }}
+              meta={{
+                clientId: metaClientId,
+                clientSecret: metaClientSecret,
+                credentials: metaCredentials,
+                status: metaStatus,
+                targets: metaTargets,
+              }}
+              onConnectMeta={() => void connectMeta()}
+              onConnectTikTok={() => void connectTikTok()}
+              onConnectYouTube={() => void connectYouTube()}
+              onMetaClientIdChange={setMetaClientId}
+              onMetaClientSecretChange={setMetaClientSecret}
+              onMetaTargetChange={(target, enabled) => void setMetaTarget(target, enabled)}
+              onRediscoverMetaTargets={(credentialId) => void rediscoverMetaTargets(credentialId)}
+              onRemoveAccount={(accountId) => void removeAccount(accountId)}
+              onSaveMeta={saveMetaCredentials}
+              onSaveTikTok={saveTikTokCredentials}
+              onSaveYouTube={saveYouTubeCredentials}
+              onTikTokClientKeyChange={setTikTokClientKey}
+              onTikTokClientSecretChange={setTikTokClientSecret}
+              onYouTubeClientIdChange={setYoutubeClientId}
+              onYouTubeClientSecretChange={setYoutubeClientSecret}
+              tiktok={{
+                capabilities: tiktokCapabilities,
+                clientKey: tiktokClientKey,
+                clientSecret: tiktokClientSecret,
+                status: tiktokStatus,
+              }}
+              youtube={{
+                clientId: youtubeClientId,
+                clientSecret: youtubeClientSecret,
+                status: youtubeStatus,
+              }}
+            />
           ) : pathname === '/sources' ? (
             <div className="space-y-6">
               {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
