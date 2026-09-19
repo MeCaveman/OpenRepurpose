@@ -1,0 +1,255 @@
+/*
+ * OpenRepurpose semantic tokens
+ * Dark is the shipped default. Light mappings are complete and can be activated
+ * later with data-theme="light" without changing component contracts.
+ */
+
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --or-bg-canvas: var(--or-ink-950);
+  --or-bg-shell: var(--or-ink-950);
+  --or-bg-workspace: var(--or-ink-940);
+  --or-bg-navigator: var(--or-ink-925);
+  --or-bg-inspector: var(--or-ink-925);
+  --or-bg-surface: var(--or-ink-900);
+  --or-bg-surface-raised: var(--or-ink-850);
+  --or-bg-overlay: var(--or-ink-800);
+  --or-bg-control: #0b0e12;
+  --or-bg-hover: var(--or-ink-850);
+  --or-bg-selected: rgb(231 134 82 / 0.14);
+  --or-bg-backdrop: rgb(0 0 0 / 0.64);
+
+  /* Text */
+  --or-text-primary: var(--or-ink-50);
+  --or-text-secondary: var(--or-ink-200);
+  --or-text-tertiary: var(--or-ink-400);
+  --or-text-disabled: var(--or-ink-500);
+  --or-text-inverse: var(--or-ink-950);
+  --or-text-link: var(--or-copper-300);
+
+  /* Structure and focus */
+  --or-border-subtle: rgb(245 243 237 / 0.07);
+  --or-border-default: rgb(245 243 237 / 0.11);
+  --or-border-strong: rgb(245 243 237 / 0.18);
+  --or-border-selected: var(--or-copper-400);
+  --or-focus-ring: var(--or-blue-300);
+  --or-focus-offset-color: var(--or-bg-workspace);
+
+  /* Controls */
+  --or-control-bg: var(--or-bg-control);
+  --or-control-fg: var(--or-text-secondary);
+  --or-control-placeholder: var(--or-text-tertiary);
+  --or-control-border: var(--or-border-default);
+  --or-control-border-hover: var(--or-border-strong);
+  --or-control-disabled-bg: var(--or-ink-900);
+  --or-control-disabled-fg: var(--or-text-disabled);
+
+  /* Actions */
+  --or-action-primary-bg: var(--or-copper-400);
+  --or-action-primary-bg-hover: var(--or-copper-300);
+  --or-action-primary-bg-active: var(--or-copper-500);
+  --or-action-primary-fg: var(--or-ink-950);
+  --or-action-secondary-bg: var(--or-bg-surface);
+  --or-action-secondary-bg-hover: var(--or-bg-surface-raised);
+  --or-action-secondary-fg: var(--or-text-secondary);
+  --or-action-ghost-bg-hover: var(--or-bg-hover);
+  --or-action-ghost-fg: var(--or-text-secondary);
+  --or-action-disabled-bg: var(--or-ink-700);
+  --or-action-disabled-fg: var(--or-ink-400);
+  --or-action-danger-bg: var(--or-red-500);
+  --or-action-danger-bg-hover: var(--or-red-300);
+  --or-action-danger-fg: var(--or-ink-950);
+
+  /* Status */
+  --or-status-success-fg: var(--or-green-300);
+  --or-status-success-bg: rgb(78 167 108 / 0.12);
+  --or-status-success-border: rgb(78 167 108 / 0.35);
+  --or-status-info-fg: var(--or-blue-300);
+  --or-status-info-bg: rgb(76 147 219 / 0.12);
+  --or-status-info-border: rgb(76 147 219 / 0.35);
+  --or-status-warning-fg: var(--or-yellow-300);
+  --or-status-warning-bg: rgb(185 138 32 / 0.14);
+  --or-status-warning-border: rgb(185 138 32 / 0.4);
+  --or-status-danger-fg: var(--or-red-300);
+  --or-status-danger-bg: rgb(212 90 95 / 0.14);
+  --or-status-danger-border: rgb(212 90 95 / 0.4);
+  --or-status-neutral-fg: var(--or-ink-300);
+  --or-status-neutral-bg: rgb(185 185 180 / 0.08);
+  --or-status-neutral-border: var(--or-border-default);
+
+  /* Workflow route semantics */
+  --or-route-default: var(--or-border-strong);
+  --or-route-selected: var(--or-copper-400);
+  --or-route-running: var(--or-blue-300);
+  --or-route-completed: var(--or-green-300);
+  --or-route-waiting: var(--or-yellow-300);
+  --or-route-failed: var(--or-red-300);
+  --or-route-disabled: var(--or-ink-500);
+
+  /* Text selection and elevation */
+  --or-selection-bg: rgb(231 134 82 / 0.24);
+  --or-selection-fg: var(--or-text-primary);
+  --or-shadow-popover: 0 8px 24px rgb(0 0 0 / 0.32), 0 0 0 1px rgb(245 243 237 / 0.08);
+  --or-shadow-dialog: 0 20px 48px rgb(0 0 0 / 0.42), 0 0 0 1px rgb(245 243 237 / 0.1);
+  --or-theme-color: var(--or-bg-shell);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --or-bg-canvas: var(--or-ink-100);
+  --or-bg-shell: var(--or-ink-100);
+  --or-bg-workspace: var(--or-ink-25);
+  --or-bg-navigator: var(--or-ink-50);
+  --or-bg-inspector: var(--or-ink-50);
+  --or-bg-surface: var(--or-ink-0);
+  --or-bg-surface-raised: var(--or-ink-0);
+  --or-bg-overlay: var(--or-ink-0);
+  --or-bg-control: var(--or-ink-100);
+  --or-bg-hover: rgb(214 212 205 / 0.6);
+  --or-bg-selected: var(--or-copper-100);
+  --or-bg-backdrop: rgb(13 16 20 / 0.36);
+
+  /* Text */
+  --or-text-primary: var(--or-ink-950);
+  --or-text-secondary: var(--or-ink-800);
+  --or-text-tertiary: var(--or-ink-600);
+  --or-text-disabled: var(--or-ink-400);
+  --or-text-inverse: var(--or-ink-0);
+  --or-text-link: var(--or-copper-700);
+
+  /* Structure and focus */
+  --or-border-subtle: var(--or-ink-200);
+  --or-border-default: var(--or-ink-300);
+  --or-border-strong: var(--or-ink-400);
+  --or-border-selected: var(--or-copper-700);
+  --or-focus-ring: var(--or-blue-700);
+  --or-focus-offset-color: var(--or-bg-workspace);
+
+  /* Controls */
+  --or-control-bg: var(--or-bg-control);
+  --or-control-fg: var(--or-text-secondary);
+  --or-control-placeholder: var(--or-text-tertiary);
+  --or-control-border: var(--or-border-default);
+  --or-control-border-hover: var(--or-border-strong);
+  --or-control-disabled-bg: var(--or-ink-100);
+  --or-control-disabled-fg: var(--or-text-disabled);
+
+  /* Actions */
+  --or-action-primary-bg: var(--or-copper-700);
+  --or-action-primary-bg-hover: var(--or-copper-800);
+  --or-action-primary-bg-active: var(--or-copper-900);
+  --or-action-primary-fg: var(--or-ink-0);
+  --or-action-secondary-bg: var(--or-bg-surface);
+  --or-action-secondary-bg-hover: var(--or-bg-hover);
+  --or-action-secondary-fg: var(--or-text-secondary);
+  --or-action-ghost-bg-hover: var(--or-bg-hover);
+  --or-action-ghost-fg: var(--or-text-secondary);
+  --or-action-disabled-bg: var(--or-ink-300);
+  --or-action-disabled-fg: var(--or-ink-500);
+  --or-action-danger-bg: var(--or-red-700);
+  --or-action-danger-bg-hover: var(--or-red-900);
+  --or-action-danger-fg: var(--or-ink-0);
+
+  /* Status */
+  --or-status-success-fg: var(--or-green-700);
+  --or-status-success-bg: var(--or-green-100);
+  --or-status-success-border: var(--or-green-300);
+  --or-status-info-fg: var(--or-blue-700);
+  --or-status-info-bg: var(--or-blue-100);
+  --or-status-info-border: var(--or-blue-300);
+  --or-status-warning-fg: var(--or-yellow-700);
+  --or-status-warning-bg: var(--or-yellow-100);
+  --or-status-warning-border: var(--or-yellow-300);
+  --or-status-danger-fg: var(--or-red-700);
+  --or-status-danger-bg: var(--or-red-100);
+  --or-status-danger-border: var(--or-red-300);
+  --or-status-neutral-fg: var(--or-ink-700);
+  --or-status-neutral-bg: var(--or-ink-100);
+  --or-status-neutral-border: var(--or-ink-300);
+
+  /* Workflow route semantics */
+  --or-route-default: var(--or-border-strong);
+  --or-route-selected: var(--or-copper-700);
+  --or-route-running: var(--or-blue-700);
+  --or-route-completed: var(--or-green-700);
+  --or-route-waiting: var(--or-yellow-700);
+  --or-route-failed: var(--or-red-700);
+  --or-route-disabled: var(--or-ink-500);
+
+  /* Text selection and elevation */
+  --or-selection-bg: var(--or-copper-200);
+  --or-selection-fg: var(--or-text-primary);
+  --or-shadow-popover: 0 8px 24px rgb(13 16 20 / 0.14), 0 0 0 1px rgb(13 16 20 / 0.08);
+  --or-shadow-dialog: 0 20px 48px rgb(13 16 20 / 0.2), 0 0 0 1px rgb(13 16 20 / 0.1);
+  --or-theme-color: var(--or-bg-shell);
+}
+
+/*
+ * Compatibility aliases. These variables contain no independent values: shadcn
+ * and Tailwind resolve back to the canonical OpenRepurpose semantic tokens.
+ */
+:root {
+  --background: var(--or-bg-canvas);
+  --foreground: var(--or-text-primary);
+  --card: var(--or-bg-surface);
+  --card-foreground: var(--or-text-primary);
+  --popover: var(--or-bg-overlay);
+  --popover-foreground: var(--or-text-primary);
+  --primary: var(--or-action-primary-bg);
+  --primary-foreground: var(--or-action-primary-fg);
+  --secondary: var(--or-action-secondary-bg);
+  --secondary-foreground: var(--or-action-secondary-fg);
+  --muted: var(--or-bg-surface);
+  --muted-foreground: var(--or-text-tertiary);
+  --accent: var(--or-bg-selected);
+  --accent-foreground: var(--or-text-primary);
+  --destructive: var(--or-action-danger-bg);
+  --destructive-foreground: var(--or-action-danger-fg);
+  --border: var(--or-border-default);
+  --input: var(--or-control-border);
+  --ring: var(--or-focus-ring);
+  --radius: var(--or-radius-md);
+}
+
+@theme inline {
+  --color-background: var(--or-bg-canvas);
+  --color-foreground: var(--or-text-primary);
+  --color-shell: var(--or-bg-shell);
+  --color-workspace: var(--or-bg-workspace);
+  --color-navigator: var(--or-bg-navigator);
+  --color-inspector: var(--or-bg-inspector);
+  --color-card: var(--or-bg-surface);
+  --color-card-foreground: var(--or-text-primary);
+  --color-popover: var(--or-bg-overlay);
+  --color-popover-foreground: var(--or-text-primary);
+  --color-primary: var(--or-action-primary-bg);
+  --color-primary-foreground: var(--or-action-primary-fg);
+  --color-secondary: var(--or-action-secondary-bg);
+  --color-secondary-foreground: var(--or-action-secondary-fg);
+  --color-muted: var(--or-bg-surface);
+  --color-muted-foreground: var(--or-text-tertiary);
+  --color-accent: var(--or-bg-selected);
+  --color-accent-foreground: var(--or-text-primary);
+  --color-destructive: var(--or-action-danger-bg);
+  --color-destructive-foreground: var(--or-action-danger-fg);
+  --color-border: var(--or-border-default);
+  --color-input: var(--or-control-border);
+  --color-ring: var(--or-focus-ring);
+  --color-success: var(--or-status-success-fg);
+  --color-info: var(--or-status-info-fg);
+  --color-warning: var(--or-status-warning-fg);
+  --font-sans: var(--or-font-interface);
+  --font-mono: var(--or-font-technical);
+  --radius-or-xs: var(--or-radius-xs);
+  --radius-or-sm: var(--or-radius-sm);
+  --radius-or-md: var(--or-radius-md);
+  --radius-or-lg: var(--or-radius-lg);
+  --radius-or-xl: var(--or-radius-xl);
+  --shadow-or-popover: var(--or-shadow-popover);
+  --shadow-or-dialog: var(--or-shadow-dialog);
+}

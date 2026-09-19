@@ -1,0 +1,151 @@
+/*
+ * OpenRepurpose reference tokens
+ * Raw values live here. Feature and component styles must consume semantic or
+ * component tokens instead of these values directly.
+ */
+
+:root {
+  /* Workbench neutrals */
+  --or-ink-0: #ffffff;
+  --or-ink-25: #fbfaf7;
+  --or-ink-50: #f5f3ed;
+  --or-ink-100: #e9e7e0;
+  --or-ink-200: #d6d4cd;
+  --or-ink-300: #b9b9b4;
+  --or-ink-400: #969996;
+  --or-ink-500: #767b7b;
+  --or-ink-600: #596062;
+  --or-ink-700: #3d4448;
+  --or-ink-800: #292f35;
+  --or-ink-850: #22282e;
+  --or-ink-900: #191e24;
+  --or-ink-925: #13171c;
+  --or-ink-940: #101419;
+  --or-ink-950: #0d1014;
+
+  /* OpenRepurpose routing copper */
+  --or-copper-50: #fff4ed;
+  --or-copper-100: #ffe4d3;
+  --or-copper-200: #ffc7a6;
+  --or-copper-300: #f5a273;
+  --or-copper-400: #e78652;
+  --or-copper-500: #cb6c3d;
+  --or-copper-600: #a95330;
+  --or-copper-700: #844027;
+  --or-copper-800: #623120;
+  --or-copper-900: #45231a;
+
+  /* Success signal */
+  --or-green-100: #e1f5e7;
+  --or-green-300: #9ddaae;
+  --or-green-500: #4ea76c;
+  --or-green-700: #287041;
+  --or-green-900: #153822;
+
+  /* Informational and focus signal */
+  --or-blue-100: #e3f1ff;
+  --or-blue-300: #93c9ff;
+  --or-blue-500: #4c93db;
+  --or-blue-700: #27659f;
+  --or-blue-900: #163a5d;
+
+  /* Warning signal; deliberately yellower than routing copper */
+  --or-yellow-100: #fff1c2;
+  --or-yellow-300: #eec65b;
+  --or-yellow-500: #b98a20;
+  --or-yellow-700: #77550c;
+  --or-yellow-900: #3e2d08;
+
+  /* Danger signal */
+  --or-red-100: #ffe6e7;
+  --or-red-300: #f4a0a3;
+  --or-red-500: #d45a5f;
+  --or-red-700: #93363b;
+  --or-red-900: #4d2023;
+
+  /* Typography. Font files are not bundled yet; approved local fallbacks remain active. */
+  --or-font-interface:
+    'Fira Sans', ui-sans-serif, system-ui, -apple-system, blinkmacsystemfont, 'Segoe UI', sans-serif;
+  --or-font-technical:
+    'Fira Mono', ui-monospace, sfmono-regular, consolas, 'Liberation Mono', monospace;
+  --or-font-weight-regular: 400;
+  --or-font-weight-medium: 500;
+  --or-font-weight-semibold: 600;
+
+  --or-type-micro-size: 0.6875rem;
+  --or-type-micro-line: 1rem;
+  --or-type-metadata-size: 0.75rem;
+  --or-type-metadata-line: 1rem;
+  --or-type-interface-size: 0.8125rem;
+  --or-type-interface-line: 1.125rem;
+  --or-type-body-size: 0.875rem;
+  --or-type-body-line: 1.25rem;
+  --or-type-section-size: 1rem;
+  --or-type-section-line: 1.5rem;
+  --or-type-page-size: 1.25rem;
+  --or-type-page-line: 1.75rem;
+  --or-type-title-size: 1.5rem;
+  --or-type-title-line: 2rem;
+  --or-type-display-size: 2rem;
+  --or-type-display-line: 2.5rem;
+  --or-tracking-page: -0.015em;
+  --or-tracking-section: -0.01em;
+  --or-tracking-metadata: 0.01em;
+  --or-tracking-overline: 0.08em;
+  --or-measure-prose: 65ch;
+
+  /* Four-pixel spacing grid with a two-pixel micro-step */
+  --or-space-0: 0;
+  --or-space-0-5: 0.125rem;
+  --or-space-1: 0.25rem;
+  --or-space-1-5: 0.375rem;
+  --or-space-2: 0.5rem;
+  --or-space-3: 0.75rem;
+  --or-space-4: 1rem;
+  --or-space-5: 1.25rem;
+  --or-space-6: 1.5rem;
+  --or-space-8: 2rem;
+  --or-space-10: 2.5rem;
+  --or-space-12: 3rem;
+  --or-space-16: 4rem;
+
+  /* Geometry */
+  --or-radius-none: 0;
+  --or-radius-xs: 0.125rem;
+  --or-radius-sm: 0.25rem;
+  --or-radius-md: 0.375rem;
+  --or-radius-lg: 0.5rem;
+  --or-radius-xl: 0.75rem;
+  --or-radius-full: 999px;
+  --or-border-width: 1px;
+  --or-border-emphasis-width: 2px;
+  --or-focus-width: 2px;
+  --or-focus-offset: 2px;
+
+  /* Motion */
+  --or-duration-instant: 0ms;
+  --or-duration-fast: 100ms;
+  --or-duration-standard: 160ms;
+  --or-duration-deliberate: 220ms;
+  --or-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --or-ease-move: cubic-bezier(0.77, 0, 0.175, 1);
+  --or-motion-distance-sm: 0.25rem;
+  --or-motion-distance-md: 0.5rem;
+  --or-motion-press-scale: 0.98;
+
+  /* Responsive mode boundaries */
+  --or-breakpoint-compact: 40rem;
+  --or-breakpoint-narrow: 64rem;
+  --or-breakpoint-wide: 90rem;
+
+  /* Layering */
+  --or-z-base: 0;
+  --or-z-sticky: 10;
+  --or-z-shell: 20;
+  --or-z-backdrop: 30;
+  --or-z-drawer: 40;
+  --or-z-popover: 50;
+  --or-z-dialog: 60;
+  --or-z-toast: 70;
+  --or-z-tooltip: 80;
+}

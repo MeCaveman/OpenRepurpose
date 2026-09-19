@@ -1,18 +1,15 @@
 @import 'tailwindcss';
+@import './styles/tokens/reference.css';
+@import './styles/tokens/semantic.css';
+@import './styles/tokens/components.css';
 
 :root {
-  color-scheme: dark;
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
-  background: #020617;
+  font-family: var(--or-font-interface);
+  background: var(--or-bg-canvas);
+  color: var(--or-text-secondary);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -22,14 +19,37 @@
 body {
   min-width: 320px;
   margin: 0;
+  background: var(--or-bg-canvas);
 }
 
 button,
 a {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+select {
+  color: var(--or-control-fg);
+  background-color: var(--or-control-bg);
+}
+
+::selection {
+  color: var(--or-selection-fg);
+  background: var(--or-selection-bg);
 }
 
 :focus-visible {
-  outline: 2px solid #67e8f9;
-  outline-offset: 3px;
+  outline: var(--or-focus-width) solid var(--or-focus-ring);
+  outline-offset: var(--or-focus-offset);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

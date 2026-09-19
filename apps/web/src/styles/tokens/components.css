@@ -1,0 +1,143 @@
+/*
+ * OpenRepurpose component tokens
+ * Stable measurements and product-specific component contracts live here.
+ */
+
+:root {
+  /* Density */
+  --or-control-compact-height: 2rem;
+  --or-control-default-height: 2.5rem;
+  --or-control-comfortable-height: 2.75rem;
+  --or-target-min: 2.5rem;
+  --or-target-mobile: 2.75rem;
+  --or-row-compact-height: 2rem;
+  --or-row-default-height: 2.5rem;
+  --or-row-comfortable-height: 3rem;
+  --or-icon-sm: 0.75rem;
+  --or-icon-default: 1rem;
+  --or-icon-lg: 1.25rem;
+  --or-icon-xl: 1.5rem;
+
+  /* Workbench shell */
+  --or-shell-topbar-height: 3rem;
+  --or-shell-rail-width: 3.5rem;
+  --or-shell-rail-item-size: 2.5rem;
+  --or-shell-navigator-width: 15rem;
+  --or-shell-navigator-min-width: 12.5rem;
+  --or-shell-navigator-max-width: 18rem;
+  --or-shell-inspector-width: 20rem;
+  --or-shell-inspector-min-width: 17.5rem;
+  --or-shell-inspector-max-width: 24rem;
+  --or-shell-workspace-min-width: 35rem;
+  --or-shell-activity-collapsed-height: 2.25rem;
+  --or-shell-activity-default-height: 15rem;
+  --or-shell-activity-max-height: 40vh;
+  --or-setup-content-max-width: 47.5rem;
+  --or-setup-wide-max-width: 57.5rem;
+
+  /* Buttons */
+  --or-button-height-sm: var(--or-control-compact-height);
+  --or-button-height-md: var(--or-control-default-height);
+  --or-button-height-lg: var(--or-control-comfortable-height);
+  --or-button-padding-inline-sm: 0.625rem;
+  --or-button-padding-inline-md: 0.875rem;
+  --or-button-padding-inline-lg: 1rem;
+  --or-button-gap-sm: var(--or-space-1-5);
+  --or-button-gap-md: var(--or-space-2);
+  --or-button-font-sm: var(--or-type-interface-size);
+  --or-button-font-md: var(--or-type-body-size);
+  --or-button-icon-sm: 0.875rem;
+  --or-button-icon-md: var(--or-icon-default);
+  --or-button-radius: var(--or-radius-sm);
+  --or-button-icon-only-size: var(--or-target-min);
+
+  /* Fields */
+  --or-field-height: var(--or-control-default-height);
+  --or-field-height-setup: var(--or-control-comfortable-height);
+  --or-field-padding-inline: var(--or-space-3);
+  --or-field-radius: var(--or-radius-sm);
+  --or-field-label-size: var(--or-type-interface-size);
+  --or-field-label-line: var(--or-type-interface-line);
+  --or-field-help-size: var(--or-type-metadata-size);
+  --or-field-help-line: 1.125rem;
+  --or-field-internal-gap: var(--or-space-1-5);
+  --or-field-group-gap: var(--or-space-4);
+  --or-field-group-gap-setup: var(--or-space-5);
+  --or-textarea-min-height: 6rem;
+
+  /* Navigation */
+  --or-nav-rail-control-size: var(--or-shell-rail-item-size);
+  --or-nav-row-height: var(--or-row-default-height);
+  --or-nav-nested-indent: var(--or-space-4);
+  --or-nav-active-edge-width: 3px;
+
+  /* Tables and structured lists */
+  --or-table-header-height: 2rem;
+  --or-table-row-height: var(--or-row-default-height);
+  --or-table-row-height-compact: var(--or-row-compact-height);
+  --or-table-row-height-comfortable: var(--or-row-comfortable-height);
+  --or-table-cell-padding-inline: var(--or-space-3);
+
+  /* Panels and setup/configuration */
+  --or-pane-padding-compact: var(--or-space-3);
+  --or-pane-padding: var(--or-space-4);
+  --or-inspector-block-gap: var(--or-space-4);
+  --or-setup-section-padding: var(--or-space-6);
+  --or-setup-section-gap: var(--or-space-8);
+  --or-setup-major-gap: var(--or-space-12);
+  --or-setup-section-radius: var(--or-radius-lg);
+
+  /* Dialogs and sheets */
+  --or-dialog-width-sm: 26.25rem;
+  --or-dialog-width-md: 35rem;
+  --or-dialog-width-lg: 45rem;
+  --or-sheet-width-sm: 22.5rem;
+  --or-sheet-width-md: 26.25rem;
+  --or-dialog-padding: var(--or-space-6);
+  --or-dialog-radius: var(--or-radius-lg);
+
+  /* Feedback */
+  --or-alert-padding-block: var(--or-space-3);
+  --or-alert-padding-inline: var(--or-space-4);
+  --or-alert-radius: var(--or-radius-md);
+  --or-status-badge-height-sm: 1.375rem;
+  --or-status-badge-height: 1.5rem;
+  --or-status-badge-radius: var(--or-radius-sm);
+  --or-toast-max-width: 22.5rem;
+  --or-empty-state-max-width: 30rem;
+
+  /* Workflow nodes and routes */
+  --or-workflow-node-min-width: 11rem;
+  --or-workflow-node-width: 13rem;
+  --or-workflow-node-max-width: 16rem;
+  --or-workflow-node-padding: var(--or-space-3);
+  --or-workflow-node-gap: var(--or-space-2);
+  --or-workflow-node-radius: var(--or-radius-md);
+  --or-workflow-node-header-min-height: 2rem;
+  --or-workflow-platform-icon-size: var(--or-icon-default);
+  --or-workflow-status-rail-width: 3px;
+  --or-workflow-route-width: 2px;
+  --or-workflow-route-active-width: 3px;
+
+  /* Restrained platform identity */
+  --or-platform-mark-size-sm: var(--or-icon-default);
+  --or-platform-mark-size-md: var(--or-icon-lg);
+  --or-platform-accent-width: 3px;
+  --or-platform-identity-opacity: 0.88;
+
+  /* Interaction feedback */
+  --or-tooltip-delay-initial: 500ms;
+  --or-tooltip-delay-related: 100ms;
+  --or-disabled-opacity: 0.48;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --or-duration-fast: 0ms;
+    --or-duration-standard: 0ms;
+    --or-duration-deliberate: 0ms;
+    --or-motion-distance-sm: 0;
+    --or-motion-distance-md: 0;
+    --or-motion-press-scale: 1;
+  }
+}
