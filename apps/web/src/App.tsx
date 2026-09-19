@@ -12,7 +12,14 @@ import {
   type WorkflowRouteData,
   type WorkflowRouteNodeData,
 } from './components/patterns';
-import { ApplicationShell, PageHeader, TopCommandBar, Workspace } from './components/layout';
+import {
+  ApplicationShell,
+  PageHeader,
+  ResourceNavigation,
+  TopCommandBar,
+  Workspace,
+  type ResourceNavigationItem,
+} from './components/layout';
 import { Button } from './components/ui';
 
 const pages: Readonly<
@@ -59,16 +66,16 @@ const pages: Readonly<
     description: 'Deployment-neutral application preferences will be managed here.',
   },
 };
-const navigation = [
-  ['/', 'Dashboard'],
-  ['/setup', 'Setup'],
-  ['/accounts', 'Accounts'],
-  ['/sources', 'Sources'],
-  ['/media', 'Media'],
-  ['/workflows', 'Workflows'],
-  ['/jobs', 'Jobs'],
-  ['/settings', 'Settings'],
-] as const;
+const navigation: readonly ResourceNavigationItem[] = [
+  { href: '/', icon: 'dashboard', label: 'Dashboard' },
+  { href: '/setup', icon: 'setup', label: 'Setup' },
+  { href: '/accounts', icon: 'accounts', label: 'Accounts' },
+  { href: '/sources', icon: 'sources', label: 'Sources' },
+  { href: '/media', icon: 'media', label: 'Media' },
+  { href: '/workflows', icon: 'workflows', label: 'Workflows' },
+  { href: '/jobs', icon: 'jobs', label: 'Jobs' },
+  { href: '/settings', icon: 'settings', label: 'Settings' },
+];
 type MediaItem = {
   id: string;
   path: string;
@@ -730,21 +737,22 @@ export function App() {
       commandBar={
         <TopCommandBar onHomeClick={(event) => navigate(event, '/')} statusLabel="Local only" />
       }
+      resourceRail={
+        <ResourceNavigation
+          currentPath={pathname}
+          items={navigation}
+          mode="rail"
+          onNavigate={navigate}
+        />
+      }
     >
-      <div className="grid min-w-0 gap-[var(--or-space-4)] px-[var(--or-space-3)] py-[var(--or-space-3)] sm:px-[var(--or-space-4)] sm:py-[var(--or-space-4)] lg:grid-cols-[var(--or-shell-navigator-width)_minmax(0,1fr)] lg:gap-[var(--or-space-6)]">
-        <nav aria-label="Primary navigation" className="flex gap-2 overflow-x-auto lg:flex-col">
-          {navigation.map(([href, label]) => (
-            <a
-              aria-current={pathname === href ? 'page' : undefined}
-              className={`shrink-0 rounded-lg px-3 py-2 text-sm ${pathname === href ? 'bg-cyan-300 font-semibold text-slate-950' : 'text-slate-300 hover:bg-white/5 hover:text-white'}`}
-              href={href}
-              key={href}
-              onClick={(event) => navigate(event, href)}
-            >
-              {label}
-            </a>
-          ))}
-        </nav>
+      <ResourceNavigation
+        currentPath={pathname}
+        items={navigation}
+        mode="compact"
+        onNavigate={navigate}
+      />
+      <div className="min-w-0 px-[var(--or-space-3)] py-[var(--or-space-3)] sm:px-[var(--or-space-4)] sm:py-[var(--or-space-4)]">
         <Workspace
           header={
             <PageHeader

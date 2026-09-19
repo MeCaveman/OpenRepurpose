@@ -44,14 +44,23 @@ test('application shell prioritizes the workspace at desktop and compact widths'
   const main = page.getByRole('main');
   await expect(main).toBeVisible();
   await expect(main).toHaveAttribute('aria-labelledby', 'workspace-title');
-  await expect(page.locator('[data-shell-region]')).toHaveCount(0);
+  await expect(page.locator('[data-shell-region="resource-rail"]')).toBeVisible();
+  await expect(page.locator('[data-navigation-mode="compact"]')).toBeHidden();
+  await expect(page.locator('[data-shell-region="navigator"]')).toHaveCount(0);
+  await expect(page.locator('[data-shell-region="inspector"]')).toHaveCount(0);
+  await expect(page.locator('[data-shell-region="activity"]')).toHaveCount(0);
 
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Skip to content' })).toBeFocused();
 
+  await page.setViewportSize({ height: 800, width: 800 });
+  await expect(page.locator('[data-shell-region="resource-rail"]')).toBeHidden();
+  await expect(page.locator('[data-navigation-mode="compact"]')).toBeVisible();
+
   await page.setViewportSize({ height: 800, width: 320 });
   await expect(main).toBeVisible();
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  await expect(page.locator('[data-navigation-mode="compact"]')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

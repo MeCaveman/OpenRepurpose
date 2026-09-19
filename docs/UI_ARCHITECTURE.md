@@ -17,7 +17,7 @@ The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 | Render failure boundary                      | `apps/web/src/components/ErrorBoundary.tsx`  | Shared class error boundary composed from `ErrorState` and `Button` primitives                                              |
 | Workflow editor                              | `apps/web/src/components/WorkflowEditor.tsx` | Shared workflow-specific editor and view types; consumes the primitive layer                                                |
 | UI primitives                                | `apps/web/src/components/ui/`                | Accessible, token-backed, domain-neutral controls and their internal style helpers                                          |
-| Layout components                            | `apps/web/src/components/layout/`            | Token-backed application shell, command bar, workspace, page header, and skip-link composition                              |
+| Layout components                            | `apps/web/src/components/layout/`            | Token-backed application shell, command bar, resource navigation, workspace, page header, and skip-link composition         |
 | Domain patterns                              | `apps/web/src/components/patterns/`          | Reusable platform identity, connection, workflow-route, job-status, and resource-empty-state presentation                   |
 | Global CSS entry                             | `apps/web/src/styles.css`                    | Imports Tailwind and token layers; applies global focus, selection, font, surface, and reduced-motion behavior              |
 | Reference tokens                             | `apps/web/src/styles/tokens/reference.css`   | Raw values                                                                                                                  |
@@ -26,7 +26,7 @@ The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 
 The current routes are `/`, `/setup`, `/accounts`, `/sources`, `/media`, `/workflows`, `/jobs`, and `/settings`, plus the existing unknown-route fallback. Routing semantics are currently owned by `App.tsx`; this document does not change them.
 
-The primitive, layout, and domain-pattern layers now exist. Route-level composition, the current global navigation markup, feature state, and data access remain in `App.tsx`; there are no current `features` or extracted page directories. Those locations remain explicit migration targets, not claims about the existing repository.
+The primitive, layout, and domain-pattern layers now exist. Route-level composition, global-navigation configuration/state, feature state, and data access remain in `App.tsx`; shared navigation presentation lives in the layout layer. There are no current `features` or extracted page directories. Those locations remain explicit migration targets, not claims about the existing repository.
 
 ## Permanent layer model
 
@@ -66,7 +66,7 @@ Primitive rules:
 
 **Responsibility:** Application shell and spatial composition: command bar, resource rail, navigator, workspace, inspector, activity shelf, focus mode, pane headers, setup frame, and responsive sheets.
 
-**Current:** `apps/web/src/components/layout/` contains the Phase 9 group 1 shell foundation: `ApplicationShell`, `TopCommandBar`, `Workspace`, `PageHeader`, and `SkipLink`. `ApplicationShell` exposes optional resource-rail, contextual-navigator, inspector, and activity-shelf slots without rendering unused regions. The inspector is closed unless explicitly opened, activity expansion is controlled by the caller, and secondary pane slots yield to the workspace below the workbench breakpoint. `App.tsx` composes this shell but intentionally retains the existing global-navigation links and route-level page content until their own migration groups.
+**Current:** `apps/web/src/components/layout/` contains `ApplicationShell`, `TopCommandBar`, `ResourceNavigation`, `Workspace`, `PageHeader`, and `SkipLink`. `ApplicationShell` exposes optional resource-rail, contextual-navigator, inspector, and activity-shelf slots without rendering unused regions. `ResourceNavigation` presents the existing routes as a 56px icon-led resource rail at workbench widths and a labeled, horizontally scrollable navigation strip at narrower widths. The inspector is closed unless explicitly opened, activity expansion is controlled by the caller, and secondary pane slots yield to the workspace below the workbench breakpoint. `App.tsx` owns the unchanged route list and history behavior while route-level page content remains in place for later migration groups.
 
 **Target:** Continue extending `apps/web/src/components/layout/` only as later migration groups demonstrate a current need. Layout components may know route/navigation presentation and pane state, but not API payload shapes or business rules.
 

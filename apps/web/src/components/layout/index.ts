@@ -2,6 +2,12 @@ export { ApplicationShell } from './application-shell';
 export type { ApplicationShellProps } from './application-shell';
 export { PageHeader } from './page-header';
 export type { PageHeaderProps } from './page-header';
+export { ResourceNavigation } from './resource-navigation';
+export type {
+  ResourceNavigationIcon,
+  ResourceNavigationItem,
+  ResourceNavigationProps,
+} from './resource-navigation';
 export { SkipLink } from './skip-link';
 export type { SkipLinkProps } from './skip-link';
 export { TopCommandBar } from './top-command-bar';
