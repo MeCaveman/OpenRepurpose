@@ -400,3 +400,109 @@ test('watched-folder workflow contract leads to a queued upload', async ({ page 
   });
   expect(response).toBe(201);
 });
+
+test('workflow workbench preserves the v0.5 route payload and responsive layout', async ({
+  page,
+}) => {
+  await serveProductionAssets(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
+  );
+  await page.route('**/api/accounts', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        accounts: [
+          {
+            capabilities: ['youtube.video.upload'],
+            displayName: 'Workshop Channel',
+            externalId: 'channel-1',
+            id: 'account-1',
+            provider: 'youtube',
+            status: 'connected',
+          },
+        ],
+        meta: { configured: false, redirectUri: '' },
+        metaCredentials: [],
+        metaTargets: [],
+        tiktok: { configured: false, flow: 'desktop', redirectUri: '' },
+        youtube: { configured: true, redirectUri: '' },
+      }),
+    }),
+  );
+  await page.route('**/api/sources', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sources: [] }) }),
+  );
+
+  let submitted:
+    | {
+        definition: {
+          edges: readonly { from: string; to: string }[];
+          steps: readonly { id: string; kind: string }[];
+        };
+        destinations: readonly { accountId: string; destinationId: string }[];
+        name: string;
+        sourceDirectory: string;
+      }
+    | undefined;
+  await page.route('**/api/workflows', async (route) => {
+    if (route.request().method() === 'POST') {
+      submitted = route.request().postDataJSON() as typeof submitted;
+      return route.fulfill({
+        contentType: 'application/json',
+        status: 201,
+        body: JSON.stringify({ workflow: { id: 'workflow-1' } }),
+      });
+    }
+
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workflows:
+          submitted === undefined
+            ? []
+            : [
+                {
+                  ...submitted,
+                  enabled: true,
+                  id: 'workflow-1',
+                  titleTemplate: '{{file.stem}}',
+                },
+              ],
+      }),
+    });
+  });
+
+  await page.goto('/workflows');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Workflows');
+  await expect(page.getByRole('heading', { name: 'Create a workflow' })).toBeVisible();
+  const optionalStages = page.locator('summary').filter({ hasText: 'Optional route stages' });
+  await expect(page.locator('details')).not.toHaveAttribute('open', '');
+  await optionalStages.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('details')).toHaveAttribute('open', '');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('details')).not.toHaveAttribute('open', '');
+
+  await page.getByLabel('Workflow name').fill('Workshop uploads');
+  await page.getByLabel('Watched folder').fill('C:\\Media\\watched');
+  await page.getByRole('button', { name: 'Add destination' }).click();
+  await page.getByLabel('Destination 1').selectOption('youtube:account-1');
+  await page.getByRole('button', { name: 'Save workflow' }).click();
+
+  await expect.poll(() => submitted?.name).toBe('Workshop uploads');
+  expect(submitted?.sourceDirectory).toBe('C:\\Media\\watched');
+  expect(submitted?.destinations).toEqual([
+    { accountId: 'account-1', destinationId: 'youtube', privacy: 'private' },
+  ]);
+  expect(submitted?.definition.steps.map((step) => step.kind)).toEqual(['source', 'destination']);
+  expect(submitted?.definition.edges).toEqual([{ from: 'source', to: 'destination-1' }]);
+  await expect(page.getByText('Workshop uploads')).toBeVisible();
+  await expect(page.getByText('1 workflow')).toBeVisible();
+
+  await page.setViewportSize({ height: 800, width: 320 });
+  await expect(page.getByRole('heading', { name: 'Route preview' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});

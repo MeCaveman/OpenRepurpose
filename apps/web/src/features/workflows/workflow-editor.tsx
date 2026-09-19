@@ -1,7 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
-import { WorkflowRoute } from './patterns';
-import { Alert, Button, Checkbox, FormField, Input, Panel, Select, Textarea } from './ui';
+import { WorkflowRoute } from '../../components/patterns';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  FormField,
+  Input,
+  Panel,
+  Select,
+  Textarea,
+} from '../../components/ui';
 
 export type WorkflowDefinitionView = {
   schemaVersion: 1;
@@ -49,6 +58,35 @@ type TargetOption = {
 };
 type SourceOption = { id: string; displayName: string; status: string };
 
+function RouteStepHeader({
+  description,
+  label,
+  marker,
+}: {
+  readonly description: string;
+  readonly label: string;
+  readonly marker: string;
+}) {
+  return (
+    <div className="flex gap-[var(--or-space-3)]">
+      <span
+        aria-hidden="true"
+        className="grid size-[var(--or-control-compact-height)] shrink-0 place-items-center rounded-[var(--or-radius-round)] border border-[var(--or-route-selected)] bg-[var(--or-bg-selected)] font-[family-name:var(--or-font-technical)] text-[var(--or-route-selected)] [font-size:var(--or-type-metadata-size)]"
+      >
+        {marker}
+      </span>
+      <div className="min-w-0">
+        <h3 className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
+          {label}
+        </h3>
+        <p className="mt-[var(--or-space-1)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
+          {description}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function WorkflowEditor({
   accounts,
   metaTargets,
@@ -76,6 +114,7 @@ export function WorkflowEditor({
   const [destinations, setDestinations] = useState<WorkflowDestinationView[]>([]);
   const [validationError, setValidationError] = useState<string>();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const validationRef = useRef<HTMLDivElement>(null);
 
   const targetOptions = useMemo(
     () => [
@@ -121,16 +160,23 @@ export function WorkflowEditor({
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setValidationError(undefined);
-    if (name.trim().length === 0) return setValidationError('Give this workflow a name.');
-    if (remoteSourceId.length === 0 && sourceDirectory.trim().length === 0)
-      return setValidationError('Choose a watched folder or a remote source.');
+    const reportValidationError = (message: string) => {
+      setValidationError(message);
+      requestAnimationFrame(() => validationRef.current?.focus());
+    };
+    if (name.trim().length === 0) return reportValidationError('Give this workflow a name.');
+    if (remoteSourceId.length === 0 && sourceDirectory.trim().length === 0) {
+      return reportValidationError('Choose a watched folder or a remote source.');
+    }
     if (
       destinations.length === 0 ||
       destinations.some((destination) => destination.accountId.trim().length === 0)
-    )
-      return setValidationError('Add at least one complete destination.');
-    if (scheduleEnabled && scheduleId.trim().length === 0)
-      return setValidationError('Enter the schedule ID for the schedule step.');
+    ) {
+      return reportValidationError('Add at least one complete destination.');
+    }
+    if (scheduleEnabled && scheduleId.trim().length === 0) {
+      return reportValidationError('Enter the schedule ID for the schedule step.');
+    }
     const sourceType =
       remoteSourceId.length === 0 ? ('watched_folder' as const) : ('remote' as const);
     const filter =
@@ -197,27 +243,31 @@ export function WorkflowEditor({
   };
 
   return (
-    <form
-      className="mt-[var(--or-space-5)] grid gap-[var(--or-field-group-gap-setup)]"
-      onSubmit={submit}
-    >
+    <form className="grid gap-[var(--or-field-group-gap-setup)]" onSubmit={submit}>
       {validationError !== undefined && (
-        <Alert title="Workflow needs attention" variant="error">
-          {validationError}
-        </Alert>
+        <div ref={validationRef} tabIndex={-1}>
+          <Alert title="Workflow needs attention" variant="error">
+            {validationError}
+          </Alert>
+        </div>
       )}
       <FormField label="Workflow name" required>
-        <Input onChange={(event) => setName(event.target.value)} value={name} />
+        <Input
+          autoComplete="off"
+          name="workflow-name"
+          onChange={(event) => setName(event.target.value)}
+          value={name}
+        />
       </FormField>
       <Panel className="grid gap-[var(--or-space-3)]">
-        <div>
-          <h3 className="font-medium text-[var(--or-text-primary)]">1 · Source</h3>
-          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
-            Start with local files or an authorized source connection.
-          </p>
-        </div>
+        <RouteStepHeader
+          description="Start with local files or an authorized source connection."
+          label="Source"
+          marker="01"
+        />
         <FormField label="Source type">
           <Select
+            name="workflow-source-type"
             value={remoteSourceId}
             onChange={(event) => setRemoteSourceId(event.target.value)}
           >
@@ -234,15 +284,22 @@ export function WorkflowEditor({
         {remoteSourceId.length === 0 ? (
           <FormField label="Watched folder" required>
             <Input
+              autoComplete="off"
+              name="workflow-source-directory"
               onChange={(event) => setSourceDirectory(event.target.value)}
               placeholder="C:\\Media\\watched"
+              spellCheck={false}
               value={sourceDirectory}
             />
           </FormField>
         ) : (
           <>
             <FormField label="Source retention">
-              <Select value={retention} onChange={(event) => setRetention(event.target.value)}>
+              <Select
+                name="workflow-source-retention"
+                value={retention}
+                onChange={(event) => setRetention(event.target.value)}
+              >
                 <option value="delete_after_success">Delete after destinations succeed</option>
                 <option value="keep_for_duration">Keep for a duration</option>
                 <option value="keep_forever">Keep forever</option>
@@ -252,6 +309,7 @@ export function WorkflowEditor({
               <FormField label="Retention hours" required>
                 <Input
                   min="1"
+                  name="workflow-retention-hours"
                   type="number"
                   value={retentionHours}
                   onChange={(event) => setRetentionHours(event.target.value)}
@@ -266,83 +324,124 @@ export function WorkflowEditor({
           </>
         )}
       </Panel>
-      <Panel className="grid gap-[var(--or-space-3)]">
-        <div>
-          <h3 className="font-medium text-[var(--or-text-primary)]">
-            2 · Filter{' '}
-            <span className="text-xs font-normal text-[var(--or-text-tertiary)]">optional</span>
-          </h3>
-          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
-            Only remote sources can use a title filter in v0.5.
-          </p>
-        </div>
-        <Checkbox
-          checked={filterEnabled}
-          disabled={remoteSourceId.length === 0}
-          label="Enable title filter"
-          onChange={(event) => setFilterEnabled(event.target.checked)}
-        />
-        {filterEnabled && (
-          <FormField label="Title contains">
-            <Input
-              onChange={(event) => setFilterTitle(event.target.value)}
-              placeholder="Text to match"
-              value={filterTitle}
+      <details className="group rounded-[var(--or-setup-section-radius)] border border-[var(--or-border-subtle)] bg-[var(--or-bg-surface)]">
+        <summary className="flex min-h-[var(--or-control-default-height)] cursor-pointer list-none items-center justify-between gap-[var(--or-space-3)] rounded-[var(--or-setup-section-radius)] px-[var(--or-pane-padding)] py-[var(--or-space-3)] text-[var(--or-text-primary)] focus-visible:outline-[var(--or-focus-width)] focus-visible:outline-offset-[var(--or-focus-offset)] focus-visible:[outline-color:var(--or-focus-ring)]">
+          <span>
+            <span className="block font-semibold [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
+              Optional route stages
+            </span>
+            <span className="mt-[var(--or-space-1)] block text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
+              Filter, transform, or pause the route at an existing schedule boundary.
+            </span>
+          </span>
+          <span
+            aria-hidden="true"
+            className="text-[var(--or-route-selected)] transition-transform duration-[var(--or-duration-fast)] group-open:rotate-45 motion-reduce:transition-none"
+          >
+            +
+          </span>
+        </summary>
+        <div className="grid gap-[var(--or-space-5)] border-t border-[var(--or-border-subtle)] p-[var(--or-pane-padding)]">
+          <section
+            className="grid gap-[var(--or-space-3)]"
+            aria-labelledby="workflow-filter-heading"
+          >
+            <div>
+              <h3
+                className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]"
+                id="workflow-filter-heading"
+              >
+                Title filter
+              </h3>
+              <p className="mt-[var(--or-space-1)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
+                Only remote sources can use a title filter in v0.5.
+              </p>
+            </div>
+            <Checkbox
+              checked={filterEnabled}
+              disabled={remoteSourceId.length === 0}
+              label="Enable title filter"
+              onChange={(event) => setFilterEnabled(event.target.checked)}
             />
-          </FormField>
-        )}
-      </Panel>
-      <Panel className="grid gap-[var(--or-space-3)]">
-        <div>
-          <h3 className="font-medium text-[var(--or-text-primary)]">
-            3 · Schedule{' '}
-            <span className="text-xs font-normal text-[var(--or-text-tertiary)]">optional</span>
-          </h3>
-          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
-            Attach an existing durable schedule by ID. Timing and timezone remain owned by the
-            scheduler.
-          </p>
+            {filterEnabled && remoteSourceId.length > 0 && (
+              <FormField label="Title contains">
+                <Input
+                  autoComplete="off"
+                  name="workflow-title-filter"
+                  onChange={(event) => setFilterTitle(event.target.value)}
+                  placeholder="Text to match"
+                  value={filterTitle}
+                />
+              </FormField>
+            )}
+          </section>
+          <section
+            aria-labelledby="workflow-transform-heading"
+            className="grid gap-[var(--or-space-3)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-5)]"
+          >
+            <div>
+              <h3
+                className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]"
+                id="workflow-transform-heading"
+              >
+                Pass-through transform
+              </h3>
+              <p className="mt-[var(--or-space-1)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
+                v0.5 stores a pass-through transform boundary; media operations arrive in v0.6.
+              </p>
+            </div>
+            <Checkbox
+              checked={transformEnabled}
+              label="Include pass-through transform step"
+              onChange={(event) => setTransformEnabled(event.target.checked)}
+            />
+          </section>
+          <section
+            aria-labelledby="workflow-schedule-heading"
+            className="grid gap-[var(--or-space-3)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-5)]"
+          >
+            <div>
+              <h3
+                className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]"
+                id="workflow-schedule-heading"
+              >
+                Schedule boundary
+              </h3>
+              <p className="mt-[var(--or-space-1)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
+                Attach an existing durable schedule by ID. Timing and timezone remain owned by the
+                scheduler.
+              </p>
+            </div>
+            <Checkbox
+              checked={scheduleEnabled}
+              label="Hold this workflow at a schedule boundary"
+              onChange={(event) => setScheduleEnabled(event.target.checked)}
+            />
+            {scheduleEnabled && (
+              <FormField label="Schedule ID" required>
+                <Input
+                  autoComplete="off"
+                  name="workflow-schedule-id"
+                  onChange={(event) => setScheduleId(event.target.value)}
+                  value={scheduleId}
+                />
+              </FormField>
+            )}
+          </section>
         </div>
-        <Checkbox
-          checked={scheduleEnabled}
-          label="Hold this workflow at a schedule boundary"
-          onChange={(event) => setScheduleEnabled(event.target.checked)}
+      </details>
+      <Panel className="grid gap-[var(--or-space-3)]">
+        <RouteStepHeader
+          description="Choose exact publish targets. Unavailable Meta targets remain visible instead of being silently replaced."
+          label="Destinations"
+          marker="02"
         />
-        {scheduleEnabled && (
-          <FormField label="Schedule ID" required>
-            <Input onChange={(event) => setScheduleId(event.target.value)} value={scheduleId} />
-          </FormField>
-        )}
-      </Panel>
-      <Panel className="grid gap-[var(--or-space-3)]">
-        <div>
-          <h3 className="font-medium text-[var(--or-text-primary)]">
-            Transform{' '}
-            <span className="text-xs font-normal text-[var(--or-text-tertiary)]">placeholder</span>
-          </h3>
-          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
-            v0.5 stores a pass-through transform boundary; media operations arrive in v0.6.
-          </p>
-        </div>
-        <Checkbox
-          checked={transformEnabled}
-          label="Include pass-through transform step"
-          onChange={(event) => setTransformEnabled(event.target.checked)}
-        />
-      </Panel>
-      <Panel className="grid gap-[var(--or-space-3)]">
-        <div>
-          <h3 className="font-medium text-[var(--or-text-primary)]">4 · Destinations</h3>
-          <p className="mt-1 text-xs text-[var(--or-text-tertiary)]">
-            Each destination is explicit; unavailable Meta targets stay visible instead of being
-            silently replaced.
-          </p>
-        </div>
         {destinations.map((destination, index) => (
-          <div className="flex gap-2" key={index}>
+          <div className="flex flex-col gap-[var(--or-space-2)] sm:flex-row" key={index}>
             <Select
               aria-label={`Destination ${index + 1}`}
               className="min-w-0 flex-1"
+              name={`workflow-destination-${index + 1}`}
               value={`${destination.destinationId}:${destination.accountId}`}
               onChange={(event) => updateDestination(index, event.target.value)}
             >
@@ -366,23 +465,44 @@ export function WorkflowEditor({
           </div>
         ))}
         <Button className="w-fit" onClick={addDestination}>
-          + Add destination
+          Add destination
         </Button>
       </Panel>
       <Panel className="grid gap-[var(--or-space-3)]" surface="inset">
-        <h3 className="font-medium">Metadata templates</h3>
+        <div>
+          <h3 className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
+            Metadata templates
+          </h3>
+          <p className="mt-[var(--or-space-1)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
+            Apply the same title and description rules to every destination in this route.
+          </p>
+        </div>
         <FormField label="Title template" required>
-          <Input onChange={(event) => setTitleTemplate(event.target.value)} value={titleTemplate} />
+          <Input
+            autoComplete="off"
+            name="workflow-title-template"
+            onChange={(event) => setTitleTemplate(event.target.value)}
+            spellCheck={false}
+            value={titleTemplate}
+          />
         </FormField>
         <FormField label="Description template">
           <Textarea
+            name="workflow-description-template"
             onChange={(event) => setDescriptionTemplate(event.target.value)}
             value={descriptionTemplate}
           />
         </FormField>
       </Panel>
       <Panel>
-        <h3 className="font-medium">Readable workflow summary</h3>
+        <div>
+          <h3 className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
+            Route preview
+          </h3>
+          <p className="mt-[var(--or-space-1)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
+            Review the source, processing stages, and destinations before saving.
+          </p>
+        </div>
         <div className="mt-[var(--or-space-3)]">
           <WorkflowRoute
             destinations={destinations.map((destination, index) => ({
@@ -408,7 +528,7 @@ export function WorkflowEditor({
               ...(remoteSourceId.length === 0 ? { platform: 'local' } : {}),
             }}
             stages={[
-              ...(filterEnabled
+              ...(remoteSourceId.length > 0 && filterEnabled
                 ? [
                     {
                       detail: filterTitle || 'Title rule not configured',
@@ -430,20 +550,20 @@ export function WorkflowEditor({
             ]}
           />
         </div>
-        <p className="mt-3 text-xs text-[var(--or-text-tertiary)]">
+        <p className="mt-[var(--or-space-3)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
           The saved definition is compiled and validated by the application core before persistence.
         </p>
       </Panel>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-[var(--or-space-3)] sm:flex-row sm:items-center">
         <Button
           isLoading={isSubmitting}
-          loadingLabel="Saving workflow"
+          loadingLabel="Saving workflow…"
           type="submit"
           variant="primary"
         >
           Save workflow
         </Button>
-        <span className="text-xs text-[var(--or-text-tertiary)]">
+        <span className="text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
           Invalid or disconnected graphs are rejected by the core.
         </span>
       </div>

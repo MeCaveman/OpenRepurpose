@@ -1,16 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
-  WorkflowEditor,
-  type WorkflowEditorValue,
-  type WorkflowDefinitionView,
-} from './components/WorkflowEditor';
-import {
-  JobStatus,
-  ResourceEmptyState,
-  WorkflowCard,
-  type WorkflowRouteData,
-  type WorkflowRouteNodeData,
-} from './components/patterns';
+import { JobStatus, ResourceEmptyState } from './components/patterns';
 import {
   ApplicationShell,
   PageHeader,
@@ -24,6 +13,11 @@ import { AccountsPage } from './features/accounts';
 import { OverviewPage } from './features/overview';
 import { SetupPage } from './features/setup';
 import { SourcesPage } from './features/sources';
+import {
+  WorkflowsPage,
+  type WorkflowDefinitionView,
+  type WorkflowEditorValue,
+} from './features/workflows';
 
 const pages: Readonly<
   Record<string, { readonly description: string; readonly eyebrow: string; readonly title: string }>
@@ -56,7 +50,7 @@ const pages: Readonly<
   '/workflows': {
     eyebrow: 'Automation',
     title: 'Workflows',
-    description: 'Source-to-destination workflow controls will live here.',
+    description: 'Build and review durable source-to-destination routes.',
   },
   '/jobs': {
     eyebrow: 'Execution history',
@@ -208,58 +202,6 @@ type TikTokCapabilityView =
   | { capabilities: TikTokAccountCapabilities; error?: never }
   | { capabilities?: never; error: string };
 
-function toWorkflowRouteData(workflow: WorkflowItem): WorkflowRouteData {
-  const sourceLabel =
-    workflow.sourceDirectory || workflow.remoteSource?.connectionId || 'Remote source';
-  const nodeState = workflow.enabled ? ('default' as const) : ('disabled' as const);
-  const source: WorkflowRouteNodeData = {
-    detail: workflow.remoteSource === undefined ? 'Watched folder' : 'Remote source',
-    kind: 'source',
-    label: sourceLabel,
-    state: nodeState,
-    ...(workflow.remoteSource === undefined ? { platform: 'local' } : {}),
-  };
-  const stages: WorkflowRouteNodeData[] = [];
-  const destinations: WorkflowRouteNodeData[] = [];
-
-  for (const step of workflow.definition?.steps ?? []) {
-    if (step.kind === 'filter') {
-      stages.push({ kind: 'filter', label: 'Filter', state: nodeState });
-    } else if (step.kind === 'transform') {
-      stages.push({ kind: 'transform', label: 'Pass-through', state: nodeState });
-    } else if (step.kind === 'schedule') {
-      stages.push({
-        detail: step.scheduleId,
-        kind: 'schedule',
-        label: 'Schedule',
-        state: nodeState,
-      });
-    } else if (step.kind === 'destination') {
-      destinations.push({
-        detail: step.destination.accountId || 'Account not selected',
-        kind: 'destination',
-        label: step.destination.destinationId,
-        platform: step.destination.destinationId,
-        state: nodeState,
-      });
-    }
-  }
-
-  if (destinations.length === 0) {
-    destinations.push(
-      ...workflow.destinations.map((destination) => ({
-        detail: destination.accountId || 'Account not selected',
-        kind: 'destination' as const,
-        label: destination.destinationId,
-        platform: destination.destinationId,
-        state: nodeState,
-      })),
-    );
-  }
-
-  return { destinations, source, stages };
-}
-
 function usePathname(): string {
   const [pathname, setPathname] = useState(window.location.pathname);
   useEffect(() => {
@@ -306,6 +248,7 @@ export function App() {
   const [sourceName, setSourceName] = useState('');
   const [activeSourceAction, setActiveSourceAction] = useState<string>();
   const [isSourcesLoading, setIsSourcesLoading] = useState(false);
+  const [isWorkflowsLoading, setIsWorkflowsLoading] = useState(false);
   const [tiktokCapabilities, setTikTokCapabilities] = useState<
     Readonly<Record<string, TikTokCapabilityView>>
   >({});
@@ -434,10 +377,14 @@ export function App() {
         )
         .finally(() => setIsSourcesLoading(false));
     }
-    if (pathname === '/workflows')
-      void Promise.all([loadAccounts(), loadWorkflows(), loadSources()]).catch((failure: unknown) =>
-        setError(failure instanceof Error ? failure.message : 'Could not load workflows.'),
-      );
+    if (pathname === '/workflows') {
+      setIsWorkflowsLoading(true);
+      void Promise.all([loadAccounts(), loadWorkflows(), loadSources()])
+        .catch((failure: unknown) =>
+          setError(failure instanceof Error ? failure.message : 'Could not load workflows.'),
+        )
+        .finally(() => setIsWorkflowsLoading(false));
+    }
   }, [pathname]);
   const navigate = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
@@ -879,53 +826,15 @@ export function App() {
               sources={sources}
             />
           ) : pathname === '/workflows' ? (
-            <div className="space-y-6">
-              {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
-              <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
-                <h2 className="font-semibold">Create a workflow</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Select one exact account or Meta publish target. A Meta credential identity is not
-                  itself a publish target.
-                </p>
-                <WorkflowEditor
-                  accounts={accounts}
-                  metaTargets={metaTargets}
-                  onSubmit={createWorkflow}
-                  sources={sources}
-                />
-              </section>
-              <section className="rounded-xl border border-white/10 bg-slate-950 p-5">
-                <h2 className="font-semibold">Saved workflows</h2>
-                <div className="mt-3 grid gap-3">
-                  {workflows.map((workflow) => {
-                    const route = toWorkflowRouteData(workflow);
-
-                    return (
-                      <WorkflowCard
-                        destinations={route.destinations}
-                        enabled={workflow.enabled}
-                        key={workflow.id}
-                        name={workflow.name}
-                        source={route.source}
-                        sourceLabel={
-                          workflow.sourceDirectory ||
-                          workflow.remoteSource?.connectionId ||
-                          'Remote source'
-                        }
-                        stages={route.stages ?? []}
-                      />
-                    );
-                  })}
-                </div>
-                {workflows.length === 0 && (
-                  <ResourceEmptyState
-                    className="mt-3"
-                    description="Create a route from a source through any processing stages to one or more destinations."
-                    title="No saved workflows"
-                  />
-                )}
-              </section>
-            </div>
+            <WorkflowsPage
+              accounts={accounts}
+              error={error}
+              isLoading={isWorkflowsLoading}
+              metaTargets={metaTargets}
+              onCreateWorkflow={createWorkflow}
+              sources={sources}
+              workflows={workflows}
+            />
           ) : pathname === '/setup' ? (
             <SetupPage error={error} tiktokStatus={tiktokStatus} youtubeStatus={youtubeStatus} />
           ) : pathname === '/media' ? (
