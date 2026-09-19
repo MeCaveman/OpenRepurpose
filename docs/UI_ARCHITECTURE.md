@@ -19,6 +19,7 @@ The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 | UI primitives                                | `apps/web/src/components/ui/`                | Accessible, token-backed, domain-neutral controls and their internal style helpers                                          |
 | Layout components                            | `apps/web/src/components/layout/`            | Token-backed application shell, command bar, resource navigation, workspace, page header, and skip-link composition         |
 | Domain patterns                              | `apps/web/src/components/patterns/`          | Reusable platform identity, connection, workflow-route, job-status, and resource-empty-state presentation                   |
+| Setup feature presentation                   | `apps/web/src/features/setup/`               | Setup readiness page composed from shared primitives and platform identity; receives normalized status from `App.tsx`       |
 | Global CSS entry                             | `apps/web/src/styles.css`                    | Imports Tailwind and token layers; applies global focus, selection, font, surface, and reduced-motion behavior              |
 | Reference tokens                             | `apps/web/src/styles/tokens/reference.css`   | Raw values                                                                                                                  |
 | Semantic tokens                              | `apps/web/src/styles/tokens/semantic.css`    | Dark/light meanings plus Tailwind and shadcn-compatible aliases                                                             |
@@ -26,7 +27,7 @@ The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 
 The current routes are `/`, `/setup`, `/accounts`, `/sources`, `/media`, `/workflows`, `/jobs`, and `/settings`, plus the existing unknown-route fallback. Routing semantics are currently owned by `App.tsx`; this document does not change them.
 
-The primitive, layout, and domain-pattern layers now exist. Route-level composition, global-navigation configuration/state, feature state, and data access remain in `App.tsx`; shared navigation presentation lives in the layout layer. There are no current `features` or extracted page directories. Those locations remain explicit migration targets, not claims about the existing repository.
+The primitive, layout, and domain-pattern layers now exist. Shared navigation presentation lives in the layout layer, and `/setup` presentation is extracted to `features/setup/`. Route-level composition, global-navigation configuration/state, shared credential state, and data access remain in `App.tsx`; other routes have not yet been extracted. Future feature directories remain migration targets rather than claims about the existing repository.
 
 ## Permanent layer model
 
@@ -97,7 +98,7 @@ Domain-pattern rules:
 
 **Responsibility:** Route-level composition, feature state, API translation, mutations, and orchestration of primitives, layout, and domain patterns.
 
-**Current:** All route-level UI, direct `fetch` calls, mutation handlers, and most frontend data types live in `apps/web/src/App.tsx`.
+**Current:** `apps/web/src/features/setup/` owns the migrated `/setup` readiness presentation and its normalized view contracts. It composes existing primitives and domain patterns and contains no request or business logic. `App.tsx` continues to own the unchanged `/api/setup` request and shared YouTube/TikTok credential state because those same values are also consumed by current account, source, workflow, and media flows. All other route-level UI, direct `fetch` calls, mutation handlers, and most frontend data types remain in `App.tsx`.
 
 **Target:** `apps/web/src/features/<feature>/` for cohesive feature modules introduced one migrated route or responsibility at a time. A feature may contain its page component, feature-local components, normalized view types, hooks, API adapter, and tests. The application entry retains route registration and top-level composition without becoming a global feature registry with business behavior.
 

@@ -42,8 +42,17 @@ test('setup journey reports mocked destination readiness and TikTok audit restri
   );
   await page.goto('/setup');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Setup');
+  await expect(page.getByRole('heading', { name: 'Destination readiness' })).toBeVisible();
   await expect(page.getByText('Configured')).toHaveCount(2);
   await expect(page.getByText('TikTok unaudited clients can publish only')).toBeVisible();
+  await expect(page.getByText(/youtube\/oauth\/callback/)).toBeVisible();
+
+  await page.setViewportSize({ height: 800, width: 320 });
+  await expect(page.getByRole('heading', { name: 'YouTube credentials' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'TikTok credentials' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 });
 
 test('Meta accounts journey keeps Facebook Pages and Instagram targets distinct', async ({

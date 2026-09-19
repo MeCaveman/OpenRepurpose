@@ -21,6 +21,7 @@ import {
   type ResourceNavigationItem,
 } from './components/layout';
 import { Button } from './components/ui';
+import { SetupPage } from './features/setup';
 
 const pages: Readonly<
   Record<string, { readonly description: string; readonly eyebrow: string; readonly title: string }>
@@ -1284,48 +1285,7 @@ export function App() {
               </section>
             </div>
           ) : pathname === '/setup' ? (
-            <div className="space-y-4">
-              {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
-              <div className="rounded-xl border border-white/10 bg-slate-950 p-5">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <h2 className="font-semibold">YouTube credentials</h2>
-                    <p className="mt-1 text-sm text-slate-400">BYO Google OAuth desktop client</p>
-                  </div>
-                  <span
-                    className={
-                      youtubeStatus?.configured === true ? 'text-emerald-200' : 'text-amber-200'
-                    }
-                  >
-                    {youtubeStatus?.configured === true ? 'Configured' : 'Action required'}
-                  </span>
-                </div>
-                <p className="mt-3 break-all text-xs text-slate-500">
-                  {youtubeStatus?.redirectUri}
-                </p>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-slate-950 p-5">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <h2 className="font-semibold">TikTok credentials</h2>
-                    <p className="mt-1 text-sm text-slate-400">
-                      BYO TikTok Login Kit app · {tiktokStatus?.flow ?? 'deployment'} flow
-                    </p>
-                  </div>
-                  <span
-                    className={
-                      tiktokStatus?.configured === true ? 'text-emerald-200' : 'text-amber-200'
-                    }
-                  >
-                    {tiktokStatus?.configured === true ? 'Configured' : 'Action required'}
-                  </span>
-                </div>
-                <p className="mt-3 break-all text-xs text-slate-500">{tiktokStatus?.redirectUri}</p>
-                <p className="mt-2 text-xs text-amber-200/80">
-                  TikTok unaudited clients can publish only with private visibility.
-                </p>
-              </div>
-            </div>
+            <SetupPage error={error} tiktokStatus={tiktokStatus} youtubeStatus={youtubeStatus} />
           ) : pathname === '/media' ? (
             <div className="space-y-6">
               <form className="flex flex-col gap-3 sm:flex-row" onSubmit={importMedia}>
