@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { JobStatus, ResourceEmptyState } from './components/patterns';
+import { ResourceEmptyState } from './components/patterns';
 import {
   ApplicationShell,
   PageHeader,
@@ -8,8 +8,8 @@ import {
   Workspace,
   type ResourceNavigationItem,
 } from './components/layout';
-import { Button } from './components/ui';
 import { AccountsPage } from './features/accounts';
+import { JobsPage, type JobAttemptView, type JobView } from './features/jobs';
 import { OverviewPage } from './features/overview';
 import { SetupPage } from './features/setup';
 import { SourcesPage } from './features/sources';
@@ -55,7 +55,7 @@ const pages: Readonly<
   '/jobs': {
     eyebrow: 'Execution history',
     title: 'Jobs',
-    description: 'Persistent job state, attempts, and actionable errors will appear here.',
+    description: 'Inspect persisted work, attempts, and actionable execution errors.',
   },
   '/settings': {
     eyebrow: 'Local configuration',
@@ -78,29 +78,6 @@ type MediaItem = {
   path: string;
   state: string;
   metadata: { durationSeconds?: number; width?: number; height?: number };
-};
-type JobItem = {
-  attemptCount: number;
-  cancellationRequestedAt?: string;
-  id: string;
-  lastErrorCode?: string;
-  lastErrorMessage?: string;
-  maxAttempts: number;
-  status: string;
-  type: string;
-  destination?: DestinationJobItem;
-};
-type DestinationJobItem = {
-  destinationId: string;
-  remoteStatus: string;
-  uploadedBytes: number;
-  remoteId?: string;
-};
-type JobAttemptItem = {
-  attemptNumber: number;
-  errorCode?: string;
-  errorMessage?: string;
-  status: string;
 };
 type AccountItem = {
   capabilities: readonly string[];
@@ -220,9 +197,13 @@ export function App() {
     description: 'Choose a section from the navigation to continue.',
   };
   const [media, setMedia] = useState<readonly MediaItem[]>([]);
-  const [jobs, setJobs] = useState<readonly JobItem[]>([]);
-  const [attempts, setAttempts] = useState<readonly JobAttemptItem[]>([]);
+  const [jobs, setJobs] = useState<readonly JobView[]>([]);
+  const [attempts, setAttempts] = useState<readonly JobAttemptView[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string>();
+  const [selectedJob, setSelectedJob] = useState<JobView>();
+  const [isJobsLoading, setIsJobsLoading] = useState(false);
+  const [isJobDetailLoading, setIsJobDetailLoading] = useState(false);
+  const [activeJobAction, setActiveJobAction] = useState<string>();
   const [error, setError] = useState<string>();
   const [importPath, setImportPath] = useState('');
   const [accounts, setAccounts] = useState<readonly AccountItem[]>([]);
@@ -271,7 +252,7 @@ export function App() {
   const loadJobs = async () => {
     const response = await fetch('/api/jobs');
     if (!response.ok) throw new Error('Job history is unavailable.');
-    const body = (await response.json()) as { jobs: readonly JobItem[] };
+    const body = (await response.json()) as { jobs: readonly JobView[] };
     setJobs(body.jobs);
   };
   const loadAccounts = async () => {
@@ -343,24 +324,43 @@ export function App() {
     setSourceItems(Object.fromEntries(details));
   };
   const showAttempts = async (jobId: string) => {
-    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
-    if (!response.ok) throw new Error('Job attempt history is unavailable.');
-    const body = (await response.json()) as {
-      attempts: readonly JobAttemptItem[];
-      destination?: DestinationJobItem;
-    };
     setSelectedJobId(jobId);
-    setAttempts(body.attempts);
+    setSelectedJob(jobs.find((job) => job.id === jobId));
+    setAttempts([]);
+    setIsJobDetailLoading(true);
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+      if (!response.ok) throw new Error('Job attempt history is unavailable.');
+      const body = (await response.json()) as {
+        attempts: readonly JobAttemptView[];
+        destination?: JobView['destination'];
+        job: JobView;
+      };
+      setSelectedJob({
+        ...body.job,
+        ...(body.destination === undefined ? {} : { destination: body.destination }),
+      });
+      setAttempts(body.attempts);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Job attempt history is unavailable.');
+    } finally {
+      setIsJobDetailLoading(false);
+    }
   };
   useEffect(() => {
     if (pathname === '/media')
       void Promise.all([loadMedia(), loadAccounts()]).catch((failure: unknown) =>
         setError(failure instanceof Error ? failure.message : 'Could not load media.'),
       );
-    if (pathname === '/jobs')
-      void loadJobs().catch((failure: unknown) =>
-        setError(failure instanceof Error ? failure.message : 'Could not load jobs.'),
-      );
+    if (pathname === '/jobs') {
+      setIsJobsLoading(true);
+      void loadJobs()
+        .catch((failure: unknown) =>
+          setError(failure instanceof Error ? failure.message : 'Could not load jobs.'),
+        )
+        .finally(() => setIsJobsLoading(false));
+    }
     if (pathname === '/accounts')
       void loadAccounts().catch((failure: unknown) =>
         setError(failure instanceof Error ? failure.message : 'Could not load accounts.'),
@@ -413,6 +413,7 @@ export function App() {
   };
   const cancelJob = async (jobId: string) => {
     setError(undefined);
+    setActiveJobAction(`cancel:${jobId}`);
     try {
       const session = await fetch('/api/session');
       const { csrfToken } = (await session.json()) as { csrfToken: string };
@@ -425,6 +426,8 @@ export function App() {
       if (selectedJobId === jobId) await showAttempts(jobId);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Job cancellation failed.');
+    } finally {
+      setActiveJobAction(undefined);
     }
   };
   const queueYouTubePublish = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -1060,105 +1063,23 @@ export function App() {
               )}
             </div>
           ) : pathname === '/jobs' ? (
-            <div className="space-y-6">
-              {error !== undefined && <p className="text-sm text-rose-300">{error}</p>}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="text-slate-400">
-                    <tr>
-                      <th>Job</th>
-                      <th>Status</th>
-                      <th>Attempts</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {jobs.map((job) => (
-                      <tr className="border-t border-white/10" key={job.id}>
-                        <td className="py-3 pr-4">
-                          <button
-                            className="text-left text-cyan-200 hover:underline"
-                            onClick={() => void showAttempts(job.id)}
-                            type="button"
-                          >
-                            <span className="block font-medium">{job.type}</span>
-                            <span className="block font-mono text-xs text-slate-500">{job.id}</span>
-                          </button>
-                          {job.lastErrorMessage !== undefined && (
-                            <span className="mt-1 block text-xs text-rose-300">
-                              {job.lastErrorCode}: {job.lastErrorMessage}
-                            </span>
-                          )}
-                          {job.destination !== undefined && (
-                            <span className="mt-1 block text-xs text-fuchsia-200">
-                              {job.destination.destinationId}: {job.destination.remoteStatus}
-                              {job.destination.remoteId === undefined
-                                ? ''
-                                : ` · ${job.destination.remoteId}`}
-                            </span>
-                          )}
-                        </td>
-                        <td className="pr-4">
-                          <JobStatus status={job.status} />
-                        </td>
-                        <td className="pr-4">
-                          {job.attemptCount}/{job.maxAttempts}
-                        </td>
-                        <td>
-                          {(job.status === 'pending' ||
-                            job.status === 'retrying' ||
-                            job.status === 'running') && (
-                            <Button
-                              disabled={job.cancellationRequestedAt !== undefined}
-                              onClick={() => void cancelJob(job.id)}
-                              size="sm"
-                              type="button"
-                              variant="danger"
-                            >
-                              {job.cancellationRequestedAt === undefined ? 'Cancel' : 'Cancelling…'}
-                            </Button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {jobs.length === 0 && (
-                <ResourceEmptyState
-                  description="Jobs will appear here when a workflow or direct publish operation is queued."
-                  title="No queued jobs"
-                />
-              )}
-              {selectedJobId !== undefined && (
-                <section className="rounded-xl border border-white/10 bg-slate-950 p-4">
-                  <h2 className="font-semibold">Attempt history</h2>
-                  <p className="mt-1 font-mono text-xs text-slate-500">{selectedJobId}</p>
-                  <ol className="mt-4 space-y-2 text-sm">
-                    {attempts.map((attempt) => (
-                      <li className="rounded-lg bg-white/5 p-3" key={attempt.attemptNumber}>
-                        <JobStatus
-                          label={`#${attempt.attemptNumber} · ${attempt.status}`}
-                          status={attempt.status}
-                        />
-                        {attempt.errorCode !== undefined && (
-                          <span className="block text-xs text-rose-300">
-                            {attempt.errorCode}: {attempt.errorMessage}
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-                  {attempts.length === 0 && (
-                    <ResourceEmptyState
-                      className="mt-3"
-                      description="Attempt details will appear when the selected job begins processing."
-                      title="No attempts"
-                    />
-                  )}
-                </section>
-              )}
-            </div>
+            <JobsPage
+              activeAction={activeJobAction}
+              attempts={attempts}
+              error={error}
+              isDetailLoading={isJobDetailLoading}
+              isLoading={isJobsLoading}
+              jobs={jobs}
+              onCancelJob={(jobId) => void cancelJob(jobId)}
+              onCloseDetails={() => {
+                setSelectedJobId(undefined);
+                setSelectedJob(undefined);
+                setAttempts([]);
+              }}
+              onSelectJob={(jobId) => void showAttempts(jobId)}
+              selectedJob={selectedJob}
+              selectedJobId={selectedJobId}
+            />
           ) : pathname === '/' ? (
             <OverviewPage onNavigate={navigate} />
           ) : (

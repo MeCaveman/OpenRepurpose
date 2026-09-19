@@ -378,7 +378,7 @@ test('watched-folder workflow contract leads to a queued upload', async ({ page 
     }),
   );
   await page.goto('/jobs');
-  await expect(page.getByText('youtube.upload')).toBeVisible();
+  await expect(page.getByRole('button', { name: /youtube\.upload/ })).toBeVisible();
   const response = await page.evaluate(async () => {
     const session = await fetch('/api/session');
     const { csrfToken } = (await session.json()) as { csrfToken: string };

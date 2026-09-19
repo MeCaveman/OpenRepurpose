@@ -91,8 +91,20 @@ test('application shell prioritizes the workspace at desktop and compact widths'
 
 test('job history renders persisted status and attempt detail', async ({ page }) => {
   await serveProductionAssets(page);
+  await page.route('http://openrepurpose.test/api/session', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
+  );
+  let cancellationRequested = false;
   await page.route('http://openrepurpose.test/api/jobs**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/jobs/job-1/cancel' && route.request().method() === 'POST') {
+      cancellationRequested = true;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ job: { id: 'job-1', status: 'retrying' } }),
+      });
+      return;
+    }
     if (pathname === '/api/jobs') {
       await route.fulfill({
         contentType: 'application/json',
@@ -104,8 +116,18 @@ test('job history renders persisted status and attempt detail', async ({ page })
               status: 'retrying',
               attemptCount: 1,
               maxAttempts: 3,
+              createdAt: '2026-09-18T12:00:00.000Z',
+              ...(cancellationRequested
+                ? { cancellationRequestedAt: '2026-09-18T12:03:00.000Z' }
+                : {}),
               lastErrorCode: 'FAKE_TRANSIENT',
               lastErrorMessage: 'Temporary fake failure.',
+              destination: {
+                destinationId: 'youtube',
+                remoteId: 'remote-1',
+                remoteStatus: 'processing',
+                uploadedBytes: 1572864,
+              },
             },
           ],
         }),
@@ -115,13 +137,27 @@ test('job history renders persisted status and attempt detail', async ({ page })
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        job: { id: 'job-1', type: 'fake.publish', status: 'retrying' },
+        job: {
+          id: 'job-1',
+          type: 'fake.publish',
+          status: 'retrying',
+          attemptCount: 1,
+          maxAttempts: 3,
+        },
+        destination: {
+          destinationId: 'youtube',
+          remoteId: 'remote-1',
+          remoteStatus: 'processing',
+          uploadedBytes: 1572864,
+        },
         attempts: [
           {
             attemptNumber: 1,
             status: 'failed',
             errorCode: 'FAKE_TRANSIENT',
             errorMessage: 'Temporary fake failure.',
+            startedAt: '2026-09-18T12:01:00.000Z',
+            finishedAt: '2026-09-18T12:02:00.000Z',
           },
         ],
       }),
@@ -130,8 +166,31 @@ test('job history renders persisted status and attempt detail', async ({ page })
 
   await page.goto('/jobs');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Jobs');
-  await expect(page.getByText('retrying')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Execution ledger' })).toBeVisible();
+  await expect(page.getByText('Retrying').first()).toBeVisible();
+  await expect(page.getByText('youtube · processing').first()).toBeVisible();
   await page.getByRole('button', { name: /fake\.publish/ }).click();
   await expect(page.getByRole('heading', { name: 'Attempt history' })).toBeVisible();
-  await expect(page.getByText(/#1 · failed/)).toBeVisible();
+  await expect(page.getByText('Attempt 1')).toBeVisible();
+  await expect(page.getByText('Failed')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Destination checkpoint' })).toBeVisible();
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect.poll(() => cancellationRequested).toBe(true);
+  await expect(page.getByRole('button', { name: 'Cancellation requested' })).toBeDisabled();
+
+  await page.getByRole('button', { name: 'Close details' }).click();
+  await expect(page.getByRole('heading', { name: 'Attempt history' })).toBeHidden();
+
+  await page.setViewportSize({ height: 800, width: 320 });
+  await expect(page.getByRole('button', { name: /fake\.publish/ })).toBeVisible();
+  await page.getByRole('button', { name: /fake\.publish/ }).click();
+  await expect(page.getByRole('heading', { name: 'Attempt history' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /fake\.publish/ })).toBeHidden();
+  await page.getByRole('button', { name: 'Close details' }).click();
+  await expect(page.getByRole('button', { name: /fake\.publish/ })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 });
