@@ -11,6 +11,7 @@ import {
 import { AccountsPage } from './features/accounts';
 import { JobsPage, type JobAttemptView, type JobView } from './features/jobs';
 import { OverviewPage } from './features/overview';
+import { SettingsPage } from './features/settings';
 import { SetupPage } from './features/setup';
 import { SourcesPage } from './features/sources';
 import {
@@ -60,7 +61,7 @@ const pages: Readonly<
   '/settings': {
     eyebrow: 'Local configuration',
     title: 'Settings',
-    description: 'Deployment-neutral application preferences will be managed here.',
+    description: 'Find the current owners of local system and integration configuration.',
   },
 };
 const navigation: readonly ResourceNavigationItem[] = [
@@ -762,7 +763,7 @@ export function App() {
             />
           }
           labelledBy="workspace-title"
-          mode={pathname === '/setup' ? 'setup' : 'default'}
+          mode={pathname === '/setup' || pathname === '/settings' ? 'setup' : 'default'}
         >
           {pathname === '/accounts' ? (
             <AccountsPage
@@ -1080,6 +1081,8 @@ export function App() {
               selectedJob={selectedJob}
               selectedJobId={selectedJobId}
             />
+          ) : pathname === '/settings' ? (
+            <SettingsPage onNavigate={navigate} />
           ) : pathname === '/' ? (
             <OverviewPage onNavigate={navigate} />
           ) : (

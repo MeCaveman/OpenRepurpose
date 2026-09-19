@@ -57,6 +57,37 @@ test('overview routes operators through existing source, workflow, and destinati
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sources');
 });
 
+test('settings maps existing configuration without inventing controls', async ({ page }) => {
+  await serveProductionAssets(page);
+  await page.goto('/settings');
+
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Settings');
+  await expect(page.getByRole('heading', { name: 'Configuration ownership' })).toBeVisible();
+
+  const areas = page.getByRole('list', { name: 'Configuration areas' });
+  await expect(areas.getByRole('link')).toHaveCount(3);
+  await expect(areas.getByRole('link', { name: /Review setup/ })).toHaveAttribute('href', '/setup');
+  await expect(areas.getByRole('link', { name: /Manage accounts/ })).toHaveAttribute(
+    'href',
+    '/accounts',
+  );
+  await expect(areas.getByRole('link', { name: /Manage workflows/ })).toHaveAttribute(
+    'href',
+    '/workflows',
+  );
+  await expect(page.getByRole('heading', { name: 'Installation policy' })).toBeVisible();
+  await expect(page.getByText('No global preference controls in v0.5')).toBeVisible();
+  await expect(
+    page.locator('main input, main select, main textarea, main [role="switch"]'),
+  ).toHaveCount(0);
+
+  await page.setViewportSize({ height: 800, width: 320 });
+  await expect(areas).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});
+
 test('application shell prioritizes the workspace at desktop and compact widths', async ({
   page,
 }) => {
