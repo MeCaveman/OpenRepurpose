@@ -354,6 +354,7 @@ OpenRepurpose owns the shell, typography, surface hierarchy, selection, focus, a
 - A platform color may identify a mark, a narrow local accent, or a platform-specific metadata region.
 - Platform color never replaces semantic application color, becomes a global token, floods a panel, controls focus, or changes the meaning of success, warning, danger, selection, or workflow state.
 - Platform-specific colors remain metadata local to the integration/presentation mapping.
+- Provider-aware surfaces resolve names and marks from the shared platform metadata mapping and compose `PlatformIdentity` or `PlatformSectionHeader`; feature code may diverge for real capability, configuration, or legal requirements, but not to duplicate an otherwise identical provider shell.
 
 ## State design
 

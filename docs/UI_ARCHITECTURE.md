@@ -90,7 +90,7 @@ Layout components:
 
 **Responsibility:** Reusable product-specific presentations such as account connection rows, source summaries, workflow nodes/routes, job status/progress, destination capability notices, media summaries, operational empty states, and platform identity marks.
 
-**Current:** `apps/web/src/components/patterns/` contains the patterns justified by v0.5: `PlatformIdentity`, `ConnectionStatus`, `ConnectionCard`, `SourceStatus`, `WorkflowStatus`, `WorkflowNode`, `WorkflowRoute`, `WorkflowCard`, `JobStatus`, and `ResourceEmptyState`. Its `index.ts` is the public pattern entry point. `platform-metadata.ts` owns the restrained platform display mapping separately from generic connection and route presentation. Features, including the workflow route editor and saved-route list, consume these patterns through the public pattern entry point.
+**Current:** `apps/web/src/components/patterns/` contains the patterns justified by v0.5: `PlatformIdentity`, `PlatformSectionHeader`, `ConnectionStatus`, `ConnectionCard`, `SourceStatus`, `WorkflowStatus`, `WorkflowNode`, `WorkflowRoute`, `WorkflowCard`, `JobStatus`, and `ResourceEmptyState`. Its `index.ts` is the public pattern entry point. `platform-metadata.ts` owns the restrained platform display mapping separately from generic connection and route presentation. Provider-aware setup surfaces share `PlatformSectionHeader`; features may still own provider-specific capability and configuration fields. Features, including the workflow route editor and saved-route list, consume these patterns through the public pattern entry point.
 
 **Target:** Extend the existing `apps/web/src/components/patterns/` layer for patterns reused across feature families. A pattern used only within one cohesive feature remains inside that feature rather than being promoted prematurely.
 
@@ -152,6 +152,7 @@ Platform capability and configuration data belong to typed application/integrati
 
 - Integration identifiers and capability facts are not inferred from visual branding.
 - A platform presentation mapping may choose a restrained mark or local accent, but semantic application state comes from OpenRepurpose tokens.
+- Provider names and marks come from `components/patterns/platform-metadata.ts`; repeated provider-aware headers compose `PlatformIdentity` through `PlatformSectionHeader` rather than branching into provider-specific shells.
 - UI primitives never import integration modules.
 - Domain patterns do not issue platform requests.
 - Pages/features translate API responses into view data and call the existing API for user actions.

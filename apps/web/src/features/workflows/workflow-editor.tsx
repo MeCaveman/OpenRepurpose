@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 
-import { WorkflowRoute } from '../../components/patterns';
+import { WorkflowRoute, getPlatformMetadata } from '../../components/patterns';
 import {
   Alert,
   Button,
@@ -136,7 +136,7 @@ export function WorkflowEditor({
         .filter((account) => account.status === 'connected')
         .map((account) => ({
           value: `${account.provider}:${account.id}`,
-          label: `${account.displayName.trim() || 'Unnamed account'} · ${account.provider}`,
+          label: `${account.displayName.trim() || 'Unnamed account'} · ${getPlatformMetadata(account.provider).label}`,
           disabled: false,
         })),
       ...metaTargets.map((target) => ({

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ConnectionCard,
   JobStatus,
+  PlatformSectionHeader,
   ResourceEmptyState,
   WorkflowRoute,
   getPlatformMetadata,
@@ -30,6 +31,25 @@ describe('web domain patterns', () => {
     expect(markup).toContain('Connected');
     expect(markup).toContain('YT');
     expect(markup).toContain('var(--or-status-success-bg)');
+  });
+
+  it('uses one OpenRepurpose-owned section header for provider-aware setup surfaces', () => {
+    const markup = renderToStaticMarkup(
+      createElement(PlatformSectionHeader, {
+        description: 'Configure the local integration.',
+        headingId: 'provider-heading',
+        platform: 'tiktok',
+        title: 'Publishing credentials',
+        trailing: createElement('span', undefined, 'Configured'),
+      }),
+    );
+
+    expect(markup).toContain('aria-label="TikTok"');
+    expect(markup).toContain('Publishing credentials');
+    expect(markup).toContain('Configure the local integration.');
+    expect(markup).toContain('Configured');
+    expect(markup).toContain('var(--or-bg-selected)');
+    expect(markup).not.toMatch(/(?:bg|border|text)-(?:red|blue|pink|black|white)-/);
   });
 
   it.each([

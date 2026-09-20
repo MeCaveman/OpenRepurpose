@@ -92,7 +92,7 @@ describe('web workflows page', () => {
     expect(markup).toContain('>Filter<');
     expect(markup).toContain('>Schedule<');
     expect(markup).toContain('schedule-1');
-    expect(markup).toContain('>youtube<');
+    expect(markup).toContain('>YouTube<');
     expect(markup).toContain('1 workflow');
   });
 

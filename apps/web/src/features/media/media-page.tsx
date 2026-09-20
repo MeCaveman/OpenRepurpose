@@ -1,7 +1,11 @@
 import { useEffect, useId, useRef } from 'react';
 import type { FormEventHandler, RefObject } from 'react';
 
-import { PlatformIdentity, ResourceEmptyState } from '../../components/patterns';
+import {
+  PlatformIdentity,
+  ResourceEmptyState,
+  getPlatformMetadata,
+} from '../../components/patterns';
 import {
   Alert,
   Badge,
@@ -158,34 +162,27 @@ function PublishActions({
     ? 'Publishing is available after local media inspection succeeds.'
     : undefined;
   const unavailableReasonId = useId();
+  const platforms: readonly MediaPublishPlatform[] = hasTikTokAccount
+    ? ['youtube', 'tiktok']
+    : ['youtube'];
 
   return (
     <div className="grid gap-[var(--or-space-2)]">
       <div className="flex flex-wrap gap-[var(--or-space-2)]">
-        <Button
-          aria-describedby={unavailable ? unavailableReasonId : undefined}
-          data-media-id={asset.id}
-          data-media-publish-trigger="youtube"
-          disabled={disabled}
-          onClick={(event) => onBeginPublish(asset, 'youtube', event.currentTarget)}
-          size="sm"
-          variant="secondary"
-        >
-          Publish to YouTube
-        </Button>
-        {hasTikTokAccount && (
+        {platforms.map((platform) => (
           <Button
             aria-describedby={unavailable ? unavailableReasonId : undefined}
             data-media-id={asset.id}
-            data-media-publish-trigger="tiktok"
+            data-media-publish-trigger={platform}
             disabled={disabled}
-            onClick={(event) => onBeginPublish(asset, 'tiktok', event.currentTarget)}
+            key={platform}
+            onClick={(event) => onBeginPublish(asset, platform, event.currentTarget)}
             size="sm"
             variant="secondary"
           >
-            Publish to TikTok
+            Publish to {getPlatformMetadata(platform).label}
           </Button>
-        )}
+        ))}
       </div>
       {unavailableReason !== undefined && (
         <p
@@ -322,7 +319,7 @@ function PublishPanel({
 }) {
   const platformAccounts = accounts.filter((account) => account.provider === publish.platform);
   const isPublishing = activeAction === `publish:${publish.platform}`;
-  const platformLabel = publish.platform === 'youtube' ? 'YouTube' : 'TikTok';
+  const platformLabel = getPlatformMetadata(publish.platform).label;
 
   return (
     <Panel

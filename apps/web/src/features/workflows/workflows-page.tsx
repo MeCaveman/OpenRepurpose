@@ -1,6 +1,7 @@
 import {
   ResourceEmptyState,
   WorkflowCard,
+  getPlatformMetadata,
   type WorkflowRouteData,
   type WorkflowRouteNodeData,
 } from '../../components/patterns';
@@ -92,7 +93,7 @@ function toWorkflowRouteData(workflow: WorkflowView): WorkflowRouteData {
       destinations.push({
         detail: step.destination.accountId || 'Account not selected',
         kind: 'destination',
-        label: step.destination.destinationId,
+        label: getPlatformMetadata(step.destination.destinationId).label,
         platform: step.destination.destinationId,
         state: nodeState,
       });
@@ -104,7 +105,7 @@ function toWorkflowRouteData(workflow: WorkflowView): WorkflowRouteData {
       ...workflow.destinations.map((destination) => ({
         detail: destination.accountId || 'Account not selected',
         kind: 'destination' as const,
-        label: destination.destinationId,
+        label: getPlatformMetadata(destination.destinationId).label,
         platform: destination.destinationId,
         state: nodeState,
       })),

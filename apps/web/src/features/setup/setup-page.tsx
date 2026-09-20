@@ -1,4 +1,4 @@
-import { PlatformIdentity } from '../../components/patterns';
+import { PlatformSectionHeader } from '../../components/patterns';
 import { Alert, Badge, Button, Panel, Spinner } from '../../components/ui';
 
 export interface SetupCredentialStatusView {
@@ -39,25 +39,17 @@ function CredentialSetupPanel({
 
   return (
     <Panel aria-labelledby={headingId} padding="setup" surface="surface">
-      <div className="flex flex-col gap-[var(--or-space-4)] sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex min-w-0 items-start gap-[var(--or-space-3)]">
-          <PlatformIdentity platform={platform} showLabel={false} />
-          <div className="min-w-0">
-            <h2
-              className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
-              id={headingId}
-            >
-              {title}
-            </h2>
-            <p className="mt-[var(--or-space-1)] text-pretty text-[var(--or-text-secondary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
-              {description}
-            </p>
-          </div>
-        </div>
-        <Badge className="self-start" variant={configured ? 'success' : 'warning'}>
-          {configured ? 'Configured' : 'Action required'}
-        </Badge>
-      </div>
+      <PlatformSectionHeader
+        description={description}
+        headingId={headingId}
+        platform={platform}
+        title={title}
+        trailing={
+          <Badge variant={configured ? 'success' : 'warning'}>
+            {configured ? 'Configured' : 'Action required'}
+          </Badge>
+        }
+      />
 
       <dl className="mt-[var(--or-space-5)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-4)]">
         <div className="grid min-w-0 gap-[var(--or-space-1)] sm:grid-cols-[var(--or-shell-navigator-min-width)_minmax(0,1fr)] sm:gap-[var(--or-space-4)]">

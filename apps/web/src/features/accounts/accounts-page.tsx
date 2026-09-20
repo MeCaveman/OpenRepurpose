@@ -4,7 +4,9 @@ import {
   ConnectionCard,
   ConnectionStatus,
   PlatformIdentity,
+  PlatformSectionHeader,
   ResourceEmptyState,
+  getPlatformMetadata,
 } from '../../components/patterns';
 import {
   Alert,
@@ -129,28 +131,23 @@ function CredentialPanel({ children, description, platform, status, title }: Cre
 
   return (
     <Panel aria-labelledby={headingId} padding="setup" surface="surface">
-      <header className="flex flex-col gap-[var(--or-space-4)] sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex min-w-0 items-start gap-[var(--or-space-3)]">
-          <PlatformIdentity platform={platform} showLabel={false} />
-          <div className="min-w-0">
-            <h2
-              className="font-semibold tracking-[var(--or-tracking-section)] text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
-              id={headingId}
-            >
-              {title}
-            </h2>
-            <p className="mt-[var(--or-space-1)] max-w-[var(--or-empty-state-max-width)] text-pretty text-[var(--or-text-secondary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-body-line)]">
-              {description}
-            </p>
-          </div>
-        </div>
-        <Badge
-          className="self-start"
-          variant={status === undefined ? 'neutral' : status.configured ? 'success' : 'warning'}
-        >
-          {status === undefined ? 'Checking…' : status.configured ? 'Configured' : 'Setup required'}
-        </Badge>
-      </header>
+      <PlatformSectionHeader
+        description={description}
+        headingId={headingId}
+        platform={platform}
+        title={title}
+        trailing={
+          <Badge
+            variant={status === undefined ? 'neutral' : status.configured ? 'success' : 'warning'}
+          >
+            {status === undefined
+              ? 'Checking…'
+              : status.configured
+                ? 'Configured'
+                : 'Setup required'}
+          </Badge>
+        }
+      />
       {children}
     </Panel>
   );
@@ -172,48 +169,48 @@ function CallbackAddress({ children }: { readonly children: ReactNode }) {
 }
 
 function FeedbackAlerts({ feedback }: Pick<AccountsPageProps, 'feedback'>) {
-  const hasFeedback =
-    feedback.youtube === 'connected' ||
-    feedback.youtube === 'error' ||
-    feedback.tiktok === 'connected' ||
-    feedback.tiktok === 'error' ||
-    feedback.meta === 'connected' ||
-    feedback.meta === 'error';
+  const results = [
+    {
+      failure: 'Check the credential setup and try again.',
+      platform: 'youtube',
+      result: feedback.youtube,
+      success: 'The publishing account is ready to use.',
+    },
+    {
+      failure: 'Check the credential setup and granted scopes.',
+      platform: 'tiktok',
+      result: feedback.tiktok,
+      success: 'The publishing account is ready to use.',
+    },
+    {
+      failure: 'Check the app setup, granted permissions, and eligible publishing targets.',
+      platform: 'meta',
+      result: feedback.meta,
+      success: 'Available Pages and linked Instagram professional accounts were discovered.',
+    },
+  ] as const;
+  const visibleResults = results.filter(
+    (result) => result.result === 'connected' || result.result === 'error',
+  );
 
-  if (!hasFeedback) return null;
+  if (visibleResults.length === 0) return null;
 
   return (
     <div aria-label="Connection results" className="space-y-[var(--or-space-3)]">
-      {feedback.youtube === 'connected' && (
-        <Alert title="YouTube connected" variant="success">
-          The publishing account is ready to use.
-        </Alert>
-      )}
-      {feedback.youtube === 'error' && (
-        <Alert title="YouTube connection failed" variant="error">
-          Check the credential setup and try again.
-        </Alert>
-      )}
-      {feedback.tiktok === 'connected' && (
-        <Alert title="TikTok connected" variant="success">
-          The publishing account is ready to use.
-        </Alert>
-      )}
-      {feedback.tiktok === 'error' && (
-        <Alert title="TikTok connection failed" variant="error">
-          Check the credential setup and granted scopes.
-        </Alert>
-      )}
-      {feedback.meta === 'connected' && (
-        <Alert title="Meta connected" variant="success">
-          Available Pages and linked Instagram professional accounts were discovered.
-        </Alert>
-      )}
-      {feedback.meta === 'error' && (
-        <Alert title="Meta connection failed" variant="error">
-          Check the app setup, granted permissions, and eligible publishing targets.
-        </Alert>
-      )}
+      {visibleResults.map((result) => {
+        const metadata = getPlatformMetadata(result.platform);
+        const connected = result.result === 'connected';
+
+        return (
+          <Alert
+            key={result.platform}
+            title={`${metadata.label} ${connected ? 'connected' : 'connection failed'}`}
+            variant={connected ? 'success' : 'error'}
+          >
+            {connected ? result.success : result.failure}
+          </Alert>
+        );
+      })}
     </div>
   );
 }

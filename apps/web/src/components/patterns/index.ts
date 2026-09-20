@@ -8,6 +8,8 @@ export { getPlatformMetadata } from './platform-metadata';
 export type { KnownPlatform, PlatformMetadata } from './platform-metadata';
 export { PlatformIdentity } from './platform-identity';
 export type { PlatformIdentityProps } from './platform-identity';
+export { PlatformSectionHeader } from './platform-section-header';
+export type { PlatformSectionHeaderProps } from './platform-section-header';
 export { ResourceEmptyState } from './resource-empty-state';
 export type { ResourceEmptyStateProps } from './resource-empty-state';
 export { SourceStatus } from './source-status';

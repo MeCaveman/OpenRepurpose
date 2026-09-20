@@ -1,6 +1,6 @@
 import type { FormEventHandler, MouseEvent } from 'react';
 
-import { PlatformIdentity, ResourceEmptyState, SourceStatus } from '../../components/patterns';
+import { PlatformSectionHeader, ResourceEmptyState, SourceStatus } from '../../components/patterns';
 import {
   Alert,
   Badge,
@@ -179,44 +179,38 @@ function SourceConnection({
 
   return (
     <Panel aria-labelledby={headingId} padding="none" surface="surface">
-      <header className="flex flex-col gap-[var(--or-space-4)] border-b border-[var(--or-border-subtle)] p-[var(--or-pane-padding)] sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-[var(--or-space-3)]">
-            <PlatformIdentity platform={source.adapterId} showLabel={false} />
-            <h3
-              className="min-w-0 break-words font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
-              id={headingId}
+      <PlatformSectionHeader
+        className="border-b border-[var(--or-border-subtle)] p-[var(--or-pane-padding)]"
+        description={<SourceStatus status={source.status} />}
+        headingId={headingId}
+        headingLevel={3}
+        platform={source.adapterId}
+        title={source.displayName.trim() || 'Unnamed source'}
+        trailing={
+          <div className="flex flex-wrap gap-[var(--or-space-2)]">
+            <Button
+              disabled={hasActiveAction && !isPolling}
+              isLoading={isPolling}
+              loadingLabel="Polling…"
+              onClick={() => onAction(source.id, 'poll')}
+              size="sm"
+              variant="primary"
             >
-              {source.displayName.trim() || 'Unnamed source'}
-            </h3>
+              Poll now
+            </Button>
+            <Button
+              disabled={hasActiveAction && !isToggling}
+              isLoading={isToggling}
+              loadingLabel={toggleAction === 'pause' ? 'Pausing…' : 'Resuming…'}
+              onClick={() => onAction(source.id, toggleAction)}
+              size="sm"
+              variant="secondary"
+            >
+              {toggleAction === 'pause' ? 'Pause' : 'Resume'}
+            </Button>
           </div>
-          <div className="mt-[var(--or-space-2)]">
-            <SourceStatus status={source.status} />
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-[var(--or-space-2)]">
-          <Button
-            disabled={hasActiveAction && !isPolling}
-            isLoading={isPolling}
-            loadingLabel="Polling…"
-            onClick={() => onAction(source.id, 'poll')}
-            size="sm"
-            variant="primary"
-          >
-            Poll now
-          </Button>
-          <Button
-            disabled={hasActiveAction && !isToggling}
-            isLoading={isToggling}
-            loadingLabel={toggleAction === 'pause' ? 'Pausing…' : 'Resuming…'}
-            onClick={() => onAction(source.id, toggleAction)}
-            size="sm"
-            variant="secondary"
-          >
-            {toggleAction === 'pause' ? 'Pause' : 'Resume'}
-          </Button>
-        </div>
-      </header>
+        }
+      />
 
       <dl className="grid gap-[var(--or-space-3)] border-b border-[var(--or-border-subtle)] px-[var(--or-pane-padding)] py-[var(--or-space-3)] sm:grid-cols-2">
         <div className="min-w-0">
@@ -315,21 +309,12 @@ export function SourcesPage({
       )}
 
       <Panel aria-labelledby="add-source-title" padding="setup" surface="surface">
-        <header className="flex min-w-0 items-start gap-[var(--or-space-3)]">
-          <PlatformIdentity platform="youtube" showLabel={false} />
-          <div className="min-w-0">
-            <h2
-              className="font-semibold tracking-[var(--or-tracking-section)] text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
-              id="add-source-title"
-            >
-              Add a YouTube upload source
-            </h2>
-            <p className="mt-[var(--or-space-1)] max-w-[var(--or-empty-state-max-width)] text-pretty text-[var(--or-text-secondary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-body-line)]">
-              Detection uses the official YouTube Data API uploads playlist. It observes metadata
-              and does not download video bytes.
-            </p>
-          </div>
-        </header>
+        <PlatformSectionHeader
+          description="Detection uses the official YouTube Data API uploads playlist. It observes metadata and does not download video bytes."
+          headingId="add-source-title"
+          platform="youtube"
+          title="Add a YouTube upload source"
+        />
 
         {youtubeAccounts.length === 0 && !isLoading && (
           <Alert
