@@ -94,6 +94,8 @@ function appendOutputArguments(
   args.push(
     '-c:v',
     'libx264',
+    '-profile:v',
+    'baseline',
     '-preset',
     output.preset,
     '-crf',
@@ -102,7 +104,8 @@ function appendOutputArguments(
     output.pixelFormat,
   );
   if (output.maxFrameRate !== undefined) args.push('-r', String(output.maxFrameRate));
-  if (includeAudio && output.audioCodec === 'aac') args.push('-c:a', 'aac');
+  if (includeAudio && output.audioCodec === 'aac')
+    args.push('-c:a', 'aac', '-b:a', '128k', '-ar', '48000');
   else args.push('-an');
   args.push('-movflags', '+faststart');
 }

@@ -8,6 +8,7 @@ import {
   type JobHandlerContext,
   type JsonValue,
   type MediaProbe,
+  type MediaProbeMetadata,
   type MediaRepository,
   type TransformDerivative,
   type TransformDerivativeOutput,
@@ -455,6 +456,77 @@ function expectedDurationMillis(
   return duration === undefined ? undefined : Math.round(duration);
 }
 
+/**
+ * Reject a probe result that cannot satisfy the v0.6 CPU output contract before it is
+ * atomically published into the derivative cache. This deliberately checks only values
+ * that the typed plan controls; source-derived dimensions remain source-derived.
+ */
+function assertCoreTransformOutput(
+  plan: TransformPlan,
+  sourceHasAudio: boolean,
+  metadata: MediaProbeMetadata,
+): void {
+  const recipe = plan.destination?.recipe ?? plan.user;
+  const steps = [...plan.user.steps, ...(plan.destination?.recipe.steps ?? [])];
+  if (metadata.videoCodec?.toLowerCase() !== 'h264')
+    throw new JobExecutionError(
+      'TRANSFORM_OUTPUT_INVALID',
+      false,
+      'FFmpeg output must use the H.264 video codec.',
+    );
+
+  const lastFit = [...steps].reverse().find((step) => step.type === 'fit');
+  if (
+    lastFit !== undefined &&
+    recipe.output.maxWidth === undefined &&
+    recipe.output.maxHeight === undefined &&
+    (metadata.width !== lastFit.width || metadata.height !== lastFit.height)
+  )
+    throw new JobExecutionError(
+      'TRANSFORM_OUTPUT_INVALID',
+      false,
+      `FFmpeg output dimensions must be ${lastFit.width}x${lastFit.height}.`,
+    );
+  if (
+    (recipe.output.maxWidth !== undefined &&
+      metadata.width !== undefined &&
+      metadata.width > recipe.output.maxWidth) ||
+    (recipe.output.maxHeight !== undefined &&
+      metadata.height !== undefined &&
+      metadata.height > recipe.output.maxHeight)
+  )
+    throw new JobExecutionError(
+      'TRANSFORM_OUTPUT_INVALID',
+      false,
+      'FFmpeg output exceeds the configured maximum dimensions.',
+    );
+  if (
+    recipe.output.maxFrameRate !== undefined &&
+    metadata.frameRate !== undefined &&
+    metadata.frameRate > recipe.output.maxFrameRate + 0.01
+  )
+    throw new JobExecutionError(
+      'TRANSFORM_OUTPUT_INVALID',
+      false,
+      'FFmpeg output exceeds the configured maximum frame rate.',
+    );
+
+  const audioRemoved = steps.some((step) => step.type === 'audio' && step.mode === 'remove');
+  const expectAac = sourceHasAudio && !audioRemoved && recipe.output.audioCodec === 'aac';
+  if (expectAac && (!metadata.hasAudio || metadata.audioCodec?.toLowerCase() !== 'aac'))
+    throw new JobExecutionError(
+      'TRANSFORM_OUTPUT_INVALID',
+      false,
+      'FFmpeg output must preserve audio as AAC.',
+    );
+  if (!expectAac && metadata.hasAudio)
+    throw new JobExecutionError(
+      'TRANSFORM_OUTPUT_INVALID',
+      false,
+      'FFmpeg output must not contain audio.',
+    );
+}
+
 function derivativeIdFromInput(input: JsonValue): string {
   if (input === null || Array.isArray(input) || typeof input !== 'object')
     throw new JobExecutionError('INVALID_TRANSFORM_JOB', false, 'Transform job input is invalid.');
@@ -557,6 +629,11 @@ export class TransformJobHandler implements JobHandler {
           false,
           'FFmpeg produced output without required media metadata.',
         );
+      assertCoreTransformOutput(
+        derivative.provenance.normalizedPlan,
+        source.metadata.hasAudio,
+        metadata,
+      );
       if (context.signal.aborted)
         throw new TransformProcessError('TRANSFORM_CANCELLED', 'Transform was cancelled.', false);
       const finalized = await this.storage.finalize(paths);

@@ -367,6 +367,50 @@ describe('transform job execution and recovery', () => {
     }
   });
 
+  it('rejects a probe result that does not meet the H.264/AAC output contract', async () => {
+    const fixture = createTemporaryDatabase();
+    try {
+      const sourcePath = join(fixture.directory, 'source.mp4');
+      await writeFile(sourcePath, 'source');
+      const media = new SqliteMediaRepository(fixture.database);
+      media.create(sourceAsset(sourcePath));
+      const derivatives = new SqliteTransformDerivativeRepository(fixture.database);
+      derivatives.reserve({
+        id: 'derivative-wrong-codec',
+        identity: identity(),
+        sourceMediaId: 'source-media',
+        now: new Date(),
+      });
+      const handler = new TransformJobHandler(
+        derivatives,
+        media,
+        new LocalTransformOutputStorage(fixture.directory),
+        new WritingProcessRunner(),
+        {
+          probe: async () => ({
+            audioCodec: 'aac',
+            durationSeconds: 1,
+            hasAudio: true,
+            height: 240,
+            videoCodec: 'vp9',
+            width: 320,
+          }),
+        },
+        'ffmpeg',
+      );
+
+      await expect(
+        handler.execute({ derivativeId: 'derivative-wrong-codec' }, context()),
+      ).rejects.toMatchObject({ code: 'TRANSFORM_OUTPUT_INVALID' });
+      expect(derivatives.findById('derivative-wrong-codec')).toMatchObject({
+        errorCode: 'TRANSFORM_OUTPUT_INVALID',
+        status: 'failed',
+      });
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it('marks interrupted work failed and removes its partial output during recovery', async () => {
     const fixture = createTemporaryDatabase();
     try {

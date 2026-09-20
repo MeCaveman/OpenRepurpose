@@ -141,6 +141,11 @@ describe('transform recipes', () => {
         command: '-vf evil',
       }).success,
     ).toBe(false);
+    expect(
+      transformRecipeSchema.safeParse({
+        steps: [{ type: 'fit', mode: 'crop', width: 1_081, height: 1_920 }],
+      }).success,
+    ).toBe(false);
   });
 
   it('changes cache identity for every output-affecting identity input', () => {

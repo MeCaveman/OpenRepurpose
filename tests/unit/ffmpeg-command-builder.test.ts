@@ -43,6 +43,8 @@ describe('FFmpeg transform command builder', () => {
           "[aout]",
           "-c:v",
           "libx264",
+          "-profile:v",
+          "baseline",
           "-preset",
           "fast",
           "-crf",
@@ -53,6 +55,10 @@ describe('FFmpeg transform command builder', () => {
           "30",
           "-c:a",
           "aac",
+          "-b:a",
+          "128k",
+          "-ar",
+          "48000",
           "-movflags",
           "+faststart",
           "C:\\Output Files\\vertical.mp4",
@@ -91,6 +97,82 @@ describe('FFmpeg transform command builder', () => {
     expect(command.args).toContain('-an');
     expect(command.args).not.toContain('-c:a');
     expect(command.args).not.toContain('0:a:0?');
+  });
+
+  it.each([
+    [
+      'center crop',
+      { type: 'fit' as const, mode: 'crop' as const, width: 1080, height: 1920 },
+      'crop=1080:1920:(in_w-out_w)/2:(in_h-out_h)/2',
+    ],
+    [
+      'top crop',
+      {
+        type: 'fit' as const,
+        mode: 'crop' as const,
+        width: 1080,
+        height: 1920,
+        anchor: 'top' as const,
+      },
+      'crop=1080:1920:(in_w-out_w)/2:0',
+    ],
+    [
+      'bottom crop',
+      {
+        type: 'fit' as const,
+        mode: 'crop' as const,
+        width: 1080,
+        height: 1920,
+        anchor: 'bottom' as const,
+      },
+      'crop=1080:1920:(in_w-out_w)/2:in_h-out_h',
+    ],
+    [
+      'left crop',
+      {
+        type: 'fit' as const,
+        mode: 'crop' as const,
+        width: 1080,
+        height: 1920,
+        anchor: 'left' as const,
+      },
+      'crop=1080:1920:0:(in_h-out_h)/2',
+    ],
+    [
+      'right crop',
+      {
+        type: 'fit' as const,
+        mode: 'crop' as const,
+        width: 1080,
+        height: 1920,
+        anchor: 'right' as const,
+      },
+      'crop=1080:1920:in_w-out_w:(in_h-out_h)/2',
+    ],
+    [
+      'contain',
+      {
+        type: 'fit' as const,
+        mode: 'contain' as const,
+        width: 1080,
+        height: 1920,
+        backgroundColor: '#112233',
+      },
+      'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#112233',
+    ],
+    [
+      'stretch',
+      { type: 'fit' as const, mode: 'stretch' as const, width: 1080, height: 1920 },
+      'scale=1080:1920',
+    ],
+  ])('compiles %s fitting deterministically', (_name, step, expectedFilter) => {
+    const command = compileTransformCommand({
+      inputPath: 'source.mp4',
+      outputPath: 'output.mp4',
+      plan: { user: { steps: [step] } },
+    });
+    const filterComplex = command.args[command.args.indexOf('-filter_complex') + 1];
+    expect(filterComplex).toContain(expectedFilter);
   });
 });
 

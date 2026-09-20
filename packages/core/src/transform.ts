@@ -4,7 +4,15 @@ import { z } from 'zod';
 const nonEmptyIdentifier = z.string().trim().min(1).max(200);
 const milliseconds = z.number().int().nonnegative();
 const positiveMilliseconds = z.number().int().positive();
-const positiveDimension = z.number().int().min(2).max(16_384);
+// H.264 with yuv420p (the v1 reference output) requires chroma-aligned dimensions.
+// Rejecting odd dimensions at the typed boundary gives callers a stable, actionable error
+// instead of letting FFmpeg fail after a worker has already reserved disk space.
+const positiveDimension = z
+  .number()
+  .int()
+  .min(2)
+  .max(16_384)
+  .refine((value) => value % 2 === 0, 'must be even for H.264 yuv420p output');
 
 export const trimTransformSchema = z
   .object({
