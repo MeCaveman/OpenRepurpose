@@ -29,6 +29,7 @@ export const transformDerivatives = sqliteTable(
   'transform_derivatives',
   {
     id: text('id').primaryKey(),
+    dependsOnJobId: text('depends_on_job_id').references(() => jobs.id, { onDelete: 'restrict' }),
     sourceMediaId: text('source_media_id')
       .notNull()
       .references(() => mediaAssets.id, { onDelete: 'restrict' }),

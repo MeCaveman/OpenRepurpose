@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   JobService,
   MediaImportService,
+  WorkflowTransformService,
   WorkflowService,
   renderTemplate,
   sourceItemMatchesWorkflowFilters,
@@ -15,6 +16,7 @@ import {
   SqliteMediaRepository,
   SqliteSourceCursorRepository,
   SqliteWorkflowRepository,
+  SqliteTransformDerivativeRepository,
 } from '@openrepurpose/db';
 import { LocalMediaFileInspector, WatchedFolderRunner } from '@openrepurpose/media';
 import { createTemporaryDatabase } from '@openrepurpose/testkit';
@@ -286,5 +288,82 @@ describe('watched-folder workflows', () => {
         failurePolicy: 'all_or_nothing' as never,
       }),
     ).toThrow('Only best-effort destination execution is supported.');
+  });
+
+  it('fans compatible destinations out from one transform prerequisite and derivative', () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    const jobs = new JobService(new SqliteJobRepository(database), () => new Date(1_000));
+    const workflows = new WorkflowService(
+      new SqliteWorkflowRepository(database),
+      jobs,
+      () => new Date(1_000),
+      new WorkflowTransformService(
+        new SqliteTransformDerivativeRepository(database),
+        jobs,
+        { encoder: 'libx264', ffmpegVersion: 'test-ffmpeg' },
+        () => new Date(1_000),
+      ),
+    );
+    const workflow = workflows.create({
+      name: 'Vertical everywhere',
+      sourceDirectory: 'C:\\Media',
+      titleTemplate: '{{file.stem}}',
+      destinations: [
+        { destinationId: 'youtube', accountId: 'youtube-1', privacy: 'private' },
+        { destinationId: 'tiktok', accountId: 'tiktok-1', privacyLevel: 'SELF_ONLY' },
+      ],
+      definition: {
+        schemaVersion: 1,
+        steps: [
+          { id: 'source', kind: 'source', sourceType: 'watched_folder' },
+          {
+            id: 'vertical',
+            kind: 'transform',
+            plan: { user: { steps: [{ type: 'fit', mode: 'crop', width: 1080, height: 1920 }] } },
+          },
+          {
+            id: 'youtube',
+            kind: 'destination',
+            destination: { destinationId: 'youtube', accountId: 'youtube-1', privacy: 'private' },
+          },
+          {
+            id: 'tiktok',
+            kind: 'destination',
+            destination: {
+              destinationId: 'tiktok',
+              accountId: 'tiktok-1',
+              privacyLevel: 'SELF_ONLY',
+            },
+          },
+        ],
+        edges: [
+          { from: 'source', to: 'vertical' },
+          { from: 'vertical', to: 'youtube' },
+          { from: 'vertical', to: 'tiktok' },
+        ],
+      },
+    });
+    const media = {
+      id: 'media-1',
+      path: 'C:\\Media\\clip.mp4',
+      fingerprint: 'sha256:clip',
+      sizeBytes: 10,
+      modifiedAt: new Date(0),
+      createdAt: new Date(0),
+      state: 'available',
+      metadata: { hasAudio: true },
+    } as const;
+    new SqliteMediaRepository(database).create(media);
+    workflows.executeWatchedMedia(workflow.id, media);
+    const queued = jobs.list();
+    const transform = queued.find((job) => job.type === 'media.transform');
+    const publishes = queued.filter((job) => job.type !== 'media.transform');
+    expect(transform).toBeDefined();
+    expect(publishes).toHaveLength(2);
+    expect(publishes.map((job) => job.dependsOnJobId)).toEqual([transform?.id, transform?.id]);
+    expect(new Set(publishes.map((job) => (job.input as { mediaId: string }).mediaId)).size).toBe(
+      1,
+    );
   });
 });

@@ -82,6 +82,31 @@ describe('persistent jobs', () => {
     });
   });
 
+  it('does not claim a dependent job until its prerequisite succeeds', async () => {
+    temporary = createTemporaryDatabase();
+    const repository = new SqliteJobRepository(temporary.database);
+    const service = new JobService(repository, () => new Date(1_000));
+    const prerequisite = service.create({ type: 'transform', input: {} });
+    const dependent = service.create({
+      type: 'publish',
+      input: {},
+      dependsOnJobId: prerequisite.job.id,
+    });
+    const handled: string[] = [];
+    const runner = new JobRunner(
+      repository,
+      [
+        { type: 'transform', execute: async () => handled.push('transform') },
+        { type: 'publish', execute: async () => handled.push('publish') },
+      ],
+      { now: () => new Date(1_000), leaseDurationMs: 1_000 },
+    );
+    await runner.runOnce();
+    await runner.runOnce();
+    expect(handled).toEqual(['transform', 'publish']);
+    expect(repository.findById(dependent.job.id)?.status).toBe('succeeded');
+  });
+
   it('bounds concurrency and persists successful attempt history', async () => {
     temporary = createTemporaryDatabase();
     const repository = new SqliteJobRepository(temporary.database);

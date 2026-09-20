@@ -15,6 +15,8 @@ import {
   ScheduleService,
   SourceService,
   SourceWorkflowCoordinator,
+  DerivativeAwareMediaRepository,
+  WorkflowTransformService,
   WorkflowService,
   type JobHandler,
 } from '@openrepurpose/core';
@@ -37,6 +39,7 @@ import {
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
+  readFfmpegVersion,
   FfprobeMediaProbe,
   LocalManagedTemporaryStorage,
   LocalMediaFileInspector,
@@ -96,7 +99,6 @@ export async function startServer(): Promise<void> {
     config.appUrl,
   );
   const jobService = new JobService(jobRepository);
-  const workflowService = new WorkflowService(new SqliteWorkflowRepository(database), jobService);
   const mediaImportService =
     executables.ffprobe === undefined
       ? undefined
@@ -108,6 +110,22 @@ export async function startServer(): Promise<void> {
   const sourceExecutionRepository = new SqliteSourceWorkflowExecutionRepository(database);
   const managedTemporaryStorage = new LocalManagedTemporaryStorage(config.paths.dataDirectory);
   const transformDerivativeRepository = new SqliteTransformDerivativeRepository(database);
+  const transformMediaRepository = new DerivativeAwareMediaRepository(
+    mediaRepository,
+    transformDerivativeRepository,
+  );
+  const transformTool =
+    executables.ffmpeg === undefined
+      ? undefined
+      : { encoder: 'libx264', ffmpegVersion: await readFfmpegVersion(executables.ffmpeg) };
+  const workflowService = new WorkflowService(
+    new SqliteWorkflowRepository(database),
+    jobService,
+    undefined,
+    transformTool === undefined
+      ? undefined
+      : new WorkflowTransformService(transformDerivativeRepository, jobService, transformTool),
+  );
   const transformOutputStorage = new LocalTransformOutputStorage(config.paths.dataDirectory);
   const transformProcessRunner = new FfmpegProcessRunner(config.transformRunner);
   await new TransformRecoveryService(
@@ -157,24 +175,24 @@ export async function startServer(): Promise<void> {
   );
   const jobHandlers: JobHandler[] = [
     new YouTubeUploadJobHandler(
-      mediaRepository,
+      transformMediaRepository,
       new SqliteDestinationJobRepository(database),
       youtubeOAuthService,
     ),
     new TikTokDirectPostJobHandler(
-      mediaRepository,
+      transformMediaRepository,
       new SqliteDestinationJobRepository(database),
       tiktokOAuthService,
       secretStore,
     ),
     new InstagramReelsJobHandler(
-      mediaRepository,
+      transformMediaRepository,
       new SqliteDestinationJobRepository(database),
       new SqliteMetaCredentialRepository(database),
       secretStore,
     ),
     new FacebookReelsJobHandler(
-      mediaRepository,
+      transformMediaRepository,
       new SqliteDestinationJobRepository(database),
       new SqliteMetaCredentialRepository(database),
       secretStore,

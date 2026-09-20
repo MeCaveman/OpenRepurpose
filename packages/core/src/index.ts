@@ -9,6 +9,13 @@ import {
   type SourceMediaResolutionStrategy,
   type SourceRegistry,
 } from '@openrepurpose/platform-sdk';
+import {
+  createTransformCacheIdentity,
+  normalizeTransformPlan,
+  type TransformDerivativeRepository,
+  type TransformPlanInput,
+  type TransformToolIdentity,
+} from './transform.js';
 export type {
   SourceItemObservation,
   SourceJsonValue,
@@ -32,6 +39,7 @@ export interface MediaProbeMetadata {
 
 export interface MediaAsset {
   readonly createdAt: Date;
+  readonly dependsOnJobId?: string;
   readonly fingerprint: string;
   readonly id: string;
   readonly metadata: MediaProbeMetadata;
@@ -220,6 +228,7 @@ export interface Job {
   readonly cancellationRequestedAt?: Date;
   readonly completedAt?: Date;
   readonly createdAt: Date;
+  readonly dependsOnJobId?: string;
   readonly id: string;
   readonly idempotencyKey?: string;
   readonly input: JsonValue;
@@ -251,6 +260,7 @@ export interface EnqueueJobInput {
   readonly accountId?: string;
   readonly availableAt?: Date;
   readonly id: string;
+  readonly dependsOnJobId?: string;
   readonly idempotencyKey?: string;
   readonly input: JsonValue;
   readonly maxAttempts: number;
@@ -352,6 +362,8 @@ export interface CreateJobInput {
   readonly accountId?: string;
   readonly availableAt?: Date;
   readonly idempotencyKey?: string;
+  /** The job is claimable only after this prerequisite succeeds. */
+  readonly dependsOnJobId?: string;
   readonly input: JsonValue;
   readonly maxAttempts?: number;
   readonly platformId?: string;
@@ -403,6 +415,7 @@ export class JobService {
       ...(accountId === undefined ? {} : { accountId }),
       ...(input.availableAt === undefined ? {} : { availableAt: input.availableAt }),
       ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+      ...(input.dependsOnJobId === undefined ? {} : { dependsOnJobId: input.dependsOnJobId }),
     });
   }
 
@@ -791,11 +804,12 @@ export interface WorkflowFilterStep {
   readonly id: string;
   readonly kind: 'filter';
 }
-/** v0.5 intentionally supports only an explicit pass-through transform. */
+/** A pass-through remains valid for v0.5 plans; v0.6 recipes are normalized before execution. */
 export interface WorkflowTransformStep {
   readonly id: string;
   readonly kind: 'transform';
-  readonly operation: 'pass_through';
+  readonly operation?: 'pass_through';
+  readonly plan?: TransformPlanInput;
 }
 /** A scheduling boundary is compiled, but scheduling owns dispatch timing. */
 export interface WorkflowScheduleStep {
@@ -1723,8 +1737,11 @@ export function validateWorkflowDefinition(definition: WorkflowDefinition): void
   for (const step of definition.steps) {
     if (step.id.trim().length === 0) throw new Error('A workflow step ID is required.');
     if (steps.has(step.id)) throw new Error(`Duplicate workflow step ID: ${step.id}`);
-    if (step.kind === 'transform' && step.operation !== 'pass_through')
-      throw new Error('Unsupported workflow transform.');
+    if (step.kind === 'transform') {
+      if (step.plan === undefined && step.operation !== 'pass_through')
+        throw new Error('A workflow transform requires a typed recipe.');
+      if (step.plan !== undefined) normalizeTransformPlan(step.plan);
+    }
     if (step.kind === 'schedule' && step.scheduleId.trim().length === 0)
       throw new Error('A workflow schedule step requires a schedule ID.');
     steps.set(step.id, step);
@@ -2296,12 +2313,93 @@ function legacyWorkflowDefinition(
   };
 }
 
+/**
+ * Reserves one deterministic derivative and exposes its transform job as a durable prerequisite.
+ * Destination jobs retain their ordinary handlers; their media ID is the validated derivative ID.
+ */
+export class WorkflowTransformService {
+  public constructor(
+    private readonly derivatives: TransformDerivativeRepository,
+    private readonly jobs: JobService,
+    private readonly tool: TransformToolIdentity,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  public prepare(
+    media: MediaAsset,
+    plan: TransformPlanInput,
+  ): {
+    readonly mediaId: string;
+    readonly prerequisiteJobId?: string;
+  } {
+    const identity = createTransformCacheIdentity({
+      sourceFingerprint: media.fingerprint,
+      plan,
+      outputProfileVersion: 'common-mp4-v1',
+      tool: this.tool,
+    });
+    const reserved = this.derivatives.reserve({
+      id: randomUUID(),
+      identity,
+      now: this.now(),
+      sourceMediaId: media.id,
+    });
+    if (reserved.derivative.status === 'succeeded' && reserved.derivative.output !== undefined)
+      return { mediaId: reserved.derivative.id };
+    const transform = this.jobs.create({
+      type: 'media.transform',
+      idempotencyKey: `transform:${identity.cacheKey}`,
+      input: { derivativeId: reserved.derivative.id },
+      maxAttempts: 3,
+    });
+    return { mediaId: reserved.derivative.id, prerequisiteJobId: transform.job.id };
+  }
+}
+
+/** Read-only media-library view that makes validated derivatives publishable without duplicating them. */
+export class DerivativeAwareMediaRepository implements MediaRepository {
+  public constructor(
+    private readonly media: MediaRepository,
+    private readonly derivatives: TransformDerivativeRepository,
+  ) {}
+
+  public create(asset: MediaAsset): MediaAsset {
+    return this.media.create(asset);
+  }
+  public findByFingerprint(fingerprint: string): MediaAsset | undefined {
+    return this.media.findByFingerprint(fingerprint);
+  }
+  public findById(id: string): MediaAsset | undefined {
+    const asset = this.media.findById(id);
+    if (asset !== undefined) return asset;
+    const derivative = this.derivatives.findById(id);
+    if (derivative?.status !== 'succeeded' || derivative.output === undefined) return undefined;
+    return {
+      id: derivative.id,
+      fingerprint: derivative.cacheKey,
+      path: derivative.output.path,
+      sizeBytes: derivative.output.sizeBytes,
+      state: 'available',
+      createdAt: derivative.createdAt,
+      modifiedAt: derivative.updatedAt,
+      metadata: {
+        ...derivative.output.metadata,
+        durationSeconds: derivative.output.metadata.durationMillis / 1000,
+      },
+    };
+  }
+  public list(): readonly MediaAsset[] {
+    return this.media.list();
+  }
+}
+
 /** Workflow application service: validates user input and snapshots rendered metadata into jobs. */
 export class WorkflowService {
   public constructor(
     private readonly workflows: WorkflowRepository,
     private readonly jobs: JobService,
     private readonly now: () => Date = () => new Date(),
+    private readonly transforms?: WorkflowTransformService,
   ) {}
 
   public create(input: WorkflowInput): Workflow {
@@ -2382,11 +2480,26 @@ export class WorkflowService {
           intents === undefined ||
           intents.some((intent) => intent.destinationKey === destinationKey),
       );
+    const transformPlans = workflow.steps
+      .filter((step): step is WorkflowTransformStep => step.kind === 'transform')
+      .flatMap((step) => (step.plan === undefined ? [] : [step.plan]));
+    if (transformPlans.length > 1)
+      throw new Error(
+        'A workflow execution supports one transform recipe before destination fan-out.',
+      );
+    const prepared =
+      transformPlans.length === 0
+        ? { mediaId: media.id }
+        : this.transforms === undefined
+          ? (() => {
+              throw new Error('FFmpeg and ffprobe are required for workflow transforms.');
+            })()
+          : this.transforms.prepare(media, transformPlans[0]!);
     const destinations = destinationPlans.map(
       ({ destination, destinationKey }): WorkflowDestinationJobResult => {
         const common = {
           accountId: destination.accountId,
-          mediaId: media.id,
+          mediaId: prepared.mediaId,
           workflow: { id: workflow.id, name: workflow.name },
         };
         const result =
@@ -2410,6 +2523,9 @@ export class WorkflowService {
                       : { category: destination.category }),
                   },
                 },
+                ...(prepared.prerequisiteJobId === undefined
+                  ? {}
+                  : { dependsOnJobId: prepared.prerequisiteJobId }),
               })
             : destination.destinationId === 'tiktok'
               ? this.jobs.create({
@@ -2439,6 +2555,9 @@ export class WorkflowService {
                         : { disableStitch: destination.disableStitch }),
                     },
                   },
+                  ...(prepared.prerequisiteJobId === undefined
+                    ? {}
+                    : { dependsOnJobId: prepared.prerequisiteJobId }),
                 })
               : destination.destinationId === 'instagram'
                 ? this.jobs.create({
@@ -2450,7 +2569,7 @@ export class WorkflowService {
                       intents,
                     ),
                     input: {
-                      mediaId: media.id,
+                      mediaId: prepared.mediaId,
                       targetId: destination.accountId,
                       metadata: {
                         caption:
@@ -2462,6 +2581,9 @@ export class WorkflowService {
                           : { shareToFeed: destination.shareToFeed }),
                       },
                     },
+                    ...(prepared.prerequisiteJobId === undefined
+                      ? {}
+                      : { dependsOnJobId: prepared.prerequisiteJobId }),
                   })
                 : this.jobs.create({
                     type: 'facebook.reels.publish',
@@ -2472,7 +2594,7 @@ export class WorkflowService {
                       intents,
                     ),
                     input: {
-                      mediaId: media.id,
+                      mediaId: prepared.mediaId,
                       targetId: destination.accountId,
                       metadata: {
                         ...(destination.titleTemplate === undefined
@@ -2485,6 +2607,9 @@ export class WorkflowService {
                             }),
                       },
                     },
+                    ...(prepared.prerequisiteJobId === undefined
+                      ? {}
+                      : { dependsOnJobId: prepared.prerequisiteJobId }),
                   });
         return { destinationId: destination.destinationId, destinationKey, ...result };
       },

@@ -426,6 +426,28 @@ export async function discoverMediaExecutables(
   };
 }
 
+/** Reads the concrete FFmpeg build identifier for derivative cache provenance. */
+export async function readFfmpegVersion(executable: string): Promise<string> {
+  return new Promise((resolveVersion, rejectVersion) => {
+    const child = spawn(executable, ['-version'], {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    let output = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.once('error', rejectVersion);
+    child.once('exit', (code) => {
+      const first = output.split(/\r?\n/, 1)[0]?.trim();
+      if (code !== 0 || first === undefined || first.length === 0)
+        rejectVersion(new Error('Could not read FFmpeg version.'));
+      else resolveVersion(first);
+    });
+  });
+}
+
 export class LocalMediaFileInspector implements LocalFileInspector {
   public async inspect(inputPath: string) {
     if (inputPath.trim().length === 0) throw new Error('A media path is required.');

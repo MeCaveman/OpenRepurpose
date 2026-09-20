@@ -2575,6 +2575,7 @@ interface RawJobRow {
   readonly cancellation_requested_at: number | null;
   readonly completed_at: number | null;
   readonly created_at: number;
+  readonly depends_on_job_id: string | null;
   readonly id: string;
   readonly idempotency_key: string | null;
   readonly input_json: string;
@@ -2612,6 +2613,7 @@ function jobFromRow(row: RawJobRow): Job {
     attemptCount: row.attempt_count,
     availableAt: new Date(row.available_at),
     createdAt: new Date(row.created_at),
+    ...(row.depends_on_job_id === null ? {} : { dependsOnJobId: row.depends_on_job_id }),
     updatedAt: new Date(row.updated_at),
     ...(row.platform_id === null ? {} : { platformId: row.platform_id }),
     ...(row.account_id === null ? {} : { accountId: row.account_id }),
@@ -2666,8 +2668,8 @@ export class SqliteJobRepository implements JobRepository {
             id, type, status, input_json, idempotency_key, max_attempts, attempt_count,
             available_at, lease_owner, lease_expires_at, cancellation_requested_at,
             last_error_code, last_error_message, created_at, updated_at, completed_at,
-            platform_id, account_id
-          ) VALUES (?, ?, 'pending', ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, NULL, ?, ?)`,
+            platform_id, account_id, depends_on_job_id
+          ) VALUES (?, ?, 'pending', ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, NULL, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -2680,6 +2682,7 @@ export class SqliteJobRepository implements JobRepository {
           input.now.getTime(),
           input.platformId ?? null,
           input.accountId ?? null,
+          input.dependsOnJobId ?? null,
         );
       const row = client
         .prepare('SELECT * FROM jobs WHERE id = ?')
@@ -2744,12 +2747,28 @@ export class SqliteJobRepository implements JobRepository {
           return undefined;
         }
       }
+      // A dependent publish must never wait forever after a terminal transform failure. This is
+      // deliberately persisted (rather than inferred at read time) so source-execution recovery
+      // and the human job history receive the same durable failure signal.
+      client
+        .prepare(
+          `UPDATE jobs SET status = 'failed', last_error_code = 'JOB_DEPENDENCY_FAILED',
+             last_error_message = 'A prerequisite job did not succeed.', updated_at = ?, completed_at = ?
+           WHERE status IN ('pending', 'retrying') AND depends_on_job_id IN (
+             SELECT id FROM jobs WHERE status IN ('failed', 'cancelled')
+           )`,
+        )
+        .run(now.getTime(), now.getTime());
       const candidates = client
         .prepare(
           `SELECT * FROM jobs
            WHERE status IN ('pending', 'retrying')
              AND available_at <= ?
              AND cancellation_requested_at IS NULL
+             AND (depends_on_job_id IS NULL OR EXISTS (
+               SELECT 1 FROM jobs prerequisite
+               WHERE prerequisite.id = jobs.depends_on_job_id AND prerequisite.status = 'succeeded'
+             ))
              AND type IN (${placeholders})
            ORDER BY available_at ASC, created_at ASC, id ASC`,
         )
