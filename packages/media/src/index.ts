@@ -21,6 +21,8 @@ import {
   type TransformPlanInput,
 } from '@openrepurpose/core';
 
+export * from './transform-runner.js';
+
 export interface FfmpegCommand {
   /** Executable path/name to pass directly to child_process.spawn. */
   readonly executable: string;
@@ -117,7 +119,16 @@ export function compileTransformCommand(input: CompileTransformCommandInput): Ff
   const outputPath = nonBlankPath(input.outputPath, 'Transform output path');
   const recipe = plan.destination?.recipe ?? plan.user;
   const steps = [...plan.user.steps, ...(plan.destination?.recipe.steps ?? [])];
-  const args: string[] = ['-hide_banner', '-nostdin', '-y', '-i', inputPath];
+  const args: string[] = [
+    '-hide_banner',
+    '-nostdin',
+    '-nostats',
+    '-progress',
+    'pipe:1',
+    '-y',
+    '-i',
+    inputPath,
+  ];
   const graph: string[] = [];
   const videoFilters: string[] = [];
   const audioFilters: string[] = [];

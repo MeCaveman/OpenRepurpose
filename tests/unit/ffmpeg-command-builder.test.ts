@@ -29,6 +29,9 @@ describe('FFmpeg transform command builder', () => {
         "args": [
           "-hide_banner",
           "-nostdin",
+          "-nostats",
+          "-progress",
+          "pipe:1",
           "-y",
           "-i",
           "C:\\Media Files\\مقطع;not-a-command.mp4",

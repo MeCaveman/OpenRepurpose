@@ -78,6 +78,11 @@ describe('application configuration', () => {
       accountConcurrency: 2,
       authFailureThreshold: 5,
     });
+    expect(config.transformRunner).toEqual({
+      killGraceMs: 5_000,
+      stallTimeoutMs: 300_000,
+      timeoutMs: 21_600_000,
+    });
   });
 
   it('rejects invalid network configuration', () => {

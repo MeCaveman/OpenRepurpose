@@ -260,6 +260,16 @@ export interface TransformDerivativeOutput {
   readonly sizeBytes: number;
 }
 
+/** A durable, transport-neutral snapshot parsed from FFmpeg's key/value progress protocol. */
+export interface TransformProgress {
+  readonly frame?: number;
+  readonly framesPerSecond?: number;
+  readonly outTimeMillis: number;
+  readonly percent?: number;
+  readonly processedBytes?: number;
+  readonly speed?: number;
+}
+
 export interface TransformDerivativeProvenance {
   readonly encoder: string;
   readonly ffmpegVersion: string;
@@ -278,7 +288,45 @@ export interface TransformDerivative {
   readonly errorMessage?: string;
   readonly id: string;
   readonly output?: TransformDerivativeOutput;
+  readonly progress?: TransformProgress;
+  readonly progressUpdatedAt?: Date;
   readonly provenance: TransformDerivativeProvenance;
   readonly status: TransformDerivativeStatus;
   readonly updatedAt: Date;
+}
+
+export interface ReserveTransformDerivativeInput {
+  readonly id: string;
+  readonly identity: TransformCacheIdentity;
+  readonly now: Date;
+  readonly sourceMediaId: string;
+}
+
+export interface ReserveTransformDerivativeResult {
+  readonly created: boolean;
+  readonly derivative: TransformDerivative;
+}
+
+/** Durable lifecycle boundary used by transform application/worker code. */
+export interface TransformDerivativeRepository {
+  complete(id: string, output: TransformDerivativeOutput, now: Date): TransformDerivative;
+  fail(
+    id: string,
+    failure: { readonly code: string; readonly message: string },
+    now: Date,
+  ): TransformDerivative;
+  findByCacheKey(cacheKey: string): TransformDerivative | undefined;
+  findById(id: string): TransformDerivative | undefined;
+  invalidateSucceeded(
+    id: string,
+    failure: { readonly code: string; readonly message: string },
+    now: Date,
+  ): TransformDerivative;
+  list(status?: TransformDerivativeStatus): readonly TransformDerivative[];
+  markCancelled(id: string, now: Date): TransformDerivative;
+  markRunning(id: string, now: Date): TransformDerivative;
+  recoverRunning(now: Date): readonly TransformDerivative[];
+  reserve(input: ReserveTransformDerivativeInput): ReserveTransformDerivativeResult;
+  resetPending(id: string, now: Date): TransformDerivative;
+  updateProgress(id: string, progress: TransformProgress, now: Date): boolean;
 }

@@ -51,6 +51,8 @@ export const transformDerivatives = sqliteTable(
     outputHeight: integer('output_height'),
     outputFrameRateMilli: integer('output_frame_rate_milli'),
     outputHasAudio: integer('output_has_audio', { mode: 'boolean' }),
+    progressJson: text('progress_json'),
+    progressUpdatedAt: integer('progress_updated_at', { mode: 'timestamp_ms' }),
     errorCode: text('error_code'),
     errorMessage: text('error_message'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
@@ -64,6 +66,10 @@ export const transformDerivatives = sqliteTable(
     check(
       'transform_derivatives_normalized_plan_json_check',
       sql`json_valid(${table.normalizedPlanJson})`,
+    ),
+    check(
+      'transform_derivatives_progress_json_check',
+      sql`${table.progressJson} IS NULL OR json_valid(${table.progressJson})`,
     ),
     check(
       'transform_derivatives_success_output_check',

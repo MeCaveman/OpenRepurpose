@@ -31,6 +31,7 @@ import {
   SqliteSourceMediaResolutionRepository,
   SqliteSourcePollingRepository,
   SqliteSourceWorkflowExecutionRepository,
+  SqliteTransformDerivativeRepository,
   SqliteScheduleRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
@@ -39,6 +40,10 @@ import {
   FfprobeMediaProbe,
   LocalManagedTemporaryStorage,
   LocalMediaFileInspector,
+  LocalTransformOutputStorage,
+  FfmpegProcessRunner,
+  TransformJobHandler,
+  TransformRecoveryService,
   WatchedFolderRunner,
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
@@ -102,6 +107,13 @@ export async function startServer(): Promise<void> {
         );
   const sourceExecutionRepository = new SqliteSourceWorkflowExecutionRepository(database);
   const managedTemporaryStorage = new LocalManagedTemporaryStorage(config.paths.dataDirectory);
+  const transformDerivativeRepository = new SqliteTransformDerivativeRepository(database);
+  const transformOutputStorage = new LocalTransformOutputStorage(config.paths.dataDirectory);
+  const transformProcessRunner = new FfmpegProcessRunner(config.transformRunner);
+  await new TransformRecoveryService(
+    transformDerivativeRepository,
+    transformOutputStorage,
+  ).recover();
   const sourceCoordinator =
     mediaImportService === undefined
       ? undefined
@@ -174,6 +186,17 @@ export async function startServer(): Promise<void> {
       new SourceExecutionJobHandler(sourceCoordinator),
       new SourceCleanupJobHandler(sourceCoordinator),
     );
+  if (executables.ffmpeg !== undefined && executables.ffprobe !== undefined)
+    jobHandlers.push(
+      new TransformJobHandler(
+        transformDerivativeRepository,
+        mediaRepository,
+        transformOutputStorage,
+        transformProcessRunner,
+        new FfprobeMediaProbe(executables.ffprobe),
+        executables.ffmpeg,
+      ),
+    );
   const jobRunner = new JobRunner(jobRepository, jobHandlers, {
     ...config.jobRunner,
     ...(sourceCoordinator === undefined ? {} : { onJobSettled: () => sourceCoordinator.recover() }),
@@ -211,6 +234,7 @@ export async function startServer(): Promise<void> {
   let closing: Promise<void> | undefined;
   const close = () => {
     closing ??= (async () => {
+      await transformProcessRunner.stop();
       await jobRunner.stop();
       await sourcePollingRunner.stop();
       schedulerLoop.stop();
@@ -225,6 +249,7 @@ export async function startServer(): Promise<void> {
   try {
     await server.listen({ host: config.bindHost, port: config.port });
   } catch (error) {
+    await transformProcessRunner.stop();
     await jobRunner.stop();
     await sourcePollingRunner.stop();
     schedulerLoop.stop();

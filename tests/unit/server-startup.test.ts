@@ -21,6 +21,11 @@ function config(bindHost: string, appUrl = 'http://127.0.0.1:3000'): Application
       pollIntervalMs: 250,
       platformConcurrency: 2,
     },
+    transformRunner: {
+      killGraceMs: 5_000,
+      stallTimeoutMs: 300_000,
+      timeoutMs: 21_600_000,
+    },
     paths: {
       configDirectory: testDirectory,
       dataDirectory: resolve('test-results/data'),

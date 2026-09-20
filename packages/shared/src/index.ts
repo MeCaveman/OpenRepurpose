@@ -30,6 +30,11 @@ export interface ApplicationConfig {
     readonly pollIntervalMs: number;
     readonly platformConcurrency: number;
   };
+  readonly transformRunner: {
+    readonly killGraceMs: number;
+    readonly stallTimeoutMs: number;
+    readonly timeoutMs: number;
+  };
   readonly watchedFolder?: { readonly pollIntervalMs: number; readonly settleMs: number };
   readonly paths: ApplicationPaths;
   readonly port: number;
@@ -122,6 +127,9 @@ export function loadApplicationConfig(
       JOB_POLL_INTERVAL_MS: z.coerce.number().int().min(25).default(250),
       JOB_RETRY_BASE_MS: z.coerce.number().int().min(0).default(1_000),
       JOB_RETRY_MAX_MS: z.coerce.number().int().min(0).default(60_000),
+      TRANSFORM_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(21_600_000),
+      TRANSFORM_STALL_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(300_000),
+      TRANSFORM_KILL_GRACE_MS: z.coerce.number().int().min(0).default(5_000),
       WATCH_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(2_000),
       WATCH_SETTLE_MS: z.coerce.number().int().min(0).default(10_000),
     })
@@ -164,6 +172,11 @@ export function loadApplicationConfig(
       maxRetryDelayMs: parsed.JOB_RETRY_MAX_MS,
       pollIntervalMs: parsed.JOB_POLL_INTERVAL_MS,
       platformConcurrency: parsed.JOB_PLATFORM_CONCURRENCY,
+    },
+    transformRunner: {
+      killGraceMs: parsed.TRANSFORM_KILL_GRACE_MS,
+      stallTimeoutMs: parsed.TRANSFORM_STALL_TIMEOUT_MS,
+      timeoutMs: parsed.TRANSFORM_TIMEOUT_MS,
     },
     watchedFolder: {
       pollIntervalMs: parsed.WATCH_POLL_INTERVAL_MS,

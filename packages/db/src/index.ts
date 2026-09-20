@@ -4,7 +4,11 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { desc, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-sqlite';
-import { compileWorkflowExecutionPlan } from '@openrepurpose/core';
+import {
+  compileWorkflowExecutionPlan,
+  serializeNormalizedTransformPlan,
+  transformPlanSchema,
+} from '@openrepurpose/core';
 import type {
   AccountCapability,
   AccountProvider,
@@ -27,6 +31,8 @@ import type {
   JsonValue,
   MediaAsset,
   MediaRepository,
+  ReserveTransformDerivativeInput,
+  ReserveTransformDerivativeResult,
   SourceMediaArtifact,
   SourceMediaDescriptor,
   SourceMediaOwnership,
@@ -61,6 +67,11 @@ import type {
   WorkflowDestination,
   WorkflowRepository,
   RemoteWorkflowSource,
+  TransformDerivative,
+  TransformDerivativeOutput,
+  TransformDerivativeRepository,
+  TransformDerivativeStatus,
+  TransformProgress,
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
 import type { Migration } from './migrations/types.js';
@@ -243,6 +254,299 @@ export class SqliteMediaRepository implements MediaRepository {
         ...(row.frameRateMilli === null ? {} : { frameRate: row.frameRateMilli / 1000 }),
       },
     };
+  }
+}
+
+interface RawTransformDerivativeRow {
+  readonly cache_key: string;
+  readonly completed_at: number | null;
+  readonly created_at: number;
+  readonly encoder: string;
+  readonly error_code: string | null;
+  readonly error_message: string | null;
+  readonly ffmpeg_version: string;
+  readonly id: string;
+  readonly normalized_plan_json: string;
+  readonly output_audio_codec: string | null;
+  readonly output_duration_millis: number | null;
+  readonly output_frame_rate_milli: number | null;
+  readonly output_has_audio: number | null;
+  readonly output_height: number | null;
+  readonly output_path: string | null;
+  readonly output_profile_version: string;
+  readonly output_size_bytes: number | null;
+  readonly output_video_codec: string | null;
+  readonly output_width: number | null;
+  readonly progress_json: string | null;
+  readonly progress_updated_at: number | null;
+  readonly recipe_hash: string;
+  readonly source_fingerprint: string;
+  readonly source_media_id: string;
+  readonly status: TransformDerivativeStatus;
+  readonly updated_at: number;
+}
+
+function transformDerivativeFromRow(row: RawTransformDerivativeRow): TransformDerivative {
+  const output: TransformDerivativeOutput | undefined =
+    row.output_path === null ||
+    row.output_size_bytes === null ||
+    row.output_duration_millis === null ||
+    row.output_video_codec === null ||
+    row.output_width === null ||
+    row.output_height === null ||
+    row.output_has_audio === null
+      ? undefined
+      : {
+          path: row.output_path,
+          sizeBytes: row.output_size_bytes,
+          metadata: {
+            durationMillis: row.output_duration_millis,
+            hasAudio: row.output_has_audio === 1,
+            height: row.output_height,
+            videoCodec: row.output_video_codec,
+            width: row.output_width,
+            ...(row.output_audio_codec === null ? {} : { audioCodec: row.output_audio_codec }),
+            ...(row.output_frame_rate_milli === null
+              ? {}
+              : { frameRate: row.output_frame_rate_milli / 1000 }),
+          },
+        };
+  return {
+    cacheKey: row.cache_key,
+    createdAt: new Date(row.created_at),
+    id: row.id,
+    provenance: {
+      encoder: row.encoder,
+      ffmpegVersion: row.ffmpeg_version,
+      normalizedPlan: transformPlanSchema.parse(JSON.parse(row.normalized_plan_json)),
+      outputProfileVersion: row.output_profile_version,
+      recipeHash: row.recipe_hash,
+      sourceFingerprint: row.source_fingerprint,
+      sourceMediaId: row.source_media_id,
+    },
+    status: row.status,
+    updatedAt: new Date(row.updated_at),
+    ...(row.completed_at === null ? {} : { completedAt: new Date(row.completed_at) }),
+    ...(row.error_code === null ? {} : { errorCode: row.error_code }),
+    ...(row.error_message === null ? {} : { errorMessage: row.error_message }),
+    ...(output === undefined ? {} : { output }),
+    ...(row.progress_json === null
+      ? {}
+      : { progress: JSON.parse(row.progress_json) as TransformProgress }),
+    ...(row.progress_updated_at === null
+      ? {}
+      : { progressUpdatedAt: new Date(row.progress_updated_at) }),
+  };
+}
+
+/** Atomic SQLite reservation and lifecycle transitions for deterministic transform outputs. */
+export class SqliteTransformDerivativeRepository implements TransformDerivativeRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public reserve(input: ReserveTransformDerivativeInput): ReserveTransformDerivativeResult {
+    const result = this.database.client
+      .prepare(
+        `INSERT OR IGNORE INTO transform_derivatives (
+           id, source_media_id, source_fingerprint, cache_key, recipe_hash,
+           normalized_plan_json, output_profile_version, ffmpeg_version, encoder,
+           status, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      )
+      .run(
+        input.id,
+        input.sourceMediaId,
+        input.identity.sourceFingerprint,
+        input.identity.cacheKey,
+        input.identity.recipeHash,
+        serializeNormalizedTransformPlan(input.identity.normalizedPlan),
+        input.identity.outputProfileVersion,
+        input.identity.tool.ffmpegVersion,
+        input.identity.tool.encoder,
+        input.now.getTime(),
+        input.now.getTime(),
+      );
+    const derivative = this.findByCacheKey(input.identity.cacheKey);
+    if (derivative === undefined) throw new Error('Transform derivative reservation failed.');
+    return { created: Number(result.changes) === 1, derivative };
+  }
+
+  public findById(id: string): TransformDerivative | undefined {
+    return this.findOne('id', id);
+  }
+
+  public findByCacheKey(cacheKey: string): TransformDerivative | undefined {
+    return this.findOne('cache_key', cacheKey);
+  }
+
+  public list(status?: TransformDerivativeStatus): readonly TransformDerivative[] {
+    const rows = (status === undefined
+      ? this.database.client
+          .prepare('SELECT * FROM transform_derivatives ORDER BY created_at DESC')
+          .all()
+      : this.database.client
+          .prepare('SELECT * FROM transform_derivatives WHERE status = ? ORDER BY created_at DESC')
+          .all(status)) as unknown as RawTransformDerivativeRow[];
+    return rows.map(transformDerivativeFromRow);
+  }
+
+  public markRunning(id: string, now: Date): TransformDerivative {
+    const result = this.database.client
+      .prepare(
+        `UPDATE transform_derivatives
+         SET status = 'running', error_code = NULL, error_message = NULL,
+             completed_at = NULL, progress_json = NULL, progress_updated_at = NULL,
+             updated_at = ?
+         WHERE id = ? AND status IN ('pending', 'failed')`,
+      )
+      .run(now.getTime(), id);
+    if (Number(result.changes) !== 1)
+      throw new Error('Transform derivative is not available to run.');
+    return this.required(id);
+  }
+
+  public updateProgress(id: string, progress: TransformProgress, now: Date): boolean {
+    const result = this.database.client
+      .prepare(
+        `UPDATE transform_derivatives
+         SET progress_json = ?, progress_updated_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'running'`,
+      )
+      .run(JSON.stringify(progress), now.getTime(), now.getTime(), id);
+    return Number(result.changes) === 1;
+  }
+
+  public complete(id: string, output: TransformDerivativeOutput, now: Date): TransformDerivative {
+    const result = this.database.client
+      .prepare(
+        `UPDATE transform_derivatives
+         SET status = 'succeeded', output_path = ?, output_size_bytes = ?,
+             output_duration_millis = ?, output_video_codec = ?, output_audio_codec = ?,
+             output_width = ?, output_height = ?, output_frame_rate_milli = ?,
+             output_has_audio = ?, progress_json = NULL, progress_updated_at = NULL,
+             updated_at = ?, completed_at = ?
+         WHERE id = ? AND status = 'running'`,
+      )
+      .run(
+        output.path,
+        output.sizeBytes,
+        output.metadata.durationMillis,
+        output.metadata.videoCodec,
+        output.metadata.audioCodec ?? null,
+        output.metadata.width,
+        output.metadata.height,
+        output.metadata.frameRate === undefined
+          ? null
+          : Math.round(output.metadata.frameRate * 1000),
+        output.metadata.hasAudio ? 1 : 0,
+        now.getTime(),
+        now.getTime(),
+        id,
+      );
+    if (Number(result.changes) !== 1) throw new Error('Transform completion was not accepted.');
+    return this.required(id);
+  }
+
+  public fail(
+    id: string,
+    failure: { readonly code: string; readonly message: string },
+    now: Date,
+  ): TransformDerivative {
+    return this.finishWithoutOutput(id, 'failed', now, failure);
+  }
+
+  public markCancelled(id: string, now: Date): TransformDerivative {
+    return this.finishWithoutOutput(id, 'cancelled', now);
+  }
+
+  public invalidateSucceeded(
+    id: string,
+    failure: { readonly code: string; readonly message: string },
+    now: Date,
+  ): TransformDerivative {
+    const result = this.database.client
+      .prepare(
+        `UPDATE transform_derivatives
+         SET status = 'failed', output_path = NULL, output_size_bytes = NULL,
+             output_duration_millis = NULL, output_video_codec = NULL,
+             output_audio_codec = NULL, output_width = NULL, output_height = NULL,
+             output_frame_rate_milli = NULL, output_has_audio = NULL,
+             error_code = ?, error_message = ?, progress_json = NULL,
+             progress_updated_at = NULL, updated_at = ?, completed_at = ?
+         WHERE id = ? AND status = 'succeeded'`,
+      )
+      .run(failure.code, failure.message, now.getTime(), now.getTime(), id);
+    if (Number(result.changes) !== 1) throw new Error('Transform invalidation was rejected.');
+    return this.required(id);
+  }
+
+  public resetPending(id: string, now: Date): TransformDerivative {
+    const result = this.database.client
+      .prepare(
+        `UPDATE transform_derivatives
+         SET status = 'pending', error_code = NULL, error_message = NULL,
+             progress_json = NULL, progress_updated_at = NULL, completed_at = NULL, updated_at = ?
+         WHERE id = ? AND status IN ('failed', 'cancelled')`,
+      )
+      .run(now.getTime(), id);
+    if (Number(result.changes) !== 1) throw new Error('Transform derivative cannot be reset.');
+    return this.required(id);
+  }
+
+  public recoverRunning(now: Date): readonly TransformDerivative[] {
+    const running = this.list('running');
+    for (const derivative of running)
+      this.fail(
+        derivative.id,
+        {
+          code: 'TRANSFORM_INTERRUPTED',
+          message: 'The previous transform worker stopped before finalization.',
+        },
+        now,
+      );
+    return running.map((derivative) => this.required(derivative.id));
+  }
+
+  private finishWithoutOutput(
+    id: string,
+    status: 'cancelled' | 'failed',
+    now: Date,
+    failure?: { readonly code: string; readonly message: string },
+  ): TransformDerivative {
+    const result = this.database.client
+      .prepare(
+        `UPDATE transform_derivatives
+         SET status = ?, output_path = NULL, output_size_bytes = NULL,
+             output_duration_millis = NULL, output_video_codec = NULL,
+             output_audio_codec = NULL, output_width = NULL, output_height = NULL,
+             output_frame_rate_milli = NULL, output_has_audio = NULL,
+             error_code = ?, error_message = ?, progress_json = NULL,
+             progress_updated_at = NULL, updated_at = ?, completed_at = ?
+         WHERE id = ? AND status IN ('pending', 'running')`,
+      )
+      .run(
+        status,
+        status === 'failed' ? (failure?.code ?? 'TRANSFORM_FAILED') : null,
+        status === 'failed' ? (failure?.message ?? 'Transform failed.') : null,
+        now.getTime(),
+        now.getTime(),
+        id,
+      );
+    if (Number(result.changes) !== 1)
+      throw new Error(`Transform ${status} transition was rejected.`);
+    return this.required(id);
+  }
+
+  private findOne(column: 'cache_key' | 'id', value: string): TransformDerivative | undefined {
+    const row = this.database.client
+      .prepare(`SELECT * FROM transform_derivatives WHERE ${column} = ?`)
+      .get(value) as unknown as RawTransformDerivativeRow | undefined;
+    return row === undefined ? undefined : transformDerivativeFromRow(row);
+  }
+
+  private required(id: string): TransformDerivative {
+    const derivative = this.findById(id);
+    if (derivative === undefined) throw new Error('Transform derivative does not exist.');
+    return derivative;
   }
 }
 
