@@ -42,6 +42,19 @@ function sourceAsset(path: string): MediaAsset {
   };
 }
 
+function watermarkAsset(path: string, state: MediaAsset['state'] = 'available'): MediaAsset {
+  return {
+    id: 'watermark-media',
+    path,
+    fingerprint: 'sha256:watermark',
+    sizeBytes: 64,
+    modifiedAt: new Date(1),
+    createdAt: new Date(1),
+    state,
+    metadata: { hasAudio: false },
+  };
+}
+
 function identity() {
   return createTransformCacheIdentity({
     sourceFingerprint: 'sha256:source',
@@ -304,8 +317,10 @@ describe('FFmpeg progress and process lifecycle', () => {
 
 class WritingProcessRunner implements TransformProcessRunner {
   public calls = 0;
+  public command?: { readonly args: readonly string[] };
   public async run(command: { readonly args: readonly string[] }, options: RunFfmpegOptions) {
     this.calls += 1;
+    this.command = command;
     const outputPath = command.args.at(-1);
     if (outputPath === undefined) throw new Error('Missing output path.');
     options.onProgress?.({ outTimeMillis: 500, percent: 50 });
@@ -315,6 +330,100 @@ class WritingProcessRunner implements TransformProcessRunner {
 }
 
 describe('transform job execution and recovery', () => {
+  it('resolves a managed image watermark to looped FFmpeg input arguments', async () => {
+    const fixture = createTemporaryDatabase();
+    try {
+      const sourcePath = join(fixture.directory, 'source.mp4');
+      const watermarkPath = join(fixture.directory, 'brand mark.png');
+      await Promise.all([writeFile(sourcePath, 'source'), writeFile(watermarkPath, 'watermark')]);
+      const media = new SqliteMediaRepository(fixture.database);
+      media.create(sourceAsset(sourcePath));
+      media.create(watermarkAsset(watermarkPath));
+      const derivatives = new SqliteTransformDerivativeRepository(fixture.database);
+      const watermarkIdentity = createTransformCacheIdentity({
+        sourceFingerprint: 'sha256:source',
+        plan: { user: { steps: [{ type: 'watermark', assetId: 'watermark-media' }] } },
+        outputProfileVersion: 'common-mp4-v1',
+        tool: { encoder: 'libx264', ffmpegVersion: '8.0.1' },
+      });
+      derivatives.reserve({
+        id: 'derivative-watermark',
+        identity: watermarkIdentity,
+        sourceMediaId: 'source-media',
+        now: new Date(),
+      });
+      const processes = new WritingProcessRunner();
+      const handler = new TransformJobHandler(
+        derivatives,
+        media,
+        new LocalTransformOutputStorage(fixture.directory),
+        processes,
+        {
+          probe: async () => ({
+            audioCodec: 'aac',
+            durationSeconds: 1,
+            hasAudio: true,
+            height: 240,
+            videoCodec: 'h264',
+            width: 320,
+          }),
+        },
+        'ffmpeg',
+      );
+
+      await handler.execute({ derivativeId: 'derivative-watermark' }, context());
+      expect(processes.command?.args).toContain(watermarkPath);
+      expect(processes.command?.args).toContain('-loop');
+      expect(processes.command?.args).toContain('1');
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it('rejects unavailable or non-image watermark assets before spawning FFmpeg', async () => {
+    const fixture = createTemporaryDatabase();
+    try {
+      const sourcePath = join(fixture.directory, 'source.mp4');
+      await writeFile(sourcePath, 'source');
+      const media = new SqliteMediaRepository(fixture.database);
+      media.create(sourceAsset(sourcePath));
+      media.create(watermarkAsset(join(fixture.directory, 'brand.mp4')));
+      const derivatives = new SqliteTransformDerivativeRepository(fixture.database);
+      const watermarkIdentity = createTransformCacheIdentity({
+        sourceFingerprint: 'sha256:source',
+        plan: { user: { steps: [{ type: 'watermark', assetId: 'watermark-media' }] } },
+        outputProfileVersion: 'common-mp4-v1',
+        tool: { encoder: 'libx264', ffmpegVersion: '8.0.1' },
+      });
+      derivatives.reserve({
+        id: 'derivative-bad-watermark',
+        identity: watermarkIdentity,
+        sourceMediaId: 'source-media',
+        now: new Date(),
+      });
+      const processes = new WritingProcessRunner();
+      const handler = new TransformJobHandler(
+        derivatives,
+        media,
+        new LocalTransformOutputStorage(fixture.directory),
+        processes,
+        { probe: async () => ({ hasAudio: false }) },
+        'ffmpeg',
+      );
+
+      await expect(
+        handler.execute({ derivativeId: 'derivative-bad-watermark' }, context()),
+      ).rejects.toMatchObject({ code: 'WATERMARK_ASSET_INVALID' });
+      expect(processes.calls).toBe(0);
+      expect(derivatives.findById('derivative-bad-watermark')).toMatchObject({
+        errorCode: 'WATERMARK_ASSET_INVALID',
+        status: 'failed',
+      });
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it('writes a partial file, probes it, atomically finalizes it, and reuses valid success', async () => {
     const fixture = createTemporaryDatabase();
     try {

@@ -168,7 +168,10 @@ export function compileTransformCommand(input: CompileTransformCommandInput): Ff
       const assetPath = input.watermarkPaths?.[step.assetId];
       if (assetPath === undefined)
         throw new Error(`No local path was supplied for watermark asset "${step.assetId}".`);
-      args.push('-i', nonBlankPath(assetPath, `Watermark asset ${step.assetId}`));
+      // An image is a one-frame input by default. Loop it explicitly so an overlay remains
+      // available for the complete primary video, independently of image demuxer defaults.
+      // These remain individual argv entries, including on Windows paths with spaces/Unicode.
+      args.push('-loop', '1', '-i', nonBlankPath(assetPath, `Watermark asset ${step.assetId}`));
       if (videoFilters.length > 0) {
         graph.push(`${videoLabel}${videoFilters.join(',')}[v${watermarkInputIndex}]`);
         videoLabel = `[v${watermarkInputIndex}]`;
@@ -181,7 +184,7 @@ export function compileTransformCommand(input: CompileTransformCommandInput): Ff
         `[${watermarkInputIndex}:v:0]scale=iw*${step.scalePercent / 100}:-1,format=rgba,colorchannelmixer=aa=${step.opacity}[${watermarkLabel}]`,
       );
       graph.push(
-        `${videoLabel}[${watermarkLabel}]overlay=${overlay.x}:${overlay.y}:format=auto[${nextLabel}]`,
+        `${videoLabel}[${watermarkLabel}]overlay=${overlay.x}:${overlay.y}:format=auto:shortest=1[${nextLabel}]`,
       );
       videoLabel = `[${nextLabel}]`;
       watermarkInputIndex += 1;

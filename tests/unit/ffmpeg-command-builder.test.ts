@@ -78,6 +78,10 @@ describe('FFmpeg transform command builder', () => {
     expect(command.args).toContain('source; echo unsafe.mp4');
     expect(command.args).toContain('C:\\Images\\brand mark;still-safe.png');
     expect(command.args).not.toContain('source; echo unsafe.mp4 -i');
+    expect(command.args).toContain('-loop');
+    expect(command.args).toContain('1');
+    const filterComplex = command.args[command.args.indexOf('-filter_complex') + 1];
+    expect(filterComplex).toContain('overlay=main_w-overlay_w-24:24:format=auto:shortest=1');
     expect(() =>
       compileTransformCommand({
         inputPath: 'source.mp4',
@@ -97,6 +101,35 @@ describe('FFmpeg transform command builder', () => {
     expect(command.args).toContain('-an');
     expect(command.args).not.toContain('-c:a');
     expect(command.args).not.toContain('0:a:0?');
+  });
+
+  it('keeps preserve, normalize, gain, and remove-audio semantics deterministic', () => {
+    const normalized = compileTransformCommand({
+      inputPath: 'source.mp4',
+      outputPath: 'normalized.mp4',
+      plan: {
+        user: {
+          steps: [
+            { type: 'audio', mode: 'preserve' },
+            { type: 'audio', mode: 'normalize' },
+            { type: 'audio', mode: 'gain', gainDb: 2.5 },
+          ],
+        },
+      },
+    });
+    const normalizedGraph = normalized.args[normalized.args.indexOf('-filter_complex') + 1];
+    expect(normalizedGraph).toContain('loudnorm=I=-14:TP=-1.5:LRA=11,volume=2.5dB');
+    expect(normalized.args).toContain('[aout]');
+    expect(normalized.args).toContain('aac');
+
+    const removed = compileTransformCommand({
+      inputPath: 'source.mp4',
+      outputPath: 'muted.mp4',
+      plan: { user: { steps: [{ type: 'audio', mode: 'remove' }] } },
+    });
+    expect(removed.args).toContain('-an');
+    expect(removed.args).not.toContain('0:a:0?');
+    expect(removed.args).not.toContain('-c:a');
   });
 
   it.each([
@@ -238,6 +271,58 @@ describe('FFmpeg transform command integration', () => {
     });
     expect(metadata.durationSeconds).toBeGreaterThan(0.35);
     expect(metadata.durationSeconds).toBeLessThan(0.7);
+  });
+
+  integration('applies a looped image watermark while normalizing and gaining audio', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'openrepurpose-ffmpeg-'));
+    directories.push(directory);
+    const source = join(directory, 'source.mp4');
+    const watermark = join(directory, 'brand mark.bmp');
+    const output = join(directory, 'watermarked.mp4');
+    runFfmpeg([
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=160x120:rate=24',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=880',
+      '-t',
+      '1',
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      source,
+    ]);
+    runFfmpeg(['-f', 'lavfi', '-i', 'color=c=white:size=40x20', '-frames:v', '1', watermark]);
+    const command = compileTransformCommand({
+      inputPath: source,
+      outputPath: output,
+      sourceHasAudio: true,
+      watermarkPaths: { watermark },
+      plan: {
+        user: {
+          steps: [
+            { type: 'audio', mode: 'normalize' },
+            { type: 'audio', mode: 'gain', gainDb: -2 },
+            { type: 'watermark', assetId: 'watermark', position: 'bottom-right' },
+          ],
+          output: { crf: 28, preset: 'ultrafast' },
+        },
+      },
+    });
+    runFfmpeg(command.args);
+    await expect(new FfprobeMediaProbe('ffprobe').probe(output)).resolves.toMatchObject({
+      audioCodec: 'aac',
+      hasAudio: true,
+      height: 120,
+      videoCodec: 'h264',
+      width: 160,
+    });
   });
 });
 

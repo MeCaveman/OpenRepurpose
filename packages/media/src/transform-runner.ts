@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, readdir, realpath, rename, rm, statfs } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import {
   JobExecutionError,
   type JobHandler,
@@ -536,6 +536,48 @@ function derivativeIdFromInput(input: JsonValue): string {
   return derivativeId;
 }
 
+const watermarkImageExtensions = new Set([
+  '.bmp',
+  '.gif',
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.tif',
+  '.tiff',
+  '.webp',
+]);
+
+/**
+ * Resolves typed watermark asset references through the same local media repository used for
+ * transform sources. Recipes retain stable asset IDs; paths are deliberately late-bound and are
+ * never persisted in filter strings or treated as shell syntax.
+ */
+function resolveWatermarkPaths(
+  plan: TransformPlan,
+  media: MediaRepository,
+): Readonly<Record<string, string>> {
+  const paths: Record<string, string> = {};
+  const steps = [...plan.user.steps, ...(plan.destination?.recipe.steps ?? [])];
+  for (const step of steps) {
+    if (step.type !== 'watermark' || paths[step.assetId] !== undefined) continue;
+    const asset = media.findById(step.assetId);
+    if (asset === undefined || asset.state !== 'available')
+      throw new JobExecutionError(
+        'WATERMARK_ASSET_UNAVAILABLE',
+        false,
+        `Watermark asset "${step.assetId}" is unavailable.`,
+      );
+    if (!watermarkImageExtensions.has(extname(asset.path).toLowerCase()))
+      throw new JobExecutionError(
+        'WATERMARK_ASSET_INVALID',
+        false,
+        `Watermark asset "${step.assetId}" must be a supported image file.`,
+      );
+    paths[step.assetId] = asset.path;
+  }
+  return paths;
+}
+
 /** Persistent job handler that executes one reserved derivative through atomic finalization. */
 export class TransformJobHandler implements JobHandler {
   public readonly type = 'media.transform';
@@ -606,6 +648,7 @@ export class TransformJobHandler implements JobHandler {
         outputPath: paths.partialPath,
         plan: derivative.provenance.normalizedPlan,
         sourceHasAudio: source.metadata.hasAudio,
+        watermarkPaths: resolveWatermarkPaths(derivative.provenance.normalizedPlan, this.media),
       });
       const expectedDuration = expectedDurationMillis(derivative, source.metadata.durationSeconds);
       await this.processes.run(command, {
