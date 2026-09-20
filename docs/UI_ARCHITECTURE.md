@@ -10,27 +10,27 @@ This document defines how frontend code implements the permanent OpenRepurpose d
 
 The current frontend is React 19 with Vite 8 and Tailwind CSS 4.
 
-| Responsibility                         | Current path                                | Current shape                                                                                                                 |
-| -------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Browser entry                          | `apps/web/src/main.tsx`                     | Mounts `ErrorBoundary` and `App`                                                                                              |
-| Application routing and shell boundary | `apps/web/src/App.tsx`                      | Owns the route registry, page metadata, history navigation, global resource navigation, and shell composition                 |
-| Render failure boundary                | `apps/web/src/components/ErrorBoundary.tsx` | Shared class error boundary composed from `ErrorState` and `Button` primitives                                                |
-| UI primitives                          | `apps/web/src/components/ui/`               | Accessible, token-backed, domain-neutral controls and their internal style helpers                                            |
-| Layout components                      | `apps/web/src/components/layout/`           | Token-backed application shell, command bar, resource navigation, workspace, page header, and skip-link composition           |
-| Domain patterns                        | `apps/web/src/components/patterns/`         | Reusable platform identity, connection/source status, workflow-route, job-status, and resource-empty-state presentation       |
-| Accounts feature presentation          | `apps/web/src/features/accounts/`           | Credential, Meta-target, capability, connection-result, and connected-account presentation using normalized view contracts    |
-| Overview feature presentation          | `apps/web/src/features/overview/`           | Static local-workbench orientation using existing routes; introduces no overview API or speculative status                    |
-| Setup feature presentation             | `apps/web/src/features/setup/`              | Setup readiness page composed from shared primitives and platform identity; receives normalized status from `App.tsx`         |
-| Sources feature presentation           | `apps/web/src/features/sources/`            | Remote-source setup, polling health, observed-media lifecycle, and source-action presentation using normalized view contracts |
-| Workflows feature presentation         | `apps/web/src/features/workflows/`          | Structured route editor, route normalization, loading/error/empty states, and saved-workflow presentation                     |
-| Jobs feature presentation              | `apps/web/src/features/jobs/`               | Responsive execution ledger, cancellation state, destination checkpoints, and contextual attempt-history presentation         |
-| Settings feature presentation          | `apps/web/src/features/settings/`           | Static configuration-ownership map and local-installation policy; introduces no settings API or editable preferences          |
-| Media feature presentation             | `apps/web/src/features/media/`              | Local import, responsive persisted-media ledger, and progressively disclosed direct-publish preparation                       |
-| Unknown-route presentation             | `apps/web/src/features/not-found/`          | Existing fallback state with a semantic recovery path to the current Dashboard route                                          |
-| Global CSS entry                       | `apps/web/src/styles.css`                   | Imports Tailwind and token layers; applies global focus, selection, font, surface, and reduced-motion behavior                |
-| Reference tokens                       | `apps/web/src/styles/tokens/reference.css`  | Raw values                                                                                                                    |
-| Semantic tokens                        | `apps/web/src/styles/tokens/semantic.css`   | Dark/light meanings plus Tailwind and shadcn-compatible aliases                                                               |
-| Component tokens                       | `apps/web/src/styles/tokens/components.css` | Stable component and shell measurements                                                                                       |
+| Responsibility                         | Current path                                | Current shape                                                                                                                           |
+| -------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser entry                          | `apps/web/src/main.tsx`                     | Mounts `ErrorBoundary` and `App`                                                                                                        |
+| Application routing and shell boundary | `apps/web/src/App.tsx`                      | Owns the route registry, page metadata, history navigation, global resource navigation, and shell composition                           |
+| Render failure boundary                | `apps/web/src/components/ErrorBoundary.tsx` | Shared class error boundary composed from `ErrorState` and `Button` primitives                                                          |
+| UI primitives                          | `apps/web/src/components/ui/`               | Accessible, token-backed, domain-neutral controls and their internal style helpers                                                      |
+| Layout components                      | `apps/web/src/components/layout/`           | Token-backed application shell, command bar, resource navigation, workspace, page header, and skip-link composition                     |
+| Domain patterns                        | `apps/web/src/components/patterns/`         | Reusable platform identity, connection/source status, workflow-route, job-status, and resource-empty-state presentation                 |
+| Accounts feature presentation          | `apps/web/src/features/accounts/`           | Credential, Meta-target, capability, connection-result, and connected-account presentation using normalized view contracts              |
+| Overview feature presentation          | `apps/web/src/features/overview/`           | Static local-workbench orientation using existing routes; introduces no overview API or speculative status                              |
+| Setup feature presentation             | `apps/web/src/features/setup/`              | Setup readiness page composed from shared primitives and platform identity; receives normalized status from `App.tsx`                   |
+| Sources feature presentation           | `apps/web/src/features/sources/`            | Remote-source setup, polling health, observed-media lifecycle, and source-action presentation using normalized view contracts           |
+| Workflows feature presentation         | `apps/web/src/features/workflows/`          | Structured route editor, route normalization, loading/error/empty states, and saved-workflow presentation                               |
+| Jobs feature presentation              | `apps/web/src/features/jobs/`               | Responsive execution ledger, cancellation state, destination checkpoints, and contextual attempt-history presentation                   |
+| Settings feature presentation          | `apps/web/src/features/settings/`           | Static configuration-ownership map and local-installation policy; introduces no settings API or editable preferences                    |
+| Media feature presentation             | `apps/web/src/features/media/`              | Local import, responsive persisted-media ledger, and progressively disclosed direct-publish preparation                                 |
+| Unknown-route presentation             | `apps/web/src/features/not-found/`          | Existing fallback state with a semantic recovery path to the current Dashboard route                                                    |
+| Global CSS entry                       | `apps/web/src/styles.css`                   | Imports self-hosted font faces, Tailwind, and token layers; applies global focus, selection, font, surface, and reduced-motion behavior |
+| Reference tokens                       | `apps/web/src/styles/tokens/reference.css`  | Raw values                                                                                                                              |
+| Semantic tokens                        | `apps/web/src/styles/tokens/semantic.css`   | Dark/light meanings plus Tailwind and shadcn-compatible aliases                                                                         |
+| Component tokens                       | `apps/web/src/styles/tokens/components.css` | Stable component and shell measurements                                                                                                 |
 
 The current routes are `/`, `/setup`, `/accounts`, `/sources`, `/media`, `/workflows`, `/jobs`, and `/settings`, plus the existing unknown-route fallback. Routing semantics are currently owned by `App.tsx`; this document does not change them.
 
@@ -134,6 +134,8 @@ The only token source is:
 - `apps/web/src/styles/tokens/components.css`
 
 `apps/web/src/styles.css` owns import order and global defaults. Canonical token names begin with `--or-`. Tailwind v4 aliases and shadcn-compatible variables in `semantic.css` resolve to those canonical tokens and must not gain independent values.
+
+The approved primary families are self-hosted through exact Fontsource dependencies: Geist Latin 400/500/600 for interface text and JetBrains Mono Latin 400/600 for technical text. The imported package CSS declares `font-display: swap`, Vite bundles the font assets, and the application makes no runtime font request. Family stacks remain reference tokens; feature code selects technical typography only through `--or-font-technical`.
 
 Styling conventions:
 
@@ -275,7 +277,6 @@ These decisions are intentionally unresolved because v0.5 does not yet require o
 - Whether pathname/history routing should remain custom or move to a routing library during modularization.
 - Whether future frontend scale justifies a shared data-fetching/cache library; no such dependency exists today.
 - Which accessible shadcn-compatible headless dependency to use when the first stateful composite primitive such as a dialog or popover is required; native controls cover the current Phase 7 set.
-- The repository asset mechanism and licensing record for self-hosted Fira Sans and Fira Mono binaries.
 - Whether a future graphical workflow canvas needs a dedicated library; the current editor does not establish that requirement.
 
 Resolve each only in the work packet that demonstrates the need. Do not preemptively add infrastructure.

@@ -23,17 +23,17 @@
   --or-ink-940: #101419;
   --or-ink-950: #0d1014;
 
-  /* OpenRepurpose routing copper */
-  --or-copper-50: #fff4ed;
-  --or-copper-100: #ffe4d3;
-  --or-copper-200: #ffc7a6;
-  --or-copper-300: #f5a273;
-  --or-copper-400: #e78652;
-  --or-copper-500: #cb6c3d;
-  --or-copper-600: #a95330;
-  --or-copper-700: #844027;
-  --or-copper-800: #623120;
-  --or-copper-900: #45231a;
+  /* OpenRepurpose routing teal */
+  --or-teal-50: #edfbf9;
+  --or-teal-100: #d6f4f0;
+  --or-teal-200: #abe5de;
+  --or-teal-300: #83d5cb;
+  --or-teal-400: #68c6bb;
+  --or-teal-500: #49b2a5;
+  --or-teal-600: #348e84;
+  --or-teal-700: #28726b;
+  --or-teal-800: #1f5752;
+  --or-teal-900: #153c38;
 
   /* Success signal */
   --or-green-100: #e1f5e7;
@@ -49,7 +49,7 @@
   --or-blue-700: #27659f;
   --or-blue-900: #163a5d;
 
-  /* Warning signal; deliberately yellower than routing copper */
+  /* Warning signal; deliberately distinct from routing teal */
   --or-yellow-100: #fff1c2;
   --or-yellow-300: #eec65b;
   --or-yellow-500: #b98a20;
@@ -63,11 +63,12 @@
   --or-red-700: #93363b;
   --or-red-900: #4d2023;
 
-  /* Typography. Font files are not bundled yet; approved local fallbacks remain active. */
+  /* Typography. Primary families are bundled; fallbacks cover asset-load failure. */
   --or-font-interface:
-    'Fira Sans', ui-sans-serif, system-ui, -apple-system, blinkmacsystemfont, 'Segoe UI', sans-serif;
+    'Geist', ui-sans-serif, system-ui, -apple-system, blinkmacsystemfont, 'Segoe UI', sans-serif;
   --or-font-technical:
-    'Fira Mono', ui-monospace, sfmono-regular, consolas, 'Liberation Mono', monospace;
+    'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', consolas, 'Liberation Mono',
+    monospace;
   --or-font-weight-regular: 400;
   --or-font-weight-medium: 500;
   --or-font-weight-semibold: 600;

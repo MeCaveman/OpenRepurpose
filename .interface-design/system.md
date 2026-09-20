@@ -1,6 +1,6 @@
 # OpenRepurpose Design System
 
-**Version:** OpenRepurpose Design System: 1.0  
+**Version:** OpenRepurpose Design System: 2.0
 **Status:** Permanent visual specification  
 **Source of truth:** the implemented CSS tokens under `apps/web/src/styles/tokens/`
 
@@ -54,17 +54,17 @@ The neutral palette is warm enough to feel approachable while remaining appropri
 | `--or-ink-900` | `#191e24` | `--or-ink-925` | `#13171c` |
 | `--or-ink-940` | `#101419` | `--or-ink-950` | `#0d1014` |
 
-Routing copper identifies OpenRepurpose, deliberate selection, and active workflow paths. It is not a general warning color.
+Routing teal identifies OpenRepurpose, deliberate selection, and active workflow paths. It is not a status color.
 
-| Token             | Value     | Token             | Value     |
-| ----------------- | --------- | ----------------- | --------- |
-| `--or-copper-50`  | `#fff4ed` | `--or-copper-100` | `#ffe4d3` |
-| `--or-copper-200` | `#ffc7a6` | `--or-copper-300` | `#f5a273` |
-| `--or-copper-400` | `#e78652` | `--or-copper-500` | `#cb6c3d` |
-| `--or-copper-600` | `#a95330` | `--or-copper-700` | `#844027` |
-| `--or-copper-800` | `#623120` | `--or-copper-900` | `#45231a` |
+| Token           | Value     | Token           | Value     |
+| --------------- | --------- | --------------- | --------- |
+| `--or-teal-50`  | `#edfbf9` | `--or-teal-100` | `#d6f4f0` |
+| `--or-teal-200` | `#abe5de` | `--or-teal-300` | `#83d5cb` |
+| `--or-teal-400` | `#68c6bb` | `--or-teal-500` | `#49b2a5` |
+| `--or-teal-600` | `#348e84` | `--or-teal-700` | `#28726b` |
+| `--or-teal-800` | `#1f5752` | `--or-teal-900` | `#153c38` |
 
-Status palettes keep operational meaning distinct from copper.
+Status palettes keep operational meaning distinct from teal.
 
 | Meaning                      | 100       | 300       | 500       | 700       | 900       |
 | ---------------------------- | --------- | --------- | --------- | --------- | --------- |
@@ -75,16 +75,17 @@ Status palettes keep operational meaning distinct from copper.
 
 ### Typography
 
-The approved interface family is Fira Sans and the approved technical family is Fira Mono.
+The approved interface family is Geist and the approved technical family is JetBrains Mono.
 
 ```css
 --or-font-interface:
-  'Fira Sans', ui-sans-serif, system-ui, -apple-system, blinkmacsystemfont, 'Segoe UI', sans-serif;
+  'Geist', ui-sans-serif, system-ui, -apple-system, blinkmacsystemfont, 'Segoe UI', sans-serif;
 --or-font-technical:
-  'Fira Mono', ui-monospace, sfmono-regular, consolas, 'Liberation Mono', monospace;
+  'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', consolas, 'Liberation Mono',
+  monospace;
 ```
 
-The font binaries are not yet bundled. The approved fallback stacks above are the current implementation and must remain in place until the repository's asset mechanism safely self-hosts the approved families. A different design font must not be substituted silently.
+The Latin subsets are self-hosted through pinned Fontsource packages distributed under OFL-1.1. Geist ships weights 400, 500, and 600; JetBrains Mono ships weights 400 and 600. Each bundled face uses `font-display: swap`. The fallback stacks cover asset-load failure only and are not substitutes for the approved primary families.
 
 | Role      | Size / line height     | Intended use                                   |
 | --------- | ---------------------- | ---------------------------------------------- |
@@ -166,35 +167,35 @@ Dark is the shipped default through `:root` and `[data-theme='dark']`. Light is 
 
 ### Surfaces, text, and structure
 
-| Semantic token                           | Dark mapping             | Light mapping            |
-| ---------------------------------------- | ------------------------ | ------------------------ |
-| `--or-bg-canvas`, `--or-bg-shell`        | ink 950                  | ink 100                  |
-| `--or-bg-workspace`                      | ink 940                  | ink 25                   |
-| `--or-bg-navigator`, `--or-bg-inspector` | ink 925                  | ink 50                   |
-| `--or-bg-surface`                        | ink 900                  | ink 0                    |
-| `--or-bg-surface-raised`                 | ink 850                  | ink 0                    |
-| `--or-bg-overlay`                        | ink 800                  | ink 0                    |
-| `--or-bg-control`                        | `#0b0e12`                | ink 100                  |
-| `--or-bg-hover`                          | ink 850                  | `rgb(214 212 205 / 0.6)` |
-| `--or-bg-selected`                       | `rgb(231 134 82 / 0.14)` | copper 100               |
-| `--or-bg-backdrop`                       | `rgb(0 0 0 / 0.64)`      | `rgb(13 16 20 / 0.36)`   |
-| `--or-text-primary`                      | ink 50                   | ink 950                  |
-| `--or-text-secondary`                    | ink 200                  | ink 800                  |
-| `--or-text-tertiary`                     | ink 400                  | ink 600                  |
-| `--or-text-disabled`                     | ink 500                  | ink 400                  |
-| `--or-text-inverse`                      | ink 950                  | ink 0                    |
-| `--or-text-link`                         | copper 300               | copper 700               |
-| `--or-border-subtle`                     | warm white at 7%         | ink 200                  |
-| `--or-border-default`                    | warm white at 11%        | ink 300                  |
-| `--or-border-strong`                     | warm white at 18%        | ink 400                  |
-| `--or-border-selected`                   | copper 400               | copper 700               |
-| `--or-focus-ring`                        | blue 300                 | blue 700                 |
+| Semantic token                           | Dark mapping        | Light mapping            |
+| ---------------------------------------- | ------------------- | ------------------------ |
+| `--or-bg-canvas`, `--or-bg-shell`        | ink 950             | ink 100                  |
+| `--or-bg-workspace`                      | ink 940             | ink 25                   |
+| `--or-bg-navigator`, `--or-bg-inspector` | ink 925             | ink 50                   |
+| `--or-bg-surface`                        | ink 900             | ink 0                    |
+| `--or-bg-surface-raised`                 | ink 850             | ink 0                    |
+| `--or-bg-overlay`                        | ink 800             | ink 0                    |
+| `--or-bg-control`                        | `#0b0e12`           | ink 100                  |
+| `--or-bg-hover`                          | ink 850             | `rgb(214 212 205 / 0.6)` |
+| `--or-bg-selected`                       | teal 500 at 15%     | teal 100                 |
+| `--or-bg-backdrop`                       | `rgb(0 0 0 / 0.64)` | `rgb(13 16 20 / 0.36)`   |
+| `--or-text-primary`                      | ink 50              | ink 950                  |
+| `--or-text-secondary`                    | ink 200             | ink 800                  |
+| `--or-text-tertiary`                     | ink 400             | ink 600                  |
+| `--or-text-disabled`                     | ink 500             | ink 400                  |
+| `--or-text-inverse`                      | ink 950             | ink 0                    |
+| `--or-text-link`, `--or-text-accent`     | teal 300            | teal 700                 |
+| `--or-border-subtle`                     | warm white at 7%    | ink 200                  |
+| `--or-border-default`                    | warm white at 11%   | ink 300                  |
+| `--or-border-strong`                     | warm white at 18%   | ink 400                  |
+| `--or-border-selected`                   | teal 500            | teal 700                 |
+| `--or-focus-ring`                        | blue 300            | blue 700                 |
 
 Controls inherit semantic control backgrounds, text, placeholders, and borders. Disabled controls use ink 900/500 in dark and ink 100/400 in light.
 
 ### Actions and status
 
-Primary actions use copper 400/300/500 in dark and copper 700/800/900 in light for default/hover/active. Secondary and ghost actions use neutral surfaces. Destructive actions use red 500/300 in dark and red 700/900 in light. Disabled action values remain neutral.
+Primary actions use teal 500/400/600 in dark and teal 700/800/900 in light for default/hover/active. Secondary and ghost actions use neutral surfaces. Destructive actions use red 500/300 in dark and red 700/900 in light. Disabled action values remain neutral.
 
 | Meaning     | Dark foreground / background / border              | Light foreground / background / border |
 | ----------- | -------------------------------------------------- | -------------------------------------- |
@@ -210,17 +211,17 @@ Status color never carries meaning alone. Pair it with text, an icon, a route pa
 
 Workflow routes map as follows:
 
-| Route state | Dark          | Light         |
-| ----------- | ------------- | ------------- |
-| Default     | strong border | strong border |
-| Selected    | copper 400    | copper 700    |
-| Running     | blue 300      | blue 700      |
-| Completed   | green 300     | green 700     |
-| Waiting     | yellow 300    | yellow 700    |
-| Failed      | red 300       | red 700       |
-| Disabled    | ink 500       | ink 500       |
+| Route state | Dark            | Light           |
+| ----------- | --------------- | --------------- |
+| Default     | teal 500 at 42% | teal 700 at 42% |
+| Selected    | teal 500        | teal 700        |
+| Running     | blue 300        | blue 700        |
+| Completed   | green 300       | green 700       |
+| Waiting     | yellow 300      | yellow 700      |
+| Failed      | red 300         | red 700         |
+| Disabled    | ink 500         | ink 500         |
 
-Default route width is `2px`; active route width is `3px`. Copper denotes the selected routing path, not completion or warning.
+Default route width is `2px`; active route width is `3px`. Teal denotes the selected routing path, not completion or warning.
 
 Depth is structural and rare. Dark popovers use `0 8px 24px rgb(0 0 0 / 0.32)` plus a subtle one-pixel ring; dark dialogs use `0 20px 48px rgb(0 0 0 / 0.42)` plus a subtle ring. Light popovers use `rgb(13 16 20 / 0.14)` and light dialogs use `rgb(13 16 20 / 0.2)` with corresponding rings. Base panes are separated by backgrounds and borders, not card shadows.
 
@@ -408,7 +409,7 @@ Visual-system-specific contracts are:
 
 ## Current implementation note
 
-Phase 5 installed the token foundation. Phase 7 added the shared primitive layer at `apps/web/src/components/ui/`. Phase 8 added the v0.5-justified domain-pattern layer at `apps/web/src/components/patterns/`: restrained platform identity, connection presentation, job and workflow status, resource empty states, and the read-only source-to-stage-to-destination workflow route. Phase 9 migration group 1 added the shell foundation at `apps/web/src/components/layout/`: application shell, top command bar, workspace, page header, and skip link. Phase 9 migration group 2 added token-backed global resource navigation in the same layout layer: a 56px icon-led rail at workbench widths and a labeled horizontal strip below the workbench breakpoint. It preserves the existing route set and history behavior, uses a 3px copper active edge plus surface and foreground cues, and does not add a contextual navigator where v0.5 has no contextual collection. Phase 9 migration group 3 moved `/setup` presentation to `apps/web/src/features/setup/` and applied the specified spacious setup composition: restrained platform identity, semantic readiness badges, token-backed panels, stable local loading, inline failure, technical callback treatment, and a persistent TikTok limitation notice. The `/api/setup` contract and credential semantics remain unchanged. Phase 9 migration group 4 moved `/` presentation to `apps/web/src/features/overview/` and replaced the placeholder with an ordered Sources → Workflows → Destinations workbench ledger plus a local-first setup note. The overview makes no speculative status claims and adds no data contract or API request. Phase 9 migration group 5 moved `/accounts` presentation to `apps/web/src/features/accounts/` and established a configuration-led connection ledger: compact token-backed credential panels, explicit credential readiness, technical callback rows, structured Meta identities and publishing targets, semantic result feedback, and existing connection/capability cards. API calls and integration semantics remain in `App.tsx`; actions expose stable progress and local account removal requires confirmation. Phase 9 migration group 6 moved `/sources` presentation to `apps/web/src/features/sources/` and established a polling-led source ledger: token-backed YouTube source setup, explicit source status, localized polling progress/error feedback, locale-formatted poll history, and structured resolution/lifecycle/cleanup states for observed media. Source requests, mutations, and polling semantics remain in `App.tsx`. Phase 9 migration group 7 moved `/workflows` presentation and its editor into `apps/web/src/features/workflows/`: the route builder now uses token-backed source and destination stages, progressively disclosed optional stages, the established read-only copper route preview, explicit loading/error/empty states, and saved workflow cards. Workflow requests and all definition, validation, compilation, execution-plan, persistence, and API semantics remain unchanged. Optional shell regions consume no space when absent, the inspector defaults closed, and activity expansion is caller-controlled. This work implements the visual vocabulary already specified above, so the design-system version remains 1.0.
+Phase 5 installed the token foundation. Phase 7 added the shared primitive layer at `apps/web/src/components/ui/`. Phase 8 added the v0.5-justified domain-pattern layer at `apps/web/src/components/patterns/`: restrained platform identity, connection presentation, job and workflow status, resource empty states, and the read-only source-to-stage-to-destination workflow route. Phase 9 migration group 1 added the shell foundation at `apps/web/src/components/layout/`: application shell, top command bar, workspace, page header, and skip link. Phase 9 migration group 2 added token-backed global resource navigation in the same layout layer: a 56px icon-led rail at workbench widths and a labeled horizontal strip below the workbench breakpoint. It preserves the existing route set and history behavior, uses a 3px accent active edge plus surface and foreground cues, and does not add a contextual navigator where v0.5 has no contextual collection. Phase 9 migration group 3 moved `/setup` presentation to `apps/web/src/features/setup/` and applied the specified spacious setup composition: restrained platform identity, semantic readiness badges, token-backed panels, stable local loading, inline failure, technical callback treatment, and a persistent TikTok limitation notice. The `/api/setup` contract and credential semantics remain unchanged. Phase 9 migration group 4 moved `/` presentation to `apps/web/src/features/overview/` and replaced the placeholder with an ordered Sources → Workflows → Destinations workbench ledger plus a local-first setup note. The overview makes no speculative status claims and adds no data contract or API request. Phase 9 migration group 5 moved `/accounts` presentation to `apps/web/src/features/accounts/` and established a configuration-led connection ledger: compact token-backed credential panels, explicit credential readiness, technical callback rows, structured Meta identities and publishing targets, semantic result feedback, and existing connection/capability cards. API calls and integration semantics remain in `App.tsx`; actions expose stable progress and local account removal requires confirmation. Phase 9 migration group 6 moved `/sources` presentation to `apps/web/src/features/sources/` and established a polling-led source ledger: token-backed YouTube source setup, explicit source status, localized polling progress/error feedback, locale-formatted poll history, and structured resolution/lifecycle/cleanup states for observed media. Source requests, mutations, and polling semantics remain in `App.tsx`. Phase 9 migration group 7 moved `/workflows` presentation and its editor into `apps/web/src/features/workflows/`: the route builder now uses token-backed source and destination stages, progressively disclosed optional stages, the established read-only route preview, explicit loading/error/empty states, and saved workflow cards. Workflow requests and all definition, validation, compilation, execution-plan, persistence, and API semantics remain unchanged. Optional shell regions consume no space when absent, the inspector defaults closed, and activity expansion is caller-controlled. This work implements the visual vocabulary already specified above, so the design-system version remains 1.0.
 
 Phase 9 migration group 8 moved `/jobs` presentation into `apps/web/src/features/jobs/`: the execution ledger now uses the established semantic job status, responsive table-to-list behavior, restrained destination checkpoints, explicit loading/error/empty/action states, and attempt history that remains closed until a job is selected. Selection becomes the single primary pane below the wide layout. Job requests, cancellation, state transitions, attempt history, persistence, queue behavior, and API contracts remain unchanged; the global activity shelf remains absent because v0.5 has no separate live activity feed. This work implements the visual vocabulary already specified above, so the design-system version remains 1.0.
 
@@ -417,3 +418,5 @@ Phase 9 migration group 9 moved `/settings` presentation into `apps/web/src/feat
 Phase 9 migration group 10 moved `/media` presentation into `apps/web/src/features/media/` and the existing unknown-route fallback into `apps/web/src/features/not-found/`. Media now uses a local-original import surface, responsive technical ledger, semantic persisted state, and publish preparation that remains closed until an asset is selected. Wide layouts retain library context beside the preparation pane; smaller layouts show only the selected publish task. The fallback provides a direct Dashboard recovery path. Media import, ffprobe metadata, account capability, direct-publish payload, job handoff, routing, persistence, and API contracts remain unchanged. This work implements the visual vocabulary already specified above, so the design-system version remains 1.0.
 
 Phase 9 migration group 11 completed the route decomposition without changing the visual system. `apps/web/src/App.tsx` now owns only the eight-route registry, history navigation, page metadata, and shell composition; setup, account, source, media, workflow, and job view state and API translation live inside their feature boundaries. The existing not-found copy, Dashboard recovery link, global navigation, and Back/Forward behavior remain intact. No route, router dependency, token, or visual vocabulary was added, so the design-system version remains 1.0.
+
+The post-v0.5 Direction E adoption advances the design system to 2.0. It replaces the former identity accent with the approved Modern Teal reference scale and maps Geist to interface text and JetBrains Mono to technical text. The change preserves existing geometry, layout, component contracts, neutral surfaces, focus blue, semantic status palettes, platform identity rules, and application behavior. Approved Latin font assets are bundled through exact Fontsource 5.3.0 dependencies; there are no runtime font requests or preview-only overrides.

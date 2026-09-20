@@ -19,7 +19,7 @@
   --or-bg-overlay: var(--or-ink-800);
   --or-bg-control: #0b0e12;
   --or-bg-hover: var(--or-ink-850);
-  --or-bg-selected: rgb(231 134 82 / 0.14);
+  --or-bg-selected: rgb(73 178 165 / 0.15);
   --or-bg-backdrop: rgb(0 0 0 / 0.64);
 
   /* Text */
@@ -28,13 +28,14 @@
   --or-text-tertiary: var(--or-ink-400);
   --or-text-disabled: var(--or-ink-500);
   --or-text-inverse: var(--or-ink-950);
-  --or-text-link: var(--or-copper-300);
+  --or-text-link: var(--or-teal-300);
+  --or-text-accent: var(--or-teal-300);
 
   /* Structure and focus */
   --or-border-subtle: rgb(245 243 237 / 0.07);
   --or-border-default: rgb(245 243 237 / 0.11);
   --or-border-strong: rgb(245 243 237 / 0.18);
-  --or-border-selected: var(--or-copper-400);
+  --or-border-selected: var(--or-teal-500);
   --or-focus-ring: var(--or-blue-300);
   --or-focus-offset-color: var(--or-bg-workspace);
 
@@ -48,9 +49,9 @@
   --or-control-disabled-fg: var(--or-text-disabled);
 
   /* Actions */
-  --or-action-primary-bg: var(--or-copper-400);
-  --or-action-primary-bg-hover: var(--or-copper-300);
-  --or-action-primary-bg-active: var(--or-copper-500);
+  --or-action-primary-bg: var(--or-teal-500);
+  --or-action-primary-bg-hover: var(--or-teal-400);
+  --or-action-primary-bg-active: var(--or-teal-600);
   --or-action-primary-fg: var(--or-ink-950);
   --or-action-secondary-bg: var(--or-bg-surface);
   --or-action-secondary-bg-hover: var(--or-bg-surface-raised);
@@ -81,8 +82,8 @@
   --or-status-neutral-border: var(--or-border-default);
 
   /* Workflow route semantics */
-  --or-route-default: var(--or-border-strong);
-  --or-route-selected: var(--or-copper-400);
+  --or-route-default: rgb(73 178 165 / 0.42);
+  --or-route-selected: var(--or-teal-500);
   --or-route-running: var(--or-blue-300);
   --or-route-completed: var(--or-green-300);
   --or-route-waiting: var(--or-yellow-300);
@@ -90,7 +91,7 @@
   --or-route-disabled: var(--or-ink-500);
 
   /* Text selection and elevation */
-  --or-selection-bg: rgb(231 134 82 / 0.24);
+  --or-selection-bg: rgb(73 178 165 / 0.26);
   --or-selection-fg: var(--or-text-primary);
   --or-shadow-popover: 0 8px 24px rgb(0 0 0 / 0.32), 0 0 0 1px rgb(245 243 237 / 0.08);
   --or-shadow-dialog: 0 20px 48px rgb(0 0 0 / 0.42), 0 0 0 1px rgb(245 243 237 / 0.1);
@@ -111,7 +112,7 @@
   --or-bg-overlay: var(--or-ink-0);
   --or-bg-control: var(--or-ink-100);
   --or-bg-hover: rgb(214 212 205 / 0.6);
-  --or-bg-selected: var(--or-copper-100);
+  --or-bg-selected: var(--or-teal-100);
   --or-bg-backdrop: rgb(13 16 20 / 0.36);
 
   /* Text */
@@ -120,13 +121,14 @@
   --or-text-tertiary: var(--or-ink-600);
   --or-text-disabled: var(--or-ink-400);
   --or-text-inverse: var(--or-ink-0);
-  --or-text-link: var(--or-copper-700);
+  --or-text-link: var(--or-teal-700);
+  --or-text-accent: var(--or-teal-700);
 
   /* Structure and focus */
   --or-border-subtle: var(--or-ink-200);
   --or-border-default: var(--or-ink-300);
   --or-border-strong: var(--or-ink-400);
-  --or-border-selected: var(--or-copper-700);
+  --or-border-selected: var(--or-teal-700);
   --or-focus-ring: var(--or-blue-700);
   --or-focus-offset-color: var(--or-bg-workspace);
 
@@ -140,9 +142,9 @@
   --or-control-disabled-fg: var(--or-text-disabled);
 
   /* Actions */
-  --or-action-primary-bg: var(--or-copper-700);
-  --or-action-primary-bg-hover: var(--or-copper-800);
-  --or-action-primary-bg-active: var(--or-copper-900);
+  --or-action-primary-bg: var(--or-teal-700);
+  --or-action-primary-bg-hover: var(--or-teal-800);
+  --or-action-primary-bg-active: var(--or-teal-900);
   --or-action-primary-fg: var(--or-ink-0);
   --or-action-secondary-bg: var(--or-bg-surface);
   --or-action-secondary-bg-hover: var(--or-bg-hover);
@@ -173,8 +175,8 @@
   --or-status-neutral-border: var(--or-ink-300);
 
   /* Workflow route semantics */
-  --or-route-default: var(--or-border-strong);
-  --or-route-selected: var(--or-copper-700);
+  --or-route-default: rgb(40 114 107 / 0.42);
+  --or-route-selected: var(--or-teal-700);
   --or-route-running: var(--or-blue-700);
   --or-route-completed: var(--or-green-700);
   --or-route-waiting: var(--or-yellow-700);
@@ -182,7 +184,7 @@
   --or-route-disabled: var(--or-ink-500);
 
   /* Text selection and elevation */
-  --or-selection-bg: var(--or-copper-200);
+  --or-selection-bg: var(--or-teal-200);
   --or-selection-fg: var(--or-text-primary);
   --or-shadow-popover: 0 8px 24px rgb(13 16 20 / 0.14), 0 0 0 1px rgb(13 16 20 / 0.08);
   --or-shadow-dialog: 0 20px 48px rgb(13 16 20 / 0.2), 0 0 0 1px rgb(13 16 20 / 0.1);
