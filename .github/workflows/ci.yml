@@ -51,6 +51,14 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg --yes --no-progress
+
       - name: Run unit tests
         run: pnpm test
 

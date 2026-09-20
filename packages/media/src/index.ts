@@ -15,6 +15,188 @@ import type {
   WorkflowService,
 } from '@openrepurpose/core';
 import type { MediaImportService } from '@openrepurpose/core';
+import {
+  normalizeTransformPlan,
+  type TransformOutput,
+  type TransformPlanInput,
+} from '@openrepurpose/core';
+
+export interface FfmpegCommand {
+  /** Executable path/name to pass directly to child_process.spawn. */
+  readonly executable: string;
+  /** One argv entry per FFmpeg argument. This is deliberately never a shell command. */
+  readonly args: readonly string[];
+}
+
+export interface CompileTransformCommandInput {
+  readonly executable?: string;
+  /** Filesystem path passed to FFmpeg as a single -i argument. */
+  readonly inputPath: string;
+  readonly outputPath: string;
+  readonly plan: TransformPlanInput;
+  /** Lets a caller omit audio mapping for a probe-confirmed silent input. */
+  readonly sourceHasAudio?: boolean;
+  /** Resolved local paths for typed watermark asset references. */
+  readonly watermarkPaths?: Readonly<Record<string, string>>;
+}
+
+function nonBlankPath(value: string, description: string): string {
+  if (value.trim().length === 0) throw new Error(`${description} is required.`);
+  return value;
+}
+
+function fitFilters(
+  step: Extract<
+    ReturnType<typeof normalizeTransformPlan>['user']['steps'][number],
+    { type: 'fit' }
+  >,
+): string[] {
+  if (step.mode === 'stretch') return [`scale=${step.width}:${step.height}`];
+  if (step.mode === 'contain')
+    return [
+      `scale=${step.width}:${step.height}:force_original_aspect_ratio=decrease`,
+      `pad=${step.width}:${step.height}:(ow-iw)/2:(oh-ih)/2:color=${step.backgroundColor}`,
+    ];
+  const x =
+    step.anchor === 'left' ? '0' : step.anchor === 'right' ? 'in_w-out_w' : '(in_w-out_w)/2';
+  const y =
+    step.anchor === 'top' ? '0' : step.anchor === 'bottom' ? 'in_h-out_h' : '(in_h-out_h)/2';
+  return [
+    `scale=${step.width}:${step.height}:force_original_aspect_ratio=increase`,
+    `crop=${step.width}:${step.height}:${x}:${y}`,
+  ];
+}
+
+function overlayCoordinates(
+  position: string,
+  margin: number,
+): { readonly x: string; readonly y: string } {
+  const horizontal = position.includes('left')
+    ? `${margin}`
+    : position.includes('right')
+      ? `main_w-overlay_w-${margin}`
+      : '(main_w-overlay_w)/2';
+  const vertical = position.startsWith('top')
+    ? `${margin}`
+    : position.startsWith('bottom')
+      ? `main_h-overlay_h-${margin}`
+      : '(main_h-overlay_h)/2';
+  return { x: horizontal, y: vertical };
+}
+
+function appendOutputArguments(
+  args: string[],
+  output: TransformOutput,
+  includeAudio: boolean,
+): void {
+  args.push(
+    '-c:v',
+    'libx264',
+    '-preset',
+    output.preset,
+    '-crf',
+    String(output.crf),
+    '-pix_fmt',
+    output.pixelFormat,
+  );
+  if (output.maxFrameRate !== undefined) args.push('-r', String(output.maxFrameRate));
+  if (includeAudio && output.audioCodec === 'aac') args.push('-c:a', 'aac');
+  else args.push('-an');
+  args.push('-movflags', '+faststart');
+}
+
+/**
+ * Compiles validated transform intent into a spawn-safe FFmpeg invocation. It performs no I/O,
+ * never constructs shell syntax, and intentionally keeps watermark asset lookup at the caller boundary.
+ */
+export function compileTransformCommand(input: CompileTransformCommandInput): FfmpegCommand {
+  const plan = normalizeTransformPlan(input.plan);
+  const executable =
+    input.executable === undefined ? 'ffmpeg' : nonBlankPath(input.executable, 'FFmpeg executable');
+  const inputPath = nonBlankPath(input.inputPath, 'Transform input path');
+  const outputPath = nonBlankPath(input.outputPath, 'Transform output path');
+  const recipe = plan.destination?.recipe ?? plan.user;
+  const steps = [...plan.user.steps, ...(plan.destination?.recipe.steps ?? [])];
+  const args: string[] = ['-hide_banner', '-nostdin', '-y', '-i', inputPath];
+  const graph: string[] = [];
+  const videoFilters: string[] = [];
+  const audioFilters: string[] = [];
+  let hasAudio = input.sourceHasAudio ?? true;
+  let watermarkInputIndex = 1;
+  let videoLabel = '[0:v:0]';
+
+  for (const step of steps) {
+    if (step.type === 'trim') {
+      const end =
+        step.endMs === undefined
+          ? step.durationMs === undefined
+            ? undefined
+            : `duration=${step.durationMs / 1000}`
+          : `end=${step.endMs / 1000}`;
+      videoFilters.push(
+        `trim=start=${step.startMs / 1000}${end === undefined ? '' : `:${end}`}`,
+        'setpts=PTS-STARTPTS',
+      );
+      if (hasAudio)
+        audioFilters.push(
+          `atrim=start=${step.startMs / 1000}${end === undefined ? '' : `:${end}`}`,
+          'asetpts=PTS-STARTPTS',
+        );
+    } else if (step.type === 'fit') videoFilters.push(...fitFilters(step));
+    else if (step.type === 'audio') {
+      if (step.mode === 'remove') hasAudio = false;
+      else if (hasAudio && step.mode === 'normalize')
+        audioFilters.push(
+          `loudnorm=I=${step.targetLufs}:TP=${step.truePeakDb}:LRA=${step.loudnessRangeLufs}`,
+        );
+      else if (hasAudio && step.mode === 'gain') audioFilters.push(`volume=${step.gainDb}dB`);
+    } else {
+      const assetPath = input.watermarkPaths?.[step.assetId];
+      if (assetPath === undefined)
+        throw new Error(`No local path was supplied for watermark asset "${step.assetId}".`);
+      args.push('-i', nonBlankPath(assetPath, `Watermark asset ${step.assetId}`));
+      if (videoFilters.length > 0) {
+        graph.push(`${videoLabel}${videoFilters.join(',')}[v${watermarkInputIndex}]`);
+        videoLabel = `[v${watermarkInputIndex}]`;
+        videoFilters.length = 0;
+      }
+      const overlay = overlayCoordinates(step.position, step.marginPx);
+      const watermarkLabel = `wm${watermarkInputIndex}`;
+      const nextLabel = `vwm${watermarkInputIndex}`;
+      graph.push(
+        `[${watermarkInputIndex}:v:0]scale=iw*${step.scalePercent / 100}:-1,format=rgba,colorchannelmixer=aa=${step.opacity}[${watermarkLabel}]`,
+      );
+      graph.push(
+        `${videoLabel}[${watermarkLabel}]overlay=${overlay.x}:${overlay.y}:format=auto[${nextLabel}]`,
+      );
+      videoLabel = `[${nextLabel}]`;
+      watermarkInputIndex += 1;
+    }
+  }
+  if (videoFilters.length > 0) {
+    graph.push(`${videoLabel}${videoFilters.join(',')}[vout]`);
+    videoLabel = '[vout]';
+  }
+  if (recipe.output.maxWidth !== undefined || recipe.output.maxHeight !== undefined) {
+    const width =
+      recipe.output.maxWidth === undefined ? 'iw' : `min(iw\\,${recipe.output.maxWidth})`;
+    const height =
+      recipe.output.maxHeight === undefined ? 'ih' : `min(ih\\,${recipe.output.maxHeight})`;
+    graph.push(
+      `${videoLabel}scale=${width}:${height}:force_original_aspect_ratio=decrease[vlimited]`,
+    );
+    videoLabel = '[vlimited]';
+  }
+  if (hasAudio && audioFilters.length > 0) graph.push(`[0:a:0]${audioFilters.join(',')}[aout]`);
+
+  if (graph.length > 0) args.push('-filter_complex', graph.join(';'));
+  args.push('-map', videoLabel);
+  if (hasAudio && recipe.output.audioCodec === 'aac')
+    args.push('-map', audioFilters.length > 0 ? '[aout]' : '0:a:0?');
+  appendOutputArguments(args, recipe.output, hasAudio && recipe.output.audioCodec === 'aac');
+  args.push(outputPath);
+  return { executable, args };
+}
 
 function isPathInside(root: string, candidate: string): boolean {
   const pathFromRoot = relative(root, candidate);
