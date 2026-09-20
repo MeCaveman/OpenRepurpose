@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import {
   createTransformCacheIdentity,
   normalizeTransformPlan,
@@ -7,7 +8,10 @@ import {
   transformRecipeHash,
   transformRecipeSchema,
 } from '../../packages/core/src/index.js';
+import { SqliteMediaRepository } from '../../packages/db/src/index.js';
 import { createTemporaryDatabase } from '../../packages/testkit/src/index.js';
+import { createCli } from '../../apps/cli/src/index.js';
+import type { Environment } from '../../packages/shared/src/index.js';
 
 const userPlan = {
   schemaVersion: 1 as const,
@@ -285,6 +289,152 @@ describe('transform derivative schema', () => {
           )
           .run(),
       ).toThrow();
+    } finally {
+      fixture.dispose();
+    }
+  });
+});
+
+describe('transform CLI', () => {
+  it('runs presets and custom dimensions, then inspects derivatives and media metadata', async () => {
+    const fixture = createTemporaryDatabase();
+    try {
+      new SqliteMediaRepository(fixture.database).create({
+        id: 'media-cli-transform',
+        path: 'C:\\Media\\cli-transform.mp4',
+        fingerprint: 'sha256:cli-transform',
+        sizeBytes: 321,
+        modifiedAt: new Date(0),
+        createdAt: new Date(0),
+        state: 'available',
+        metadata: {
+          audioCodec: 'aac',
+          durationSeconds: 12,
+          hasAudio: true,
+          height: 1080,
+          videoCodec: 'h264',
+          width: 1920,
+        },
+      });
+      const environment: Environment = {
+        APP_CONFIG_DIR: join(fixture.directory, 'config'),
+        APP_DATA_DIR: fixture.directory,
+        APP_TEMP_DIR: join(fixture.directory, 'temp'),
+        DATABASE_URL: join(fixture.directory, 'openrepurpose.sqlite'),
+      };
+      const output: string[] = [];
+      const cli = () =>
+        createCli({
+          environment,
+          mediaProbe: {
+            probe: async () => ({
+              audioCodec: 'aac',
+              durationSeconds: 12,
+              hasAudio: true,
+              height: 1080,
+              videoCodec: 'h264',
+              width: 1920,
+            }),
+          },
+          transformTool: { encoder: 'libx264', ffmpegVersion: 'test-ffmpeg' },
+          write: (value) => output.push(value),
+        });
+
+      await cli().parseAsync([
+        'node',
+        'openrepurpose',
+        'transform',
+        'run',
+        'media-cli-transform',
+        '--preset',
+        'square',
+        '--json',
+      ]);
+      const presetRun = JSON.parse(output.at(-1) ?? '{}') as {
+        derivative: { id: string; provenance: { normalizedPlan: { user: { steps: unknown[] } } } };
+        job: { id: string };
+      };
+      expect(presetRun.derivative.provenance.normalizedPlan.user.steps).toEqual([
+        { type: 'fit', mode: 'crop', width: 1080, height: 1080, anchor: 'center' },
+      ]);
+
+      await cli().parseAsync([
+        'node',
+        'openrepurpose',
+        'transform',
+        'run',
+        'media-cli-transform',
+        '--width',
+        '720',
+        '--height',
+        '1280',
+        '--fit',
+        'contain',
+        '--anchor',
+        'top',
+        '--json',
+      ]);
+      const customRun = JSON.parse(output.at(-1) ?? '{}') as {
+        derivative: { id: string; provenance: { normalizedPlan: { user: { steps: unknown[] } } } };
+      };
+      expect(customRun.derivative.provenance.normalizedPlan.user.steps).toEqual([
+        {
+          type: 'fit',
+          mode: 'contain',
+          width: 720,
+          height: 1280,
+          anchor: 'top',
+          backgroundColor: '#000000',
+        },
+      ]);
+
+      await cli().parseAsync([
+        'node',
+        'openrepurpose',
+        'transform',
+        'inspect',
+        presetRun.derivative.id,
+        '--json',
+      ]);
+      expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({
+        id: presetRun.derivative.id,
+        status: 'pending',
+        provenance: { sourceMediaId: 'media-cli-transform' },
+      });
+
+      await cli().parseAsync([
+        'node',
+        'openrepurpose',
+        'jobs',
+        'cancel',
+        presetRun.job.id,
+        '--json',
+      ]);
+      await cli().parseAsync([
+        'node',
+        'openrepurpose',
+        'transform',
+        'inspect',
+        presetRun.derivative.id,
+        '--json',
+      ]);
+      expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({
+        id: presetRun.derivative.id,
+        status: 'cancelled',
+      });
+
+      await cli().parseAsync([
+        'node',
+        'openrepurpose',
+        'media',
+        'probe',
+        'media-cli-transform',
+        '--json',
+      ]);
+      expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({
+        id: 'media-cli-transform',
+        metadata: { width: 1920, height: 1080, hasAudio: true },
+      });
     } finally {
       fixture.dispose();
     }

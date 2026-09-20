@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { JobExecutionError, JobRunner, JobService } from '@openrepurpose/core';
+import { JobExecutionError, JobRunner, JobService, TransformService } from '@openrepurpose/core';
 import type { JobHandler } from '@openrepurpose/core';
-import { SqliteJobRepository } from '@openrepurpose/db';
+import {
+  SqliteJobRepository,
+  SqliteMediaRepository,
+  SqliteTransformDerivativeRepository,
+} from '@openrepurpose/db';
 import { buildServer } from '@openrepurpose/server';
 import { createTemporaryDatabase } from '@openrepurpose/testkit';
 import type { TemporaryDatabase } from '@openrepurpose/testkit';
@@ -534,6 +538,25 @@ describe('persistent jobs', () => {
     const repository = new SqliteJobRepository(temporary.database);
     const service = new JobService(repository);
     const job = service.create({ type: 'fake.http', input: { source: 'test' } }).job;
+    const mediaRepository = new SqliteMediaRepository(temporary.database);
+    mediaRepository.create({
+      id: 'media-http-transform',
+      path: 'C:\\Media\\http-transform.mp4',
+      fingerprint: 'sha256:http-transform',
+      sizeBytes: 100,
+      modifiedAt: new Date(0),
+      createdAt: new Date(0),
+      state: 'available',
+      metadata: { hasAudio: true },
+    });
+    const derivativeRepository = new SqliteTransformDerivativeRepository(temporary.database);
+    const transformService = new TransformService(mediaRepository, derivativeRepository, service, {
+      encoder: 'libx264',
+      ffmpegVersion: 'test-ffmpeg',
+    });
+    const transform = transformService.run('media-http-transform', {
+      user: { steps: [{ type: 'fit', mode: 'crop', width: 1080, height: 1920 }] },
+    });
     const failed = service.create({ type: 'fake.failed', input: {} }).job;
     repository.claimNext(
       ['fake.failed'],
@@ -551,6 +574,7 @@ describe('persistent jobs', () => {
     server = buildServer({
       config,
       jobService: service,
+      transformService,
       sessionKey: Buffer.alloc(32, 7),
       staticRoot: false,
     });
@@ -560,6 +584,21 @@ describe('persistent jobs', () => {
     expect(list.statusCode).toBe(200);
     expect(list.json<{ jobs: Array<{ id: string }> }>().jobs).toContainEqual(
       expect.objectContaining({ id: job.id }),
+    );
+    expect(
+      list
+        .json<{ jobs: Array<{ id: string; transform?: { id: string } }> }>()
+        .jobs.find((listed) => listed.id === transform.job?.id)?.transform,
+    ).toMatchObject({ id: transform.derivative.id });
+
+    const derivative = await server.inject({
+      method: 'GET',
+      url: `/api/transforms/${transform.derivative.id}`,
+      headers,
+    });
+    expect(derivative.statusCode).toBe(200);
+    expect(derivative.json<{ derivative: { id: string } }>().derivative.id).toBe(
+      transform.derivative.id,
     );
 
     const session = await server.inject({ method: 'GET', url: '/api/session', headers });
@@ -583,6 +622,13 @@ describe('persistent jobs', () => {
       cookie: String(session.headers['set-cookie']),
       'x-csrf-token': csrfToken,
     };
+    const transformCancelled = await server.inject({
+      method: 'POST',
+      url: `/api/jobs/${transform.job!.id}/cancel`,
+      headers: mutationHeaders,
+    });
+    expect(transformCancelled.statusCode).toBe(200);
+    expect(transformService.inspect(transform.derivative.id)?.status).toBe('cancelled');
     const retried = await server.inject({
       method: 'POST',
       url: `/api/jobs/${failed.id}/retry`,

@@ -22,6 +22,29 @@ const retryingJob: JobView = {
   type: 'youtube.upload',
 };
 
+const transformJob: JobView = {
+  attemptCount: 1,
+  id: 'job-transform-1',
+  maxAttempts: 3,
+  status: 'running',
+  transform: {
+    id: 'derivative-1',
+    progress: { outTimeMillis: 32_000, percent: 53.4, speed: 1.25 },
+    provenance: {
+      encoder: 'libx264',
+      ffmpegVersion: 'ffmpeg 8.0.1',
+      normalizedPlan: {
+        user: { steps: [{ type: 'fit', mode: 'crop', width: 1080, height: 1920 }] },
+      },
+      outputProfileVersion: 'common-mp4-v1',
+      recipeHash: 'sha256:recipe',
+      sourceMediaId: 'media-1',
+    },
+    status: 'running',
+  },
+  type: 'media.transform',
+};
+
 function jobsProps(overrides: Partial<JobsPageProps> = {}): JobsPageProps {
   return {
     activeAction: undefined,
@@ -141,5 +164,26 @@ describe('web jobs page', () => {
     );
     expect(requestedMarkup).toContain('Cancellation requested');
     expect(requestedMarkup).toContain('disabled=""');
+  });
+
+  it('shows measurable transform progress and derivative provenance in job details', () => {
+    const markup = renderToStaticMarkup(
+      createElement(
+        JobsPage,
+        jobsProps({
+          jobs: [transformJob],
+          selectedJob: transformJob,
+          selectedJobId: transformJob.id,
+        }),
+      ),
+    );
+
+    expect(markup).toContain('53.4%');
+    expect(markup).toContain('value="53.4"');
+    expect(markup).toContain('Derivative inspection');
+    expect(markup).toContain('derivative-1');
+    expect(markup).toContain('1080 × 1920 · crop');
+    expect(markup).toContain('libx264 · ffmpeg 8.0.1');
+    expect(markup).toContain('media-1');
   });
 });

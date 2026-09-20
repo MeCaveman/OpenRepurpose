@@ -81,7 +81,13 @@ function toWorkflowRouteData(workflow: WorkflowView): WorkflowRouteData {
     if (step.kind === 'filter') {
       stages.push({ kind: 'filter', label: 'Filter', state: nodeState });
     } else if (step.kind === 'transform') {
-      stages.push({ kind: 'transform', label: 'Pass-through', state: nodeState });
+      const fit = step.plan?.user.steps[0];
+      stages.push({
+        kind: 'transform',
+        label: fit === undefined ? 'Pass-through' : `${fit.width} × ${fit.height}`,
+        ...(fit === undefined ? {} : { detail: fit.mode }),
+        state: nodeState,
+      });
     } else if (step.kind === 'schedule') {
       stages.push({
         detail: step.scheduleId,

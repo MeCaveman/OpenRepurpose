@@ -14,6 +14,8 @@ export { Input } from './input';
 export type { InputProps } from './input';
 export { Panel } from './panel';
 export type { PanelPadding, PanelProps, PanelSurface } from './panel';
+export { Progress } from './progress';
+export type { ProgressProps } from './progress';
 export { Select } from './select';
 export type { SelectProps } from './select';
 export { Spinner } from './spinner';

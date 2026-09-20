@@ -16,6 +16,7 @@ import {
   SourceService,
   SourceWorkflowCoordinator,
   DerivativeAwareMediaRepository,
+  TransformService,
   WorkflowTransformService,
   WorkflowService,
   type JobHandler,
@@ -118,13 +119,21 @@ export async function startServer(): Promise<void> {
     executables.ffmpeg === undefined
       ? undefined
       : { encoder: 'libx264', ffmpegVersion: await readFfmpegVersion(executables.ffmpeg) };
+  const workflowTransformService =
+    transformTool === undefined
+      ? undefined
+      : new WorkflowTransformService(transformDerivativeRepository, jobService, transformTool);
+  const transformService = new TransformService(
+    mediaRepository,
+    transformDerivativeRepository,
+    jobService,
+    transformTool,
+  );
   const workflowService = new WorkflowService(
     new SqliteWorkflowRepository(database),
     jobService,
     undefined,
-    transformTool === undefined
-      ? undefined
-      : new WorkflowTransformService(transformDerivativeRepository, jobService, transformTool),
+    workflowTransformService,
   );
   const transformOutputStorage = new LocalTransformOutputStorage(config.paths.dataDirectory);
   const transformProcessRunner = new FfmpegProcessRunner(config.transformRunner);
@@ -245,6 +254,7 @@ export async function startServer(): Promise<void> {
     sourceService: new SourceService(sourceRepository),
     ...(sourceCoordinator === undefined ? {} : { sourceWorkflowCoordinator: sourceCoordinator }),
     tiktokOAuthService,
+    transformService,
     metaOAuthService,
     youtubeOAuthService,
     ...(mediaImportService === undefined ? {} : { mediaImportService }),

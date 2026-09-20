@@ -12,7 +12,9 @@ import {
 import {
   createTransformCacheIdentity,
   normalizeTransformPlan,
+  type TransformDerivative,
   type TransformDerivativeRepository,
+  type TransformDerivativeStatus,
   type TransformPlanInput,
   type TransformToolIdentity,
 } from './transform.js';
@@ -2329,6 +2331,7 @@ export class WorkflowTransformService {
     media: MediaAsset,
     plan: TransformPlanInput,
   ): {
+    readonly cacheHit: boolean;
     readonly mediaId: string;
     readonly prerequisiteJobId?: string;
   } {
@@ -2345,14 +2348,97 @@ export class WorkflowTransformService {
       sourceMediaId: media.id,
     });
     if (reserved.derivative.status === 'succeeded' && reserved.derivative.output !== undefined)
-      return { mediaId: reserved.derivative.id };
+      return { cacheHit: true, mediaId: reserved.derivative.id };
     const transform = this.jobs.create({
       type: 'media.transform',
       idempotencyKey: `transform:${identity.cacheKey}`,
       input: { derivativeId: reserved.derivative.id },
       maxAttempts: 3,
     });
-    return { mediaId: reserved.derivative.id, prerequisiteJobId: transform.job.id };
+    return {
+      cacheHit: !reserved.created,
+      mediaId: reserved.derivative.id,
+      prerequisiteJobId: transform.job.id,
+    };
+  }
+}
+
+export interface TransformRunResult {
+  readonly cached: boolean;
+  readonly derivative: TransformDerivative;
+  readonly job?: Job;
+}
+
+function derivativeIdForTransformJob(job: Job): string | undefined {
+  if (job.type !== 'media.transform' || typeof job.input !== 'object' || job.input === null)
+    return undefined;
+  const derivativeId = (job.input as Readonly<Record<string, JsonValue>>).derivativeId;
+  return typeof derivativeId === 'string' && derivativeId.trim().length > 0
+    ? derivativeId
+    : undefined;
+}
+
+/** Shared application service for direct UI/CLI transform runs and derivative inspection. */
+export class TransformService {
+  private readonly preparer: WorkflowTransformService | undefined;
+
+  public constructor(
+    private readonly media: MediaRepository,
+    private readonly derivatives: TransformDerivativeRepository,
+    private readonly jobs: JobService,
+    tool?: TransformToolIdentity,
+    private readonly now: () => Date = () => new Date(),
+  ) {
+    this.preparer =
+      tool === undefined ? undefined : new WorkflowTransformService(derivatives, jobs, tool, now);
+  }
+
+  public run(mediaId: string, plan: TransformPlanInput): TransformRunResult {
+    if (this.preparer === undefined)
+      throw new Error('FFmpeg is required to create a transform derivative.');
+    const media = this.media.findById(mediaId);
+    if (media === undefined) throw new Error('Media not found.');
+    if (media.state !== 'available') throw new Error('Media is not available for transformation.');
+    const prepared = this.preparer.prepare(media, plan);
+    const derivative = this.derivatives.findById(prepared.mediaId);
+    if (derivative === undefined) throw new Error('Transform derivative reservation failed.');
+    const job =
+      prepared.prerequisiteJobId === undefined
+        ? undefined
+        : this.jobs.show(prepared.prerequisiteJobId)?.job;
+    return {
+      cached: prepared.cacheHit,
+      derivative,
+      ...(job === undefined ? {} : { job }),
+    };
+  }
+
+  public inspect(id: string): TransformDerivative | undefined {
+    return this.derivatives.findById(id);
+  }
+
+  public list(status?: TransformDerivativeStatus): readonly TransformDerivative[] {
+    return this.derivatives.list(status);
+  }
+
+  public forJob(job: Job): TransformDerivative | undefined {
+    const derivativeId = derivativeIdForTransformJob(job);
+    return derivativeId === undefined ? undefined : this.derivatives.findById(derivativeId);
+  }
+
+  public cancelJob(jobId: string): Job | undefined {
+    const existing = this.jobs.show(jobId)?.job;
+    if (existing === undefined) return undefined;
+    const derivative = this.forJob(existing);
+    const job = this.jobs.cancel(jobId);
+    if (
+      derivative !== undefined &&
+      job?.status === 'cancelled' &&
+      (derivative.status === 'pending' || derivative.status === 'running')
+    ) {
+      this.derivatives.markCancelled(derivative.id, this.now());
+    }
+    return job;
   }
 }
 
@@ -2487,7 +2573,7 @@ export class WorkflowService {
       throw new Error(
         'A workflow execution supports one transform recipe before destination fan-out.',
       );
-    const prepared =
+    const prepared: { readonly mediaId: string; readonly prerequisiteJobId?: string } =
       transformPlans.length === 0
         ? { mediaId: media.id }
         : this.transforms === undefined

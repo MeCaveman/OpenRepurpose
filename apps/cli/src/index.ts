@@ -6,9 +6,15 @@ import {
   MediaImportService,
   ScheduleService,
   SourceService,
+  TransformService,
   WorkflowService,
 } from '@openrepurpose/core';
-import type { JobStatus } from '@openrepurpose/core';
+import type {
+  JobStatus,
+  MediaProbe,
+  TransformPlanInput,
+  TransformToolIdentity,
+} from '@openrepurpose/core';
 import {
   openDatabase,
   runMigrations,
@@ -18,12 +24,14 @@ import {
   SqliteOAuthAuthorizationRequestRepository,
   SqliteScheduleRepository,
   SqliteSourcePollingRepository,
+  SqliteTransformDerivativeRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
   FfprobeMediaProbe,
   LocalMediaFileInspector,
+  readFfmpegVersion,
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import type { Environment } from '@openrepurpose/shared';
@@ -85,32 +93,82 @@ export function runDoctor(environment: Environment = process.env): readonly Doct
   }
 }
 
-async function mediaContext(environment: Environment) {
+function mediaReadContext(environment: Environment) {
   const config = loadApplicationConfig(environment);
   const database = openDatabase(config.paths.databasePath);
   runMigrations(database);
+  return { database, repository: new SqliteMediaRepository(database) };
+}
+
+async function mediaImportContext(environment: Environment) {
+  const context = mediaReadContext(environment);
   const executables = await discoverMediaExecutables();
   if (executables.ffprobe === undefined) {
-    database.close();
+    context.database.close();
     throw new Error('ffprobe was not found. Set FFPROBE_PATH or add ffprobe to PATH.');
   }
-  const repository = new SqliteMediaRepository(database);
   return {
-    database,
-    repository,
+    ...context,
     service: new MediaImportService(
       new LocalMediaFileInspector(),
       new FfprobeMediaProbe(executables.ffprobe),
-      repository,
+      context.repository,
     ),
   };
+}
+
+function derivativeContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  return {
+    database,
+    derivatives: new SqliteTransformDerivativeRepository(database),
+  };
+}
+
+async function transformContext(environment: Environment, toolOverride?: TransformToolIdentity) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  try {
+    const tool =
+      toolOverride ??
+      (await (async () => {
+        const executables = await discoverMediaExecutables();
+        if (executables.ffmpeg === undefined)
+          throw new Error('ffmpeg was not found. Set FFMPEG_PATH or add ffmpeg to PATH.');
+        return {
+          encoder: 'libx264',
+          ffmpegVersion: await readFfmpegVersion(executables.ffmpeg),
+        };
+      })());
+    const derivatives = new SqliteTransformDerivativeRepository(database);
+    const jobs = new JobService(new SqliteJobRepository(database));
+    return {
+      database,
+      service: new TransformService(new SqliteMediaRepository(database), derivatives, jobs, tool),
+    };
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }
 
 function jobContext(environment: Environment) {
   const config = loadApplicationConfig(environment);
   const database = openDatabase(config.paths.databasePath);
   runMigrations(database);
-  return { database, service: new JobService(new SqliteJobRepository(database)) };
+  const service = new JobService(new SqliteJobRepository(database));
+  return {
+    database,
+    service,
+    transforms: new TransformService(
+      new SqliteMediaRepository(database),
+      new SqliteTransformDerivativeRepository(database),
+      service,
+    ),
+  };
 }
 function workflowContext(environment: Environment) {
   const config = loadApplicationConfig(environment);
@@ -211,7 +269,76 @@ function readGoogleCredentials(path: string): { clientId: string; clientSecret?:
 
 export interface CreateCliOptions {
   readonly environment?: Environment;
+  /** Test/runtime composition hook; normal CLI use discovers local ffprobe. */
+  readonly mediaProbe?: MediaProbe;
+  /** Test/runtime composition hook; normal CLI use discovers the concrete local FFmpeg build. */
+  readonly transformTool?: TransformToolIdentity;
   readonly write?: (value: string) => void;
+}
+
+type TransformPresetName = 'landscape' | 'square' | 'vertical';
+type TransformFitMode = 'contain' | 'crop' | 'stretch';
+type TransformAnchor = 'bottom' | 'center' | 'left' | 'right' | 'top';
+
+const transformPresets: Readonly<Record<TransformPresetName, readonly [number, number]>> = {
+  vertical: [1080, 1920],
+  square: [1080, 1080],
+  landscape: [1920, 1080],
+};
+
+function positiveEvenDimension(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 2 || parsed > 16_384 || parsed % 2 !== 0)
+    throw new Error(`${name} must be an even integer from 2 to 16384.`);
+  return parsed;
+}
+
+function transformPlanFromOptions(options: {
+  readonly anchor?: string;
+  readonly fit?: string;
+  readonly height?: string;
+  readonly preset?: string;
+  readonly width?: string;
+}): TransformPlanInput {
+  const width = positiveEvenDimension(options.width, 'Width');
+  const height = positiveEvenDimension(options.height, 'Height');
+  const preset = options.preset as TransformPresetName | undefined;
+  if (preset !== undefined && !(preset in transformPresets))
+    throw new Error(`Unknown transform preset: ${options.preset}`);
+  if ((width === undefined) !== (height === undefined))
+    throw new Error('Custom transforms require both --width and --height.');
+  if (preset !== undefined && width !== undefined)
+    throw new Error('Choose either --preset or custom --width and --height dimensions.');
+  if (preset === undefined && width === undefined)
+    throw new Error('Choose --preset vertical|square|landscape or provide --width and --height.');
+  const [targetWidth, targetHeight] =
+    width === undefined || height === undefined ? transformPresets[preset!] : [width, height];
+  const fit = (options.fit ?? 'crop') as TransformFitMode;
+  if (!new Set<TransformFitMode>(['contain', 'crop', 'stretch']).has(fit))
+    throw new Error(`Unknown fit mode: ${options.fit}`);
+  const anchor = (options.anchor ?? 'center') as TransformAnchor;
+  if (!new Set<TransformAnchor>(['bottom', 'center', 'left', 'right', 'top']).has(anchor))
+    throw new Error(`Unknown crop anchor: ${options.anchor}`);
+  const step =
+    fit === 'stretch'
+      ? { type: 'fit' as const, mode: fit, width: targetWidth, height: targetHeight }
+      : fit === 'contain'
+        ? {
+            type: 'fit' as const,
+            mode: fit,
+            width: targetWidth,
+            height: targetHeight,
+            anchor,
+          }
+        : {
+            type: 'fit' as const,
+            mode: fit,
+            width: targetWidth,
+            height: targetHeight,
+            anchor,
+          };
+  return { schemaVersion: 1, user: { schemaVersion: 1, steps: [step], output: {} } };
 }
 
 export function createCli(options: CreateCliOptions = {}): Command {
@@ -227,7 +354,7 @@ export function createCli(options: CreateCliOptions = {}): Command {
 
   const media = program.command('media').description('Manage local media');
   media.command('import <path>').action(async (path: string) => {
-    const context = await mediaContext(environment);
+    const context = await mediaImportContext(environment);
     try {
       const result = await context.service.import(path);
       write(
@@ -241,7 +368,7 @@ export function createCli(options: CreateCliOptions = {}): Command {
     .command('list')
     .option('--json', 'write JSON')
     .action(async (options: { json?: boolean }) => {
-      const context = await mediaContext(environment);
+      const context = mediaReadContext(environment);
       try {
         const assets = context.repository.list();
         write(
@@ -249,6 +376,121 @@ export function createCli(options: CreateCliOptions = {}): Command {
             ? `${JSON.stringify(assets)}\n`
             : assets.map((asset) => `${asset.id}\t${asset.state}\t${asset.path}`).join('\n') +
                 (assets.length > 0 ? '\n' : ''),
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  media
+    .command('probe <id>')
+    .description('Probe current local media metadata')
+    .option('--json', 'write JSON')
+    .action(async (id: string, commandOptions: { json?: boolean }) => {
+      const context = mediaReadContext(environment);
+      try {
+        const asset = context.repository.findById(id);
+        if (asset === undefined) throw new Error(`Media not found: ${id}`);
+        const probe =
+          options.mediaProbe ??
+          (await (async () => {
+            const executables = await discoverMediaExecutables();
+            if (executables.ffprobe === undefined)
+              throw new Error('ffprobe was not found. Set FFPROBE_PATH or add ffprobe to PATH.');
+            return new FfprobeMediaProbe(executables.ffprobe);
+          })());
+        const result = { ...asset, metadata: await probe.probe(asset.path) };
+        write(
+          commandOptions.json
+            ? `${JSON.stringify(result)}\n`
+            : [
+                `${result.id}\t${result.state}\t${result.path}`,
+                `size: ${result.sizeBytes}`,
+                `video: ${result.metadata.videoCodec ?? 'unknown'}\t${result.metadata.width ?? '?'}x${result.metadata.height ?? '?'}`,
+                `audio: ${result.metadata.hasAudio ? (result.metadata.audioCodec ?? 'present') : 'none'}`,
+                `duration: ${result.metadata.durationSeconds ?? 'unknown'} seconds`,
+              ].join('\n') + '\n',
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+
+  const transforms = program.command('transform').description('Run and inspect media transforms');
+  transforms
+    .command('run <media-id>')
+    .option('--preset <preset>', 'vertical, square, or landscape')
+    .option('--width <pixels>', 'custom output width')
+    .option('--height <pixels>', 'custom output height')
+    .option('--fit <mode>', 'crop, contain, or stretch', 'crop')
+    .option('--anchor <anchor>', 'center, top, bottom, left, or right', 'center')
+    .option('--json', 'write JSON')
+    .action(
+      async (
+        mediaId: string,
+        commandOptions: {
+          anchor?: string;
+          fit?: string;
+          height?: string;
+          json?: boolean;
+          preset?: string;
+          width?: string;
+        },
+      ) => {
+        const plan = transformPlanFromOptions(commandOptions);
+        const context = await transformContext(environment, options.transformTool);
+        try {
+          const result = context.service.run(mediaId, plan);
+          write(
+            commandOptions.json
+              ? `${JSON.stringify(result)}\n`
+              : result.job === undefined
+                ? `Reused derivative ${result.derivative.id}\t${result.derivative.status}\n`
+                : [
+                    `Queued derivative ${result.derivative.id}\t${result.derivative.status}`,
+                    `job: ${result.job.id}\t${result.job.status}`,
+                    `inspect: openrepurpose transform inspect ${result.derivative.id}`,
+                    `cancel: openrepurpose jobs cancel ${result.job.id}`,
+                  ].join('\n') + '\n',
+          );
+        } finally {
+          context.database.close();
+        }
+      },
+    );
+  transforms
+    .command('inspect <derivative-id>')
+    .option('--json', 'write JSON')
+    .action((id: string, commandOptions: { json?: boolean }) => {
+      const context = derivativeContext(environment);
+      try {
+        const derivative = context.derivatives.findById(id);
+        if (derivative === undefined) throw new Error(`Transform derivative not found: ${id}`);
+        const progress =
+          derivative.progress?.percent === undefined
+            ? derivative.status
+            : `${derivative.progress.percent.toFixed(1)}%`;
+        write(
+          commandOptions.json
+            ? `${JSON.stringify(derivative)}\n`
+            : [
+                `${derivative.id}\t${derivative.status}\t${progress}`,
+                `source: ${derivative.provenance.sourceMediaId}`,
+                `recipe: ${derivative.provenance.recipeHash}`,
+                `encoder: ${derivative.provenance.encoder}\t${derivative.provenance.ffmpegVersion}`,
+                ...(derivative.output === undefined
+                  ? []
+                  : [
+                      `output: ${derivative.output.path}`,
+                      `video: ${derivative.output.metadata.videoCodec}\t${derivative.output.metadata.width}x${derivative.output.metadata.height}`,
+                      `audio: ${derivative.output.metadata.hasAudio ? (derivative.output.metadata.audioCodec ?? 'present') : 'none'}`,
+                      `size: ${derivative.output.sizeBytes}`,
+                    ]),
+                ...(derivative.errorMessage === undefined
+                  ? []
+                  : [
+                      `error: ${derivative.errorCode ?? 'TRANSFORM_FAILED'}\t${derivative.errorMessage}`,
+                    ]),
+              ].join('\n') + '\n',
         );
       } finally {
         context.database.close();
@@ -544,7 +786,11 @@ export function createCli(options: CreateCliOptions = {}): Command {
     .action((id: string, options: { json?: boolean }) => {
       const context = jobContext(environment);
       try {
-        const job = context.service.cancel(id);
+        const existing = context.service.show(id)?.job;
+        const job =
+          existing?.type === 'media.transform'
+            ? context.transforms.cancelJob(id)
+            : context.service.cancel(id);
         if (job === undefined) throw new Error(`Job not found: ${id}`);
         write(options.json ? `${JSON.stringify(job)}\n` : `${job.id}\t${job.status}\n`);
       } finally {

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 
 import { JobStatus, ResourceEmptyState } from '../../components/patterns';
-import { Alert, Badge, Button, Panel, Spinner } from '../../components/ui';
+import { Alert, Badge, Button, Panel, Progress, Spinner } from '../../components/ui';
 
 export interface DestinationJobView {
   readonly destinationId: string;
@@ -25,8 +25,55 @@ export interface JobView {
   readonly maxAttempts: number;
   readonly platformId?: string;
   readonly status: string;
+  readonly transform?: TransformDerivativeView;
   readonly type: string;
   readonly updatedAt?: string;
+}
+
+export interface TransformDerivativeView {
+  readonly completedAt?: string;
+  readonly errorCode?: string;
+  readonly errorMessage?: string;
+  readonly id: string;
+  readonly output?: {
+    readonly metadata: {
+      readonly audioCodec?: string;
+      readonly durationMillis: number;
+      readonly frameRate?: number;
+      readonly hasAudio: boolean;
+      readonly height: number;
+      readonly videoCodec: string;
+      readonly width: number;
+    };
+    readonly path: string;
+    readonly sizeBytes: number;
+  };
+  readonly progress?: {
+    readonly frame?: number;
+    readonly framesPerSecond?: number;
+    readonly outTimeMillis: number;
+    readonly percent?: number;
+    readonly processedBytes?: number;
+    readonly speed?: number;
+  };
+  readonly provenance: {
+    readonly encoder: string;
+    readonly ffmpegVersion: string;
+    readonly normalizedPlan: {
+      readonly user: {
+        readonly steps: ReadonlyArray<{
+          readonly height?: number;
+          readonly mode?: string;
+          readonly type: string;
+          readonly width?: number;
+        }>;
+      };
+    };
+    readonly outputProfileVersion: string;
+    readonly recipeHash: string;
+    readonly sourceMediaId: string;
+  };
+  readonly status: string;
 }
 
 export interface JobAttemptView {
@@ -73,6 +120,14 @@ function formatBytes(value: number): string {
 
 function formatAttemptCount(value: number): string {
   return Number.isFinite(value) && value >= 0 ? String(Math.floor(value)) : '—';
+}
+
+function formatDuration(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return 'Unknown duration';
+  const totalSeconds = Math.round(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function canCancel(job: JobView): boolean {
@@ -175,6 +230,113 @@ function DestinationCheckpoint({ destination }: { readonly destination: Destinat
   );
 }
 
+function TransformProgress({ transform }: { readonly transform: TransformDerivativeView }) {
+  const percent = transform.progress?.percent;
+  if (transform.status !== 'running' && percent === undefined) return null;
+  const progressLabel = percent === undefined ? 'Transform in progress' : `${percent.toFixed(1)}%`;
+
+  return (
+    <div className="mt-[var(--or-space-3)] grid gap-[var(--or-space-2)]">
+      <div className="flex flex-wrap items-center justify-between gap-[var(--or-space-2)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)]">
+        <span>{progressLabel}</span>
+        {transform.progress?.speed !== undefined && (
+          <span className="font-[family-name:var(--or-font-technical)] tabular-nums">
+            {transform.progress.speed.toFixed(2)}× speed
+          </span>
+        )}
+      </div>
+      <Progress
+        aria-label="Transform progress"
+        {...(percent === undefined ? {} : { value: percent })}
+      />
+    </div>
+  );
+}
+
+function DerivativeInspection({ transform }: { readonly transform: TransformDerivativeView }) {
+  const fit = transform.provenance.normalizedPlan.user.steps.find((step) => step.type === 'fit');
+  const output = transform.output;
+
+  return (
+    <section
+      aria-labelledby="derivative-inspection-heading"
+      className="mt-[var(--or-space-5)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-4)]"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-[var(--or-space-2)]">
+        <h4
+          className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)]"
+          id="derivative-inspection-heading"
+        >
+          Derivative inspection
+        </h4>
+        <JobStatus status={transform.status} />
+      </div>
+      <TransformProgress transform={transform} />
+      <dl className="mt-[var(--or-space-4)] grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-[var(--or-space-3)] gap-y-[var(--or-space-2)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
+        <dt className="text-[var(--or-text-tertiary)]">Derivative</dt>
+        <dd
+          className="min-w-0 break-all font-[family-name:var(--or-font-technical)] text-[var(--or-text-secondary)]"
+          translate="no"
+        >
+          {transform.id}
+        </dd>
+        <dt className="text-[var(--or-text-tertiary)]">Source</dt>
+        <dd
+          className="min-w-0 break-all font-[family-name:var(--or-font-technical)] text-[var(--or-text-secondary)]"
+          translate="no"
+        >
+          {transform.provenance.sourceMediaId}
+        </dd>
+        {fit?.width !== undefined && fit.height !== undefined && (
+          <>
+            <dt className="text-[var(--or-text-tertiary)]">Recipe</dt>
+            <dd className="text-[var(--or-text-secondary)] tabular-nums">
+              {fit.width} × {fit.height}
+              {fit.mode === undefined ? '' : ` · ${fit.mode}`}
+            </dd>
+          </>
+        )}
+        <dt className="text-[var(--or-text-tertiary)]">Encoder</dt>
+        <dd className="min-w-0 break-words font-[family-name:var(--or-font-technical)] text-[var(--or-text-secondary)]">
+          {transform.provenance.encoder} · {transform.provenance.ffmpegVersion}
+        </dd>
+        {output !== undefined && (
+          <>
+            <dt className="text-[var(--or-text-tertiary)]">Output</dt>
+            <dd className="text-[var(--or-text-secondary)] tabular-nums">
+              {output.metadata.width} × {output.metadata.height} · {output.metadata.videoCodec}
+              {output.metadata.hasAudio
+                ? ` / ${output.metadata.audioCodec ?? 'audio'}`
+                : ' · no audio'}
+            </dd>
+            <dt className="text-[var(--or-text-tertiary)]">Duration</dt>
+            <dd className="text-[var(--or-text-secondary)] tabular-nums">
+              {formatDuration(output.metadata.durationMillis)} · {formatBytes(output.sizeBytes)}
+            </dd>
+            <dt className="text-[var(--or-text-tertiary)]">Local file</dt>
+            <dd
+              className="min-w-0 break-all font-[family-name:var(--or-font-technical)] text-[var(--or-text-secondary)]"
+              translate="no"
+            >
+              {output.path}
+            </dd>
+          </>
+        )}
+      </dl>
+      {transform.errorMessage !== undefined && (
+        <Alert className="mt-[var(--or-space-4)]" title="Transform failed" variant="error">
+          {transform.errorCode !== undefined && (
+            <code className="font-[family-name:var(--or-font-technical)]" translate="no">
+              {transform.errorCode}:{' '}
+            </code>
+          )}
+          {transform.errorMessage}
+        </Alert>
+      )}
+    </section>
+  );
+}
+
 function CancelAction({
   activeAction,
   job,
@@ -253,6 +415,7 @@ function JobsTable({
                   {job.destination !== undefined && (
                     <DestinationCheckpoint destination={job.destination} />
                   )}
+                  {job.transform !== undefined && <TransformProgress transform={job.transform} />}
                 </td>
                 <td className="px-[var(--or-table-cell-padding-inline)] py-[var(--or-space-3)]">
                   <JobStatus status={job.status} />
@@ -299,6 +462,7 @@ function JobsList({
             {job.destination !== undefined && (
               <DestinationCheckpoint destination={job.destination} />
             )}
+            {job.transform !== undefined && <TransformProgress transform={job.transform} />}
             <div className="mt-[var(--or-space-4)] flex flex-wrap items-center justify-between gap-[var(--or-space-3)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-3)]">
               <span className="font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] tabular-nums [font-size:var(--or-type-metadata-size)]">
                 {formatAttemptCount(job.attemptCount)}/{formatAttemptCount(job.maxAttempts)}{' '}
@@ -314,16 +478,20 @@ function JobsList({
 }
 
 function AttemptHistory({
+  activeAction,
   attempts,
   isLoading,
   job,
   headingRef,
+  onCancel,
   onClose,
 }: {
+  readonly activeAction: string | undefined;
   readonly attempts: readonly JobAttemptView[];
   readonly isLoading: boolean;
   readonly job: JobView | undefined;
   readonly headingRef: RefObject<HTMLHeadingElement | null>;
+  readonly onCancel: JobsPageProps['onCancelJob'];
   readonly onClose: () => void;
 }) {
   return (
@@ -356,13 +524,20 @@ function AttemptHistory({
       </header>
 
       {job !== undefined && (
-        <div className="mt-[var(--or-space-4)] flex flex-wrap items-center gap-[var(--or-space-2)]">
-          <JobStatus status={job.status} />
-          <span className="break-words text-[var(--or-text-secondary)] [font-size:var(--or-type-interface-size)]">
-            {job.type}
-          </span>
+        <div className="mt-[var(--or-space-4)] flex flex-wrap items-center justify-between gap-[var(--or-space-3)]">
+          <div className="flex flex-wrap items-center gap-[var(--or-space-2)]">
+            <JobStatus status={job.status} />
+            <span className="break-words text-[var(--or-text-secondary)] [font-size:var(--or-type-interface-size)]">
+              {job.type}
+            </span>
+          </div>
+          <div className="min-[90rem]:hidden">
+            <CancelAction activeAction={activeAction} job={job} onCancel={onCancel} />
+          </div>
         </div>
       )}
+
+      {job?.transform !== undefined && <DerivativeInspection transform={job.transform} />}
 
       {isLoading ? (
         <div
@@ -553,10 +728,12 @@ export function JobsPage({
             </div>
             {selectedJobId !== undefined && (
               <AttemptHistory
+                activeAction={activeAction}
                 attempts={attempts}
                 headingRef={detailHeadingRef}
                 isLoading={isDetailLoading}
                 job={selectedJob}
+                onCancel={onCancelJob}
                 onClose={closeDetails}
               />
             )}

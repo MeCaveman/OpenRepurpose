@@ -35,10 +35,12 @@ export function JobsRoute() {
         attempts: readonly JobAttemptView[];
         destination?: JobView['destination'];
         job: JobView;
+        transform?: JobView['transform'];
       };
       setSelectedJob({
         ...body.job,
         ...(body.destination === undefined ? {} : { destination: body.destination }),
+        ...(body.transform === undefined ? {} : { transform: body.transform }),
       });
       setAttempts(body.attempts);
     } catch (failure) {
@@ -63,6 +65,43 @@ export function JobsRoute() {
   useEffect(() => {
     void retryJobs();
   }, []);
+
+  const hasActiveTransform = jobs.some(
+    (job) =>
+      job.type === 'media.transform' &&
+      (job.status === 'pending' || job.status === 'retrying' || job.status === 'running'),
+  );
+
+  useEffect(() => {
+    if (!hasActiveTransform) return;
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const refreshedJobs = await loadJobs();
+          if (selectedJobId === undefined) return;
+          const selected = refreshedJobs.find((job) => job.id === selectedJobId);
+          if (selected?.type !== 'media.transform') return;
+          const response = await fetch(`/api/jobs/${encodeURIComponent(selectedJobId)}`);
+          if (!response.ok) return;
+          const body = (await response.json()) as {
+            attempts: readonly JobAttemptView[];
+            destination?: JobView['destination'];
+            job: JobView;
+            transform?: JobView['transform'];
+          };
+          setSelectedJob({
+            ...body.job,
+            ...(body.destination === undefined ? {} : { destination: body.destination }),
+            ...(body.transform === undefined ? {} : { transform: body.transform }),
+          });
+          setAttempts(body.attempts);
+        } catch {
+          // The normal reload and inline retry path own visible request failures.
+        }
+      })();
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveTransform, selectedJobId]);
 
   const cancelJob = async (jobId: string) => {
     setError(undefined);

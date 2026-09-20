@@ -257,3 +257,92 @@ test('job history renders persisted status and attempt detail', async ({ page })
     true,
   );
 });
+
+test('transform jobs expose live progress, inspection, and cancellation', async ({ page }) => {
+  await serveProductionAssets(page);
+  await page.setViewportSize({ height: 844, width: 390 });
+  await page.route('http://openrepurpose.test/api/session', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
+  );
+  let listRequests = 0;
+  let cancellationRequested = false;
+  const transform = (percent: number) => ({
+    id: 'derivative-1',
+    status: cancellationRequested ? 'cancelled' : 'running',
+    progress: { outTimeMillis: 12_000, percent, speed: 1.2 },
+    provenance: {
+      encoder: 'libx264',
+      ffmpegVersion: 'ffmpeg 8.0.1',
+      outputProfileVersion: 'common-mp4-v1',
+      recipeHash: 'sha256:recipe',
+      sourceMediaId: 'media-1',
+      normalizedPlan: {
+        user: { steps: [{ type: 'fit', mode: 'crop', width: 1080, height: 1920 }] },
+      },
+    },
+  });
+  await page.route('http://openrepurpose.test/api/jobs**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/jobs/job-transform/cancel' && route.request().method() === 'POST') {
+      cancellationRequested = true;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ job: { id: 'job-transform', status: 'running' } }),
+      });
+      return;
+    }
+    if (pathname === '/api/jobs') {
+      listRequests += 1;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jobs: [
+            {
+              id: 'job-transform',
+              type: 'media.transform',
+              status: 'running',
+              attemptCount: 1,
+              maxAttempts: 3,
+              ...(cancellationRequested
+                ? { cancellationRequestedAt: '2026-09-20T12:03:00.000Z' }
+                : {}),
+              transform: transform(listRequests === 1 ? 25 : 62.5),
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        job: {
+          id: 'job-transform',
+          type: 'media.transform',
+          status: 'running',
+          attemptCount: 1,
+          maxAttempts: 3,
+          ...(cancellationRequested ? { cancellationRequestedAt: '2026-09-20T12:03:00.000Z' } : {}),
+        },
+        transform: transform(listRequests === 1 ? 25 : 62.5),
+        attempts: [{ attemptNumber: 1, status: 'running' }],
+      }),
+    });
+  });
+
+  await page.goto('/jobs');
+  await expect(page.getByText('62.5%').last()).toBeVisible();
+  expect(listRequests).toBeGreaterThanOrEqual(2);
+  await page.getByRole('button', { name: /media\.transform/ }).click();
+  await expect(page.getByRole('heading', { name: 'Derivative inspection' })).toBeVisible();
+  await expect(page.getByText('derivative-1')).toBeVisible();
+  await expect(page.getByText('1080 × 1920 · crop')).toBeVisible();
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect.poll(() => cancellationRequested).toBe(true);
+  await expect(page.getByRole('button', { name: 'Cancellation requested' })).toBeDisabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});

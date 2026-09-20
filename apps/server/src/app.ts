@@ -20,6 +20,7 @@ import type {
   WorkflowService,
   SourceService,
   SourceWorkflowCoordinator,
+  TransformService,
 } from '@openrepurpose/core';
 
 declare module '@fastify/secure-session' {
@@ -50,6 +51,7 @@ export interface BuildServerOptions {
   readonly sourceWorkflowCoordinator?: Pick<SourceWorkflowCoordinator, 'retryFailedDestinations'>;
   readonly staticRoot?: false | string;
   readonly tiktokOAuthService?: TikTokOAuthService;
+  readonly transformService?: TransformService;
   readonly youtubeOAuthService?: YouTubeOAuthService;
   readonly workflowService?: WorkflowService;
 }
@@ -507,6 +509,9 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
           ...(options.destinationJobRepository === undefined
             ? {}
             : { destination: options.destinationJobRepository.find(job.id) }),
+          ...(options.transformService?.forJob(job) === undefined
+            ? {}
+            : { transform: options.transformService.forJob(job) }),
         })),
       };
     });
@@ -519,10 +524,17 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
             ...(options.destinationJobRepository === undefined
               ? {}
               : { destination: options.destinationJobRepository.find(request.params.id) }),
+            ...(options.transformService?.forJob(details.job) === undefined
+              ? {}
+              : { transform: options.transformService.forJob(details.job) }),
           };
     });
     server.post<{ Params: { id: string } }>('/api/jobs/:id/cancel', async (request, reply) => {
-      const job = options.jobService!.cancel(request.params.id);
+      const existing = options.jobService!.show(request.params.id)?.job;
+      const job =
+        existing?.type === 'media.transform' && options.transformService !== undefined
+          ? options.transformService.cancelJob(request.params.id)
+          : options.jobService!.cancel(request.params.id);
       return job === undefined
         ? reply.code(404).send({ error: 'Job not found.', code: 'JOB_NOT_FOUND' })
         : { job };
@@ -568,6 +580,20 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         ),
       }),
     );
+  }
+
+  if (options.transformService !== undefined) {
+    server.get('/api/transforms', async () => ({
+      derivatives: options.transformService!.list(),
+    }));
+    server.get<{ Params: { id: string } }>('/api/transforms/:id', async (request, reply) => {
+      const derivative = options.transformService!.inspect(request.params.id);
+      return derivative === undefined
+        ? reply
+            .code(404)
+            .send({ error: 'Transform derivative not found.', code: 'DERIVATIVE_NOT_FOUND' })
+        : { derivative };
+    });
   }
 
   if (options.sourceWorkflowCoordinator !== undefined)

@@ -21,9 +21,49 @@ export type WorkflowDefinitionView = {
 type WorkflowStepView =
   | { id: string; kind: 'source'; sourceType: 'remote' | 'watched_folder' }
   | { id: string; kind: 'filter'; filters: Record<string, unknown> }
-  | { id: string; kind: 'transform'; operation: 'pass_through' }
+  | {
+      id: string;
+      kind: 'transform';
+      operation?: 'pass_through';
+      plan?: TransformPlanView;
+    }
   | { id: string; kind: 'schedule'; scheduleId: string }
   | { id: string; kind: 'destination'; destination: WorkflowDestinationView };
+
+type TransformFitMode = 'contain' | 'crop' | 'stretch';
+type TransformAnchor = 'bottom' | 'center' | 'left' | 'right' | 'top';
+type TransformPreset = 'custom' | 'landscape' | 'square' | 'vertical';
+
+type TransformPlanView = {
+  schemaVersion: 1;
+  user: {
+    schemaVersion: 1;
+    steps: readonly [
+      | {
+          type: 'fit';
+          mode: 'stretch';
+          width: number;
+          height: number;
+        }
+      | {
+          type: 'fit';
+          mode: 'contain' | 'crop';
+          width: number;
+          height: number;
+          anchor: TransformAnchor;
+        },
+    ];
+    output: Record<string, never>;
+  };
+};
+
+const transformPresets: Readonly<
+  Record<Exclude<TransformPreset, 'custom'>, { label: string; width: number; height: number }>
+> = {
+  vertical: { label: 'Vertical 9:16', width: 1080, height: 1920 },
+  square: { label: 'Square 1:1', width: 1080, height: 1080 },
+  landscape: { label: 'Landscape 16:9', width: 1920, height: 1080 },
+};
 
 export type WorkflowDestinationView = {
   accountId: string;
@@ -58,7 +98,7 @@ type TargetOption = {
 };
 type SourceOption = { id: string; displayName: string; status: string };
 type ValidationField =
-  'destinations' | 'name' | 'retention' | 'schedule' | 'source' | 'titleTemplate';
+  'destinations' | 'name' | 'retention' | 'schedule' | 'source' | 'titleTemplate' | 'transform';
 type ValidationError = { readonly field: ValidationField; readonly message: string };
 
 function RouteStepHeader({
@@ -112,6 +152,11 @@ export function WorkflowEditor({
   const [filterTitle, setFilterTitle] = useState('');
   const [filterEnabled, setFilterEnabled] = useState(false);
   const [transformEnabled, setTransformEnabled] = useState(false);
+  const [transformPreset, setTransformPreset] = useState<TransformPreset>('vertical');
+  const [transformWidth, setTransformWidth] = useState('1080');
+  const [transformHeight, setTransformHeight] = useState('1920');
+  const [transformFit, setTransformFit] = useState<TransformFitMode>('crop');
+  const [transformAnchor, setTransformAnchor] = useState<TransformAnchor>('center');
   const [scheduleId, setScheduleId] = useState('');
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [destinations, setDestinations] = useState<WorkflowDestinationView[]>([]);
@@ -123,8 +168,10 @@ export function WorkflowEditor({
   const retentionHoursRef = useRef<HTMLInputElement>(null);
   const scheduleIdRef = useRef<HTMLInputElement>(null);
   const titleTemplateRef = useRef<HTMLInputElement>(null);
+  const transformWidthRef = useRef<HTMLInputElement>(null);
   const addDestinationRef = useRef<HTMLButtonElement>(null);
   const optionalStagesRef = useRef<HTMLDetailsElement>(null);
+  const transformAdvancedRef = useRef<HTMLDetailsElement>(null);
 
   const clearValidationError = (field: ValidationField) => {
     setValidationError((current) => (current?.field === field ? undefined : current));
@@ -147,6 +194,10 @@ export function WorkflowEditor({
     ],
     [accounts, metaTargets],
   );
+  const selectedTransformDimensions =
+    transformPreset === 'custom'
+      ? { width: transformWidth || '?', height: transformHeight || '?' }
+      : transformPresets[transformPreset];
 
   const addDestination = () =>
     setDestinations((current) => [
@@ -181,15 +232,17 @@ export function WorkflowEditor({
     setValidationError(undefined);
     const reportValidationError = (field: ValidationField, message: string) => {
       setValidationError({ field, message });
-      if (field === 'retention' || field === 'schedule') {
+      if (field === 'retention' || field === 'schedule' || field === 'transform') {
         optionalStagesRef.current?.setAttribute('open', '');
       }
+      if (field === 'transform') transformAdvancedRef.current?.setAttribute('open', '');
       requestAnimationFrame(() => {
         if (field === 'name') nameRef.current?.focus();
         if (field === 'source') sourceDirectoryRef.current?.focus();
         if (field === 'retention') retentionHoursRef.current?.focus();
         if (field === 'schedule') scheduleIdRef.current?.focus();
         if (field === 'titleTemplate') titleTemplateRef.current?.focus();
+        if (field === 'transform') transformWidthRef.current?.focus();
         if (field === 'destinations') {
           const firstIncompleteDestination = formRef.current?.querySelector<HTMLSelectElement>(
             'select[name^="workflow-destination-"]:invalid',
@@ -229,6 +282,49 @@ export function WorkflowEditor({
     if (titleTemplate.trim().length === 0) {
       return reportValidationError('titleTemplate', 'Enter a title template.');
     }
+    const presetDimensions =
+      transformPreset === 'custom' ? undefined : transformPresets[transformPreset];
+    const transformTargetWidth = presetDimensions?.width ?? Number(transformWidth);
+    const transformTargetHeight = presetDimensions?.height ?? Number(transformHeight);
+    if (
+      transformEnabled &&
+      (!Number.isInteger(transformTargetWidth) ||
+        !Number.isInteger(transformTargetHeight) ||
+        transformTargetWidth < 2 ||
+        transformTargetHeight < 2 ||
+        transformTargetWidth > 16_384 ||
+        transformTargetHeight > 16_384 ||
+        transformTargetWidth % 2 !== 0 ||
+        transformTargetHeight % 2 !== 0)
+    ) {
+      return reportValidationError(
+        'transform',
+        'Width and height must be even whole numbers from 2 to 16384 pixels.',
+      );
+    }
+    const transformPlan: TransformPlanView = {
+      schemaVersion: 1,
+      user: {
+        schemaVersion: 1,
+        steps: [
+          transformFit === 'stretch'
+            ? {
+                type: 'fit',
+                mode: 'stretch',
+                width: transformTargetWidth,
+                height: transformTargetHeight,
+              }
+            : {
+                type: 'fit',
+                mode: transformFit,
+                width: transformTargetWidth,
+                height: transformTargetHeight,
+                anchor: transformAnchor,
+              },
+        ],
+        output: {},
+      },
+    };
     const sourceType =
       remoteSourceId.length === 0 ? ('watched_folder' as const) : ('remote' as const);
     const filter =
@@ -242,7 +338,7 @@ export function WorkflowEditor({
       { id: 'source', kind: 'source', sourceType },
       ...(filter === undefined ? [] : [filter]),
       ...(transformEnabled
-        ? [{ id: 'transform', kind: 'transform' as const, operation: 'pass_through' as const }]
+        ? [{ id: 'transform', kind: 'transform' as const, plan: transformPlan }]
         : []),
       ...(schedule === undefined ? [] : [schedule]),
       ...destinations.map((destination, index) => ({
@@ -482,18 +578,147 @@ export function WorkflowEditor({
                 className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]"
                 id="workflow-transform-heading"
               >
-                Pass-through transform
+                Media transform
               </h3>
               <p className="mt-[var(--or-space-1)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-body-line)]">
-                v0.5 stores a pass-through transform boundary; media operations arrive in v0.6.
+                Prepare one reusable local derivative before destination jobs fan out.
               </p>
             </div>
             <Checkbox
               checked={transformEnabled}
               disabled={isSubmitting}
-              label="Include pass-through transform step"
-              onChange={(event) => setTransformEnabled(event.target.checked)}
+              label="Transform media for destinations"
+              onChange={(event) => {
+                setTransformEnabled(event.target.checked);
+                if (!event.target.checked) clearValidationError('transform');
+              }}
             />
+            {transformEnabled && (
+              <div className="grid gap-[var(--or-space-3)]">
+                <FormField label="Output preset">
+                  <Select
+                    disabled={isSubmitting}
+                    name="workflow-transform-preset"
+                    onChange={(event) => {
+                      const preset = event.target.value as TransformPreset;
+                      setTransformPreset(preset);
+                      clearValidationError('transform');
+                      if (preset === 'custom') {
+                        transformAdvancedRef.current?.setAttribute('open', '');
+                        requestAnimationFrame(() => transformWidthRef.current?.focus());
+                      } else {
+                        setTransformWidth(String(transformPresets[preset].width));
+                        setTransformHeight(String(transformPresets[preset].height));
+                      }
+                    }}
+                    value={transformPreset}
+                  >
+                    <option value="vertical">Vertical 9:16 · 1080 × 1920</option>
+                    <option value="square">Square 1:1 · 1080 × 1080</option>
+                    <option value="landscape">Landscape 16:9 · 1920 × 1080</option>
+                    <option value="custom">Custom dimensions</option>
+                  </Select>
+                </FormField>
+                <details
+                  className="group rounded-[var(--or-radius-md)] border border-[var(--or-border-subtle)] bg-[var(--or-bg-workspace)]"
+                  ref={transformAdvancedRef}
+                >
+                  <summary className="flex min-h-[var(--or-control-default-height)] cursor-pointer list-none items-center justify-between gap-[var(--or-space-3)] rounded-[var(--or-radius-md)] px-[var(--or-space-3)] text-[var(--or-text-secondary)] focus-visible:outline-[var(--or-focus-width)] focus-visible:outline-offset-[var(--or-focus-offset)] focus-visible:[outline-color:var(--or-focus-ring)] [font-size:var(--or-type-interface-size)]">
+                    <span>Advanced transform controls</span>
+                    <span
+                      aria-hidden="true"
+                      className="text-[var(--or-text-accent)] transition-transform duration-[var(--or-duration-fast)] group-open:rotate-45 motion-reduce:transition-none"
+                    >
+                      +
+                    </span>
+                  </summary>
+                  <div className="grid gap-[var(--or-space-3)] border-t border-[var(--or-border-subtle)] p-[var(--or-space-3)] sm:grid-cols-2">
+                    {transformPreset === 'custom' && (
+                      <>
+                        <FormField
+                          {...(validationError?.field === 'transform'
+                            ? { error: validationError.message }
+                            : {})}
+                          label="Width (px)"
+                          required
+                        >
+                          <Input
+                            disabled={isSubmitting}
+                            id="workflow-transform-width"
+                            inputMode="numeric"
+                            max="16384"
+                            min="2"
+                            name="workflow-transform-width"
+                            onChange={(event) => {
+                              setTransformWidth(event.target.value);
+                              clearValidationError('transform');
+                            }}
+                            ref={transformWidthRef}
+                            step="2"
+                            type="number"
+                            value={transformWidth}
+                          />
+                        </FormField>
+                        <FormField label="Height (px)" required>
+                          <Input
+                            aria-describedby={
+                              validationError?.field === 'transform'
+                                ? 'workflow-transform-width-error'
+                                : undefined
+                            }
+                            aria-invalid={validationError?.field === 'transform' || undefined}
+                            disabled={isSubmitting}
+                            inputMode="numeric"
+                            max="16384"
+                            min="2"
+                            name="workflow-transform-height"
+                            onChange={(event) => {
+                              setTransformHeight(event.target.value);
+                              clearValidationError('transform');
+                            }}
+                            step="2"
+                            type="number"
+                            value={transformHeight}
+                          />
+                        </FormField>
+                      </>
+                    )}
+                    <FormField label="Fit mode">
+                      <Select
+                        disabled={isSubmitting}
+                        name="workflow-transform-fit"
+                        onChange={(event) =>
+                          setTransformFit(event.target.value as TransformFitMode)
+                        }
+                        value={transformFit}
+                      >
+                        <option value="crop">Crop to fill</option>
+                        <option value="contain">Contain with padding</option>
+                        <option value="stretch">Stretch exactly</option>
+                      </Select>
+                    </FormField>
+                    {transformFit !== 'stretch' && (
+                      <FormField label="Frame anchor">
+                        <Select
+                          disabled={isSubmitting}
+                          name="workflow-transform-anchor"
+                          onChange={(event) =>
+                            setTransformAnchor(event.target.value as TransformAnchor)
+                          }
+                          value={transformAnchor}
+                        >
+                          <option value="center">Center</option>
+                          <option value="top">Top</option>
+                          <option value="bottom">Bottom</option>
+                          <option value="left">Left</option>
+                          <option value="right">Right</option>
+                        </Select>
+                      </FormField>
+                    )}
+                  </div>
+                </details>
+              </div>
+            )}
           </section>
           <section
             aria-labelledby="workflow-schedule-heading"
@@ -684,7 +909,18 @@ export function WorkflowEditor({
                     },
                   ]
                 : []),
-              ...(transformEnabled ? [{ kind: 'transform' as const, label: 'Pass-through' }] : []),
+              ...(transformEnabled
+                ? [
+                    {
+                      detail: `${selectedTransformDimensions.width} × ${selectedTransformDimensions.height} · ${transformFit}`,
+                      kind: 'transform' as const,
+                      label:
+                        transformPreset === 'custom'
+                          ? 'Custom output'
+                          : transformPresets[transformPreset].label,
+                    },
+                  ]
+                : []),
               ...(scheduleEnabled
                 ? [
                     {

@@ -460,7 +460,21 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
     | {
         definition: {
           edges: readonly { from: string; to: string }[];
-          steps: readonly { id: string; kind: string }[];
+          steps: readonly {
+            id: string;
+            kind: string;
+            plan?: {
+              user: {
+                steps: readonly {
+                  anchor?: string;
+                  height: number;
+                  mode: string;
+                  type: string;
+                  width: number;
+                }[];
+              };
+            };
+          }[];
         };
         destinations: readonly { accountId: string; destinationId: string }[];
         name: string;
@@ -511,6 +525,19 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
 
   await page.getByLabel('Workflow name').fill('Workshop uploads');
   await page.getByLabel('Watched folder').fill('C:\\Media\\watched');
+  await optionalStages.click();
+  await page.getByLabel('Transform media for destinations').check();
+  await expect(page.getByLabel('Output preset')).toHaveValue('vertical');
+  await page.getByLabel('Output preset').selectOption('custom');
+  await expect(
+    page
+      .getByText('Advanced transform controls', { exact: true })
+      .locator('xpath=ancestor::details[1]'),
+  ).toHaveAttribute('open', '');
+  await page.getByLabel('Width (px)').fill('720');
+  await page.getByLabel('Height (px)').fill('1280');
+  await page.getByLabel('Fit mode').selectOption('contain');
+  await page.getByLabel('Frame anchor').selectOption('top');
   await page.getByRole('button', { name: 'Add destination' }).click();
   await page.getByLabel('Destination 1').selectOption('youtube:account-1');
   await page.getByRole('button', { name: 'Save workflow' }).click();
@@ -520,14 +547,40 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
   expect(submitted?.destinations).toEqual([
     { accountId: 'account-1', destinationId: 'youtube', privacy: 'private' },
   ]);
-  expect(submitted?.definition.steps.map((step) => step.kind)).toEqual(['source', 'destination']);
-  expect(submitted?.definition.edges).toEqual([{ from: 'source', to: 'destination-1' }]);
+  expect(submitted?.definition.steps.map((step) => step.kind)).toEqual([
+    'source',
+    'transform',
+    'destination',
+  ]);
+  expect(submitted?.definition.steps.find((step) => step.kind === 'transform')?.plan).toEqual({
+    schemaVersion: 1,
+    user: {
+      schemaVersion: 1,
+      steps: [{ type: 'fit', mode: 'contain', width: 720, height: 1280, anchor: 'top' }],
+      output: {},
+    },
+  });
+  expect(submitted?.definition.edges).toEqual([
+    { from: 'source', to: 'transform' },
+    { from: 'transform', to: 'destination-1' },
+  ]);
   await expect(page.getByText('Workshop uploads')).toBeVisible();
   await expect(page.getByText('1 workflow')).toBeVisible();
 
-  await page.setViewportSize({ height: 800, width: 320 });
-  await expect(page.getByRole('heading', { name: 'Route preview' })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-    true,
-  );
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 412, height: 915 },
+    { width: 768, height: 1024 },
+    { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+    { width: 2560, height: 1440 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.getByRole('heading', { name: 'Route preview' })).toBeVisible();
+    await expect(page.getByLabel('Output preset')).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+  }
 });

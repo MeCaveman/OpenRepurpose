@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   JobService,
   MediaImportService,
+  TransformService,
   WorkflowTransformService,
   WorkflowService,
   renderTemplate,
@@ -365,5 +366,47 @@ describe('watched-folder workflows', () => {
     expect(new Set(publishes.map((job) => (job.input as { mediaId: string }).mediaId)).size).toBe(
       1,
     );
+  });
+
+  it('uses the shared transform service for direct runs, inspection, and pending cancellation', () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    const media = new SqliteMediaRepository(database);
+    media.create({
+      id: 'media-direct',
+      path: 'C:\\Media\\direct.mp4',
+      fingerprint: 'sha256:direct',
+      sizeBytes: 20,
+      modifiedAt: new Date(0),
+      createdAt: new Date(0),
+      state: 'available',
+      metadata: { hasAudio: true },
+    });
+    const derivatives = new SqliteTransformDerivativeRepository(database);
+    const jobs = new JobService(new SqliteJobRepository(database), () => new Date(2_000));
+    const transforms = new TransformService(
+      media,
+      derivatives,
+      jobs,
+      { encoder: 'libx264', ffmpegVersion: 'test-ffmpeg' },
+      () => new Date(2_000),
+    );
+
+    const run = transforms.run('media-direct', {
+      user: { steps: [{ type: 'fit', mode: 'crop', width: 1080, height: 1920 }] },
+    });
+
+    expect(run).toMatchObject({
+      cached: false,
+      derivative: { status: 'pending' },
+      job: { status: 'pending', type: 'media.transform' },
+    });
+    expect(transforms.inspect(run.derivative.id)?.provenance.normalizedPlan.user.steps).toEqual([
+      { type: 'fit', mode: 'crop', width: 1080, height: 1920, anchor: 'center' },
+    ]);
+    expect(transforms.forJob(run.job!)?.id).toBe(run.derivative.id);
+
+    expect(transforms.cancelJob(run.job!.id)?.status).toBe('cancelled');
+    expect(transforms.inspect(run.derivative.id)?.status).toBe('cancelled');
   });
 });
