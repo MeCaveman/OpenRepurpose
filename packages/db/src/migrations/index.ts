@@ -15,6 +15,7 @@ import { executionScopedMediaMigration } from './0014_execution_scoped_media.js'
 import { schedulesMigration } from './0015_schedules.js';
 import { jobControlsMigration } from './0016_job_controls.js';
 import { workflowExecutionPlansMigration } from './0017_workflow_execution_plans.js';
+import { transformDerivativesMigration } from './0018_transform_derivatives.js';
 import type { Migration } from './types.js';
 
 /** Ordered, immutable migration ledger. Never alter a released migration's SQL. */
@@ -36,5 +37,6 @@ export const migrations: readonly Migration[] = [
   schedulesMigration,
   jobControlsMigration,
   workflowExecutionPlansMigration,
+  transformDerivativesMigration,
 ];
 export type { Migration } from './types.js';

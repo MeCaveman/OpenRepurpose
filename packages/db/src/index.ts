@@ -87,6 +87,7 @@ export {
   sourceMediaArtifacts,
   sourceMediaResolutions,
   sourceWorkflowExecutions,
+  transformDerivatives,
   workflowRemoteSources,
   workflows,
   workflowDestinations,

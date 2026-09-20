@@ -25,6 +25,97 @@ export const mediaAssets = sqliteTable('media_assets', {
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
+export const transformDerivatives = sqliteTable(
+  'transform_derivatives',
+  {
+    id: text('id').primaryKey(),
+    sourceMediaId: text('source_media_id')
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: 'restrict' }),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    cacheKey: text('cache_key').notNull(),
+    recipeHash: text('recipe_hash').notNull(),
+    normalizedPlanJson: text('normalized_plan_json').notNull(),
+    outputProfileVersion: text('output_profile_version').notNull(),
+    ffmpegVersion: text('ffmpeg_version').notNull(),
+    encoder: text('encoder').notNull(),
+    status: text('status', {
+      enum: ['pending', 'running', 'succeeded', 'failed', 'cancelled'],
+    }).notNull(),
+    outputPath: text('output_path'),
+    outputSizeBytes: integer('output_size_bytes'),
+    outputDurationMillis: integer('output_duration_millis'),
+    outputVideoCodec: text('output_video_codec'),
+    outputAudioCodec: text('output_audio_codec'),
+    outputWidth: integer('output_width'),
+    outputHeight: integer('output_height'),
+    outputFrameRateMilli: integer('output_frame_rate_milli'),
+    outputHasAudio: integer('output_has_audio', { mode: 'boolean' }),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('transform_derivatives_cache_key_idx').on(table.cacheKey),
+    index('transform_derivatives_source_created_idx').on(table.sourceMediaId, table.createdAt),
+    index('transform_derivatives_status_updated_idx').on(table.status, table.updatedAt),
+    check(
+      'transform_derivatives_normalized_plan_json_check',
+      sql`json_valid(${table.normalizedPlanJson})`,
+    ),
+    check(
+      'transform_derivatives_success_output_check',
+      sql`(
+        ${table.status} = 'succeeded'
+        AND ${table.outputPath} IS NOT NULL
+        AND ${table.outputSizeBytes} IS NOT NULL
+        AND ${table.outputDurationMillis} IS NOT NULL
+        AND ${table.outputVideoCodec} IS NOT NULL
+        AND ${table.outputWidth} IS NOT NULL
+        AND ${table.outputHeight} IS NOT NULL
+        AND ${table.outputHasAudio} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+      ) OR (
+        ${table.status} <> 'succeeded'
+        AND ${table.outputPath} IS NULL
+        AND ${table.outputSizeBytes} IS NULL
+        AND ${table.outputDurationMillis} IS NULL
+        AND ${table.outputVideoCodec} IS NULL
+        AND ${table.outputAudioCodec} IS NULL
+        AND ${table.outputWidth} IS NULL
+        AND ${table.outputHeight} IS NULL
+        AND ${table.outputFrameRateMilli} IS NULL
+        AND ${table.outputHasAudio} IS NULL
+      )`,
+    ),
+    check(
+      'transform_derivatives_completion_check',
+      sql`(${table.status} IN ('pending', 'running') AND ${table.completedAt} IS NULL)
+        OR (${table.status} IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NOT NULL)`,
+    ),
+    check(
+      'transform_derivatives_error_check',
+      sql`${table.status} = 'failed' OR (${table.errorCode} IS NULL AND ${table.errorMessage} IS NULL)`,
+    ),
+    check(
+      'transform_derivatives_numeric_output_check',
+      sql`(${table.outputSizeBytes} IS NULL OR ${table.outputSizeBytes} >= 0)
+        AND (${table.outputDurationMillis} IS NULL OR ${table.outputDurationMillis} >= 0)
+        AND (${table.outputWidth} IS NULL OR ${table.outputWidth} > 0)
+        AND (${table.outputHeight} IS NULL OR ${table.outputHeight} > 0)
+        AND (${table.outputFrameRateMilli} IS NULL OR ${table.outputFrameRateMilli} > 0)`,
+    ),
+    check(
+      'transform_derivatives_audio_output_check',
+      sql`${table.outputHasAudio} IS NULL
+        OR (${table.outputHasAudio} = 0 AND ${table.outputAudioCodec} IS NULL)
+        OR (${table.outputHasAudio} = 1 AND ${table.outputAudioCodec} IS NOT NULL)`,
+    ),
+  ],
+);
+
 export const jobs = sqliteTable(
   'jobs',
   {

@@ -11,3 +11,4 @@ Use sequential, descriptive filenames, for example:
 - `0005-meta-reels-publishing.md`
 - `0006-remote-source-lifecycle.md`
 - `0007-persistent-scheduler-semantics.md`
+- `0008-deterministic-transform-recipes.md`
