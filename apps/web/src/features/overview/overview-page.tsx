@@ -51,7 +51,7 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
             {routeSteps.map((step, index) => (
               <li key={step.href}>
                 <a
-                  className="group grid min-h-[var(--or-row-comfortable-height)] grid-cols-[var(--or-control-compact-height)_minmax(0,1fr)_var(--or-icon-lg)] items-center gap-[var(--or-space-3)] px-[var(--or-pane-padding)] py-[var(--or-space-3)] text-[var(--or-text-secondary)] transition-[background-color,color] duration-[var(--or-duration-fast)] ease-[var(--or-ease-out)] hover:bg-[var(--or-bg-hover)] motion-reduce:transition-none sm:gap-[var(--or-space-4)]"
+                  className="group grid min-h-[var(--or-row-comfortable-height)] grid-cols-[var(--or-control-compact-height)_minmax(0,1fr)_var(--or-icon-lg)] items-center gap-[var(--or-space-3)] px-[var(--or-pane-padding)] py-[var(--or-space-3)] text-[var(--or-text-secondary)] transition-[background-color,color] duration-[var(--or-duration-fast)] ease-[var(--or-ease-out)] hover:bg-[var(--or-bg-hover)] active:bg-[var(--or-bg-selected)] motion-reduce:transition-none sm:gap-[var(--or-space-4)]"
                   href={step.href}
                   onClick={(event) => onNavigate(event, step.href)}
                 >

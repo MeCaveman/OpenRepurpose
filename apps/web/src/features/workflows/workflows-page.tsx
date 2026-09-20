@@ -4,7 +4,7 @@ import {
   type WorkflowRouteData,
   type WorkflowRouteNodeData,
 } from '../../components/patterns';
-import { Alert, Badge, Panel, Spinner } from '../../components/ui';
+import { Alert, Badge, Button, Panel, Spinner } from '../../components/ui';
 import { WorkflowEditor } from './workflow-editor';
 import type { WorkflowDefinitionView, WorkflowEditorValue } from './workflow-editor';
 
@@ -55,13 +55,16 @@ export interface WorkflowsPageProps {
   readonly isLoading: boolean;
   readonly metaTargets: readonly WorkflowTargetView[];
   readonly onCreateWorkflow: (value: WorkflowEditorValue) => Promise<void>;
+  readonly onRetry: () => void;
   readonly sources: readonly WorkflowSourceView[];
   readonly workflows: readonly WorkflowView[];
 }
 
 function toWorkflowRouteData(workflow: WorkflowView): WorkflowRouteData {
   const sourceLabel =
-    workflow.sourceDirectory || workflow.remoteSource?.connectionId || 'Remote source';
+    workflow.sourceDirectory.trim() ||
+    workflow.remoteSource?.connectionId.trim() ||
+    'Remote source';
   const nodeState = workflow.enabled ? ('default' as const) : ('disabled' as const);
   const source: WorkflowRouteNodeData = {
     detail: workflow.remoteSource === undefined ? 'Watched folder' : 'Remote source',
@@ -111,9 +114,14 @@ function toWorkflowRouteData(workflow: WorkflowView): WorkflowRouteData {
   return { destinations, source, stages };
 }
 
-function LoadingWorkflows() {
+function LoadingWorkflows({ announce = true }: { readonly announce?: boolean }) {
   return (
-    <Panel aria-live="polite" className="flex items-center gap-[var(--or-space-3)]" role="status">
+    <Panel
+      aria-hidden={announce ? undefined : true}
+      aria-live={announce ? 'polite' : undefined}
+      className="flex items-center gap-[var(--or-space-3)]"
+      role={announce ? 'status' : undefined}
+    >
       <Spinner />
       <p className="text-[var(--or-text-secondary)] [font-size:var(--or-type-interface-size)]">
         Loading workflow routes…
@@ -128,13 +136,22 @@ export function WorkflowsPage({
   isLoading,
   metaTargets,
   onCreateWorkflow,
+  onRetry,
   sources,
   workflows,
 }: WorkflowsPageProps) {
   return (
-    <div className="grid gap-[var(--or-space-8)]">
+    <div aria-busy={isLoading || undefined} className="grid gap-[var(--or-space-8)]">
       {error !== undefined && (
-        <Alert title="Workflow request failed" variant="error">
+        <Alert
+          action={
+            <Button onClick={onRetry} size="sm" variant="secondary">
+              Reload workflow data
+            </Button>
+          }
+          title="Workflow request failed"
+          variant="error"
+        >
           {error}
         </Alert>
       )}
@@ -189,7 +206,7 @@ export function WorkflowsPage({
         </header>
 
         {isLoading ? (
-          <LoadingWorkflows />
+          <LoadingWorkflows announce={false} />
         ) : workflows.length === 0 ? (
           <ResourceEmptyState
             description="Create a route from a source through any processing stages to one or more destinations."
@@ -208,8 +225,8 @@ export function WorkflowsPage({
                   name={workflow.name}
                   source={route.source}
                   sourceLabel={
-                    workflow.sourceDirectory ||
-                    workflow.remoteSource?.connectionId ||
+                    workflow.sourceDirectory.trim() ||
+                    workflow.remoteSource?.connectionId.trim() ||
                     'Remote source'
                   }
                   stages={route.stages ?? []}

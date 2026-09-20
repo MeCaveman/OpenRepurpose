@@ -47,17 +47,17 @@ export function WorkflowNode({
           </span>
         )}
       </div>
-      <h4 className="mt-[var(--or-space-1)] truncate font-medium text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
-        {label}
+      <h4 className="mt-[var(--or-space-1)] break-words font-medium text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
+        {label.trim() || `Unnamed ${kind}`}
       </h4>
       {platform !== undefined && (
         <span className="mt-[var(--or-space-2)] block">
           <PlatformIdentity platform={platform} size="sm" />
         </span>
       )}
-      {detail !== undefined && (
-        <p className="mt-[var(--or-space-2)] line-clamp-2 text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]">
-          {detail}
+      {detail !== undefined && detail.trim().length > 0 && (
+        <p className="mt-[var(--or-space-2)] break-all text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]">
+          {detail.trim()}
         </p>
       )}
     </article>

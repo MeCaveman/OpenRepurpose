@@ -11,6 +11,7 @@ function accountsProps(overrides: Partial<AccountsPageProps> = {}): AccountsPage
     activeAction: undefined,
     error: undefined,
     feedback: { meta: null, tiktok: null, youtube: null },
+    isLoading: false,
     meta: {
       clientId: '',
       clientSecret: '',
@@ -29,6 +30,7 @@ function accountsProps(overrides: Partial<AccountsPageProps> = {}): AccountsPage
     onMetaTargetChange: () => undefined,
     onRediscoverMetaTargets: () => undefined,
     onRemoveAccount: () => undefined,
+    onRetry: () => undefined,
     onSaveMeta: () => undefined,
     onSaveTikTok: () => undefined,
     onSaveYouTube: () => undefined,
@@ -143,12 +145,13 @@ describe('web accounts page', () => {
           status: 'connected',
         },
       ],
-      feedback: { meta: null, tiktok: 'error', youtube: 'connected' },
+      feedback: { meta: 'error', tiktok: 'error', youtube: 'connected' },
     });
     const markup = renderToStaticMarkup(createElement(AccountsPage, props));
 
     expect(markup).toContain('YouTube connected');
     expect(markup).toContain('TikTok connection failed');
+    expect(markup).toContain('Meta connection failed');
     expect(markup).toContain('role="alert"');
     expect(markup).toContain('Workshop Channel');
     expect(markup).toContain('>Connected<');
@@ -168,5 +171,24 @@ describe('web accounts page', () => {
     expect(markup).toContain('Saving credentials…');
     expect(markup).toContain('No publishing accounts');
     expect(markup).toContain('Save platform credentials and connect a publishing account');
+  });
+
+  it('does not announce an empty account state before the initial request settles', () => {
+    const markup = renderToStaticMarkup(
+      createElement(AccountsPage, accountsProps({ isLoading: true })),
+    );
+
+    expect(markup).toContain('Loading account status…');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).not.toContain('No publishing accounts');
+  });
+
+  it('offers in-place recovery after account requests fail', () => {
+    const markup = renderToStaticMarkup(
+      createElement(AccountsPage, accountsProps({ error: 'Account status is unavailable.' })),
+    );
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain('Reload account status');
   });
 });

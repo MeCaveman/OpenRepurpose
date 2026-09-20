@@ -15,7 +15,7 @@ export function WorkflowsRoute() {
   const [metaTargets, setMetaTargets] = useState<readonly WorkflowTargetView[]>([]);
   const [sources, setSources] = useState<readonly WorkflowSourceView[]>([]);
   const [workflows, setWorkflows] = useState<readonly WorkflowView[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>();
 
   const loadAccounts = async () => {
@@ -43,13 +43,20 @@ export function WorkflowsRoute() {
     setWorkflows(body.workflows);
   };
 
-  useEffect(() => {
+  const retryWorkflows = async () => {
+    setError(undefined);
     setIsLoading(true);
-    void Promise.all([loadAccounts(), loadWorkflows(), loadSources()])
-      .catch((failure: unknown) =>
-        setError(failure instanceof Error ? failure.message : 'Could not load workflows.'),
-      )
-      .finally(() => setIsLoading(false));
+    try {
+      await Promise.all([loadAccounts(), loadWorkflows(), loadSources()]);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not load workflows.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void retryWorkflows();
   }, []);
 
   const createWorkflow = async (value: WorkflowEditorValue) => {
@@ -75,6 +82,7 @@ export function WorkflowsRoute() {
       isLoading={isLoading}
       metaTargets={metaTargets}
       onCreateWorkflow={createWorkflow}
+      onRetry={() => void retryWorkflows()}
       sources={sources}
       workflows={workflows}
     />

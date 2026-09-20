@@ -21,7 +21,7 @@ export function MediaRoute() {
     Readonly<Record<string, TikTokCapabilityView>>
   >({});
   const [importPath, setImportPath] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [activeAction, setActiveAction] = useState<string>();
   const [error, setError] = useState<string>();
   const [publishMediaId, setPublishMediaId] = useState<string>();
@@ -69,13 +69,20 @@ export function MediaRoute() {
     setTikTokCapabilities(Object.fromEntries(views));
   };
 
-  useEffect(() => {
+  const retryMedia = async () => {
+    setError(undefined);
     setIsLoading(true);
-    void Promise.all([loadMedia(), loadAccounts()])
-      .catch((failure: unknown) =>
-        setError(failure instanceof Error ? failure.message : 'Could not load media.'),
-      )
-      .finally(() => setIsLoading(false));
+    try {
+      await Promise.all([loadMedia(), loadAccounts()]);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not load media.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void retryMedia();
   }, []);
 
   const importMedia = async (event: FormEvent<HTMLFormElement>) => {
@@ -194,6 +201,7 @@ export function MediaRoute() {
       onImportPathChange={setImportPath}
       onPrivacyChange={setPublishPrivacy}
       onPublish={publishPlatform === 'youtube' ? queueYouTubePublish : queueTikTokPublish}
+      onRetry={() => void retryMedia()}
       onTitleChange={setPublishTitle}
       publish={{
         accountId: publishAccountId,

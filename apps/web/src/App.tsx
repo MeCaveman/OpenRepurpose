@@ -136,6 +136,9 @@ function usePathname(): string {
 export function App() {
   const pathname = usePathname();
   const route = routes.find((candidate) => candidate.href === pathname) ?? notFoundRoute;
+  useEffect(() => {
+    document.title = `${'label' in route ? route.label : 'Not found'} · OpenRepurpose`;
+  }, [route]);
   const navigate: Navigate = (event, href) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
       return;

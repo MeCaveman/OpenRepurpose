@@ -23,8 +23,9 @@ const jobStates: Record<
 };
 
 export function JobStatus({ label, status }: JobStatusProps) {
-  const presentation = jobStates[status as KnownJobStatus] ?? {
-    label: status,
+  const displayStatus = status.trim();
+  const presentation = jobStates[displayStatus as KnownJobStatus] ?? {
+    label: displayStatus.length === 0 ? 'Unknown' : displayStatus,
     variant: 'neutral' as const,
   };
   return <Badge variant={presentation.variant}>{label ?? presentation.label}</Badge>;

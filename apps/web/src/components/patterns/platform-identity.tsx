@@ -23,7 +23,7 @@ export function PlatformIdentity({
   ...props
 }: PlatformIdentityProps) {
   const metadata = getPlatformMetadata(platform);
-  const accessibleLabel = label ?? metadata.label;
+  const accessibleLabel = label?.trim() || metadata.label;
 
   return (
     <span
@@ -38,7 +38,7 @@ export function PlatformIdentity({
         {metadata.mark}
       </span>
       {showLabel && (
-        <span className="truncate [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
+        <span className="min-w-0 break-words [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
           {accessibleLabel}
         </span>
       )}

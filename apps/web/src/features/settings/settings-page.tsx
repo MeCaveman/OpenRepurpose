@@ -63,7 +63,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
             {configurationAreas.map((area) => (
               <li key={area.href}>
                 <a
-                  className="group grid min-h-[var(--or-row-comfortable-height)] gap-[var(--or-space-3)] px-[var(--or-pane-padding)] py-[var(--or-space-4)] text-[var(--or-text-secondary)] transition-[background-color,color] duration-[var(--or-duration-fast)] ease-[var(--or-ease-out)] hover:bg-[var(--or-bg-hover)] motion-reduce:transition-none sm:grid-cols-[var(--or-shell-navigator-min-width)_minmax(0,1fr)_auto] sm:items-center sm:gap-[var(--or-space-4)]"
+                  className="group grid min-h-[var(--or-row-comfortable-height)] gap-[var(--or-space-3)] px-[var(--or-pane-padding)] py-[var(--or-space-4)] text-[var(--or-text-secondary)] transition-[background-color,color] duration-[var(--or-duration-fast)] ease-[var(--or-ease-out)] hover:bg-[var(--or-bg-hover)] active:bg-[var(--or-bg-selected)] motion-reduce:transition-none sm:grid-cols-[var(--or-shell-navigator-min-width)_minmax(0,1fr)_auto] sm:items-center sm:gap-[var(--or-space-4)]"
                   href={area.href}
                   onClick={(event) => onNavigate(event, area.href)}
                 >

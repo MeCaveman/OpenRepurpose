@@ -6,7 +6,16 @@ import {
   PlatformIdentity,
   ResourceEmptyState,
 } from '../../components/patterns';
-import { Alert, Badge, Button, Checkbox, FormField, Input, Panel } from '../../components/ui';
+import {
+  Alert,
+  Badge,
+  Button,
+  Checkbox,
+  FormField,
+  Input,
+  Panel,
+  Spinner,
+} from '../../components/ui';
 
 export interface AccountView {
   readonly capabilities: readonly string[];
@@ -65,6 +74,7 @@ export interface AccountsPageProps {
   readonly accounts: readonly AccountView[];
   readonly activeAction: string | undefined;
   readonly error: string | undefined;
+  readonly isLoading: boolean;
   readonly feedback: {
     readonly meta: string | null;
     readonly tiktok: string | null;
@@ -83,6 +93,7 @@ export interface AccountsPageProps {
   readonly onMetaClientIdChange: (value: string) => void;
   readonly onMetaClientSecretChange: (value: string) => void;
   readonly onMetaTargetChange: (target: MetaTargetView, enabled: boolean) => void;
+  readonly onRetry: () => void;
   readonly onRediscoverMetaTargets: (credentialId: string) => void;
   readonly onRemoveAccount: (accountId: string) => void;
   readonly onSaveMeta: FormEventHandler<HTMLFormElement>;
@@ -166,7 +177,8 @@ function FeedbackAlerts({ feedback }: Pick<AccountsPageProps, 'feedback'>) {
     feedback.youtube === 'error' ||
     feedback.tiktok === 'connected' ||
     feedback.tiktok === 'error' ||
-    feedback.meta === 'connected';
+    feedback.meta === 'connected' ||
+    feedback.meta === 'error';
 
   if (!hasFeedback) return null;
 
@@ -195,6 +207,11 @@ function FeedbackAlerts({ feedback }: Pick<AccountsPageProps, 'feedback'>) {
       {feedback.meta === 'connected' && (
         <Alert title="Meta connected" variant="success">
           Available Pages and linked Instagram professional accounts were discovered.
+        </Alert>
+      )}
+      {feedback.meta === 'error' && (
+        <Alert title="Meta connection failed" variant="error">
+          Check the app setup, granted permissions, and eligible publishing targets.
         </Alert>
       )}
     </div>
@@ -239,7 +256,7 @@ function MetaTargets({
                   className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]"
                   id={`meta-credential-${credential.id}`}
                 >
-                  {credential.displayName}
+                  {credential.displayName.trim() || 'Unnamed Meta identity'}
                 </h3>
                 <p className="mt-[var(--or-space-1)] break-all font-mono text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]">
                   <span translate="no">{credential.externalId}</span> · permissions:{' '}
@@ -259,6 +276,9 @@ function MetaTargets({
 
             <Button
               className="mt-[var(--or-space-4)]"
+              disabled={
+                activeAction !== undefined && activeAction !== `meta-refresh:${credential.id}`
+              }
               isLoading={activeAction === `meta-refresh:${credential.id}`}
               loadingLabel="Refreshing targets…"
               onClick={() => onRediscover(credential.id)}
@@ -306,7 +326,7 @@ function MetaTargets({
                             )}
                           </span>
                         }
-                        disabled={!isAvailable || isUpdating}
+                        disabled={!isAvailable || activeAction !== undefined}
                         label={
                           <span className="flex flex-wrap items-center justify-between gap-[var(--or-space-2)]">
                             <PlatformIdentity
@@ -374,6 +394,9 @@ function ConnectedAccounts({
               <ConnectionCard
                 actions={
                   <Button
+                    disabled={
+                      activeAction !== undefined && activeAction !== `account-remove:${account.id}`
+                    }
                     isLoading={activeAction === `account-remove:${account.id}`}
                     loadingLabel="Removing connection…"
                     onClick={() => {
@@ -463,6 +486,7 @@ export function AccountsPage({
   activeAction,
   error,
   feedback,
+  isLoading,
   meta,
   onConnectMeta,
   onConnectTikTok,
@@ -470,6 +494,7 @@ export function AccountsPage({
   onMetaClientIdChange,
   onMetaClientSecretChange,
   onMetaTargetChange,
+  onRetry,
   onRediscoverMetaTargets,
   onRemoveAccount,
   onSaveMeta,
@@ -483,11 +508,19 @@ export function AccountsPage({
   youtube,
 }: AccountsPageProps) {
   return (
-    <div className="space-y-[var(--or-setup-section-gap)]">
+    <div aria-busy={isLoading || undefined} className="space-y-[var(--or-setup-section-gap)]">
       <FeedbackAlerts feedback={feedback} />
 
       {error !== undefined && (
-        <Alert title="Account action unavailable" variant="error">
+        <Alert
+          action={
+            <Button onClick={onRetry} size="sm" variant="secondary">
+              Reload account status
+            </Button>
+          }
+          title="Account action unavailable"
+          variant="error"
+        >
           {error}
         </Alert>
       )}
@@ -505,6 +538,17 @@ export function AccountsPage({
         </p>
       </section>
 
+      {isLoading && (
+        <Panel
+          aria-live="polite"
+          className="flex items-center gap-[var(--or-space-3)]"
+          role="status"
+        >
+          <Spinner />
+          <p className="[font-size:var(--or-type-interface-size)]">Loading account status…</p>
+        </Panel>
+      )}
+
       <div className="space-y-[var(--or-space-4)]">
         <CredentialPanel
           description="Use a Google Cloud desktop OAuth client for YouTube publishing and identity access."
@@ -517,6 +561,7 @@ export function AccountsPage({
               <FormField label="Client ID" required>
                 <Input
                   autoComplete="off"
+                  disabled={isLoading || activeAction !== undefined}
                   name="youtube-client-id"
                   onChange={(event) => onYouTubeClientIdChange(event.target.value)}
                   placeholder="Example: …apps.googleusercontent.com"
@@ -527,6 +572,7 @@ export function AccountsPage({
               <FormField label="Client secret (optional)">
                 <Input
                   autoComplete="new-password"
+                  disabled={isLoading || activeAction !== undefined}
                   name="youtube-client-secret"
                   onChange={(event) => onYouTubeClientSecretChange(event.target.value)}
                   type="password"
@@ -536,6 +582,7 @@ export function AccountsPage({
             </div>
             <div className="mt-[var(--or-space-4)] flex flex-wrap gap-[var(--or-space-2)]">
               <Button
+                disabled={isLoading || activeAction !== undefined}
                 isLoading={activeAction === 'youtube-save'}
                 loadingLabel="Saving credentials…"
                 type="submit"
@@ -544,7 +591,9 @@ export function AccountsPage({
                 Save credentials
               </Button>
               <Button
-                disabled={youtube.status?.configured !== true}
+                disabled={
+                  isLoading || youtube.status?.configured !== true || activeAction !== undefined
+                }
                 isLoading={activeAction === 'youtube-connect'}
                 loadingLabel="Starting connection…"
                 onClick={onConnectYouTube}
@@ -567,6 +616,7 @@ export function AccountsPage({
               <FormField label="Meta app ID" required>
                 <Input
                   autoComplete="off"
+                  disabled={isLoading || activeAction !== undefined}
                   name="meta-client-id"
                   onChange={(event) => onMetaClientIdChange(event.target.value)}
                   spellCheck={false}
@@ -576,6 +626,7 @@ export function AccountsPage({
               <FormField label="Meta app secret" required>
                 <Input
                   autoComplete="new-password"
+                  disabled={isLoading || activeAction !== undefined}
                   name="meta-client-secret"
                   onChange={(event) => onMetaClientSecretChange(event.target.value)}
                   type="password"
@@ -585,6 +636,7 @@ export function AccountsPage({
             </div>
             <div className="mt-[var(--or-space-4)] flex flex-wrap gap-[var(--or-space-2)]">
               <Button
+                disabled={isLoading || activeAction !== undefined}
                 isLoading={activeAction === 'meta-save'}
                 loadingLabel="Saving Meta credentials…"
                 type="submit"
@@ -593,7 +645,9 @@ export function AccountsPage({
                 Save Meta credentials
               </Button>
               <Button
-                disabled={meta.status?.configured !== true}
+                disabled={
+                  isLoading || meta.status?.configured !== true || activeAction !== undefined
+                }
                 isLoading={activeAction === 'meta-connect'}
                 loadingLabel="Starting connection…"
                 onClick={onConnectMeta}
@@ -628,6 +682,7 @@ export function AccountsPage({
               <FormField label="Client key" required>
                 <Input
                   autoComplete="off"
+                  disabled={isLoading || activeAction !== undefined}
                   name="tiktok-client-key"
                   onChange={(event) => onTikTokClientKeyChange(event.target.value)}
                   spellCheck={false}
@@ -637,6 +692,7 @@ export function AccountsPage({
               <FormField label="Client secret" required>
                 <Input
                   autoComplete="new-password"
+                  disabled={isLoading || activeAction !== undefined}
                   name="tiktok-client-secret"
                   onChange={(event) => onTikTokClientSecretChange(event.target.value)}
                   type="password"
@@ -646,6 +702,7 @@ export function AccountsPage({
             </div>
             <div className="mt-[var(--or-space-4)] flex flex-wrap gap-[var(--or-space-2)]">
               <Button
+                disabled={isLoading || activeAction !== undefined}
                 isLoading={activeAction === 'tiktok-save'}
                 loadingLabel="Saving TikTok credentials…"
                 type="submit"
@@ -654,7 +711,9 @@ export function AccountsPage({
                 Save TikTok credentials
               </Button>
               <Button
-                disabled={tiktok.status?.configured !== true}
+                disabled={
+                  isLoading || tiktok.status?.configured !== true || activeAction !== undefined
+                }
                 isLoading={activeAction === 'tiktok-connect'}
                 loadingLabel="Starting connection…"
                 onClick={onConnectTikTok}
@@ -671,12 +730,14 @@ export function AccountsPage({
         </CredentialPanel>
       </div>
 
-      <ConnectedAccounts
-        accounts={accounts}
-        activeAction={activeAction}
-        capabilities={tiktok.capabilities}
-        onRemoveAccount={onRemoveAccount}
-      />
+      {!isLoading && (
+        <ConnectedAccounts
+          accounts={accounts}
+          activeAction={activeAction}
+          capabilities={tiktok.capabilities}
+          onRemoveAccount={onRemoveAccount}
+        />
+      )}
 
       <Alert title="YouTube API visibility" variant="warning">
         Google may limit uploads from unverified API projects. OpenRepurpose shows granted

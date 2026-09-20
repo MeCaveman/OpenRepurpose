@@ -5,6 +5,7 @@ import { cx } from './utils';
 export type AlertVariant = 'neutral' | 'info' | 'success' | 'warning' | 'error';
 
 export interface AlertProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
+  readonly action?: ReactNode;
   readonly title?: ReactNode;
   readonly variant?: AlertVariant;
 }
@@ -22,6 +23,7 @@ const variants: Record<AlertVariant, string> = {
 };
 
 export function Alert({
+  action,
   children,
   className,
   role,
@@ -48,6 +50,7 @@ export function Alert({
       >
         {children}
       </div>
+      {action !== undefined && <div className="mt-[var(--or-space-3)]">{action}</div>}
     </div>
   );
 }

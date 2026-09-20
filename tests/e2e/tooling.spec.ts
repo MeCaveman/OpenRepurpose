@@ -22,12 +22,14 @@ async function serveProductionAssets(page: Page): Promise<void> {
 test('React shell navigates between local tool sections', async ({ page }) => {
   await serveProductionAssets(page);
   await page.goto('/');
+  await expect(page).toHaveTitle('Dashboard · OpenRepurpose');
   await expect(page.getByRole('heading', { level: 1 })).toContainText('Your media pipeline');
   await expect(page.getByText('Local only')).toBeVisible();
 
   await page.getByRole('link', { name: 'Settings' }).click();
   await expect(page).toHaveURL(/\/settings$/);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Settings');
+  await expect(page).toHaveTitle('Settings · OpenRepurpose');
   await expect(page.getByRole('link', { name: 'Settings' })).toHaveAttribute(
     'aria-current',
     'page',
@@ -223,8 +225,9 @@ test('job history renders persisted status and attempt detail', async ({ page })
   await expect(page.getByRole('heading', { name: 'Execution ledger' })).toBeVisible();
   await expect(page.getByText('Retrying').first()).toBeVisible();
   await expect(page.getByText('youtube · processing').first()).toBeVisible();
-  await page.getByRole('button', { name: /fake\.publish/ }).click();
-  await expect(page.getByRole('heading', { name: 'Attempt history' })).toBeVisible();
+  const jobTrigger = page.getByRole('button', { name: /fake\.publish/ });
+  await jobTrigger.click();
+  await expect(page.getByRole('heading', { name: 'Attempt history' })).toBeFocused();
   await expect(page.getByText('Attempt 1')).toBeVisible();
   await expect(page.getByText('Failed')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Destination checkpoint' })).toBeVisible();
@@ -236,6 +239,7 @@ test('job history renders persisted status and attempt detail', async ({ page })
 
   await page.getByRole('button', { name: 'Close details' }).click();
   await expect(page.getByRole('heading', { name: 'Attempt history' })).toBeHidden();
+  await expect(jobTrigger).toBeFocused();
 
   await page.setViewportSize({ height: 800, width: 320 });
   await expect(page.getByRole('button', { name: /fake\.publish/ })).toBeVisible();

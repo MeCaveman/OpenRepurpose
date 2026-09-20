@@ -57,6 +57,9 @@ type TargetOption = {
   availability: string;
 };
 type SourceOption = { id: string; displayName: string; status: string };
+type ValidationField =
+  'destinations' | 'name' | 'retention' | 'schedule' | 'source' | 'titleTemplate';
+type ValidationError = { readonly field: ValidationField; readonly message: string };
 
 function RouteStepHeader({
   description,
@@ -112,9 +115,20 @@ export function WorkflowEditor({
   const [scheduleId, setScheduleId] = useState('');
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [destinations, setDestinations] = useState<WorkflowDestinationView[]>([]);
-  const [validationError, setValidationError] = useState<string>();
+  const [validationError, setValidationError] = useState<ValidationError>();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const validationRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const sourceDirectoryRef = useRef<HTMLInputElement>(null);
+  const retentionHoursRef = useRef<HTMLInputElement>(null);
+  const scheduleIdRef = useRef<HTMLInputElement>(null);
+  const titleTemplateRef = useRef<HTMLInputElement>(null);
+  const addDestinationRef = useRef<HTMLButtonElement>(null);
+  const optionalStagesRef = useRef<HTMLDetailsElement>(null);
+
+  const clearValidationError = (field: ValidationField) => {
+    setValidationError((current) => (current?.field === field ? undefined : current));
+  };
 
   const targetOptions = useMemo(
     () => [
@@ -122,12 +136,12 @@ export function WorkflowEditor({
         .filter((account) => account.status === 'connected')
         .map((account) => ({
           value: `${account.provider}:${account.id}`,
-          label: `${account.displayName} · ${account.provider}`,
+          label: `${account.displayName.trim() || 'Unnamed account'} · ${account.provider}`,
           disabled: false,
         })),
       ...metaTargets.map((target) => ({
         value: `${target.kind === 'instagram_professional' ? 'instagram' : 'facebook'}:${target.id}`,
-        label: `${target.displayName} · ${target.kind === 'instagram_professional' ? 'Instagram' : 'Facebook Page'}`,
+        label: `${target.displayName.trim() || 'Unnamed target'} · ${target.kind === 'instagram_professional' ? 'Instagram' : 'Facebook Page'}`,
         disabled: target.availability !== 'available' || !target.enabled,
       })),
     ],
@@ -155,27 +169,65 @@ export function WorkflowEditor({
           : destination,
       ),
     );
+    clearValidationError('destinations');
+  };
+  const removeDestination = (index: number) => {
+    setDestinations((current) => current.filter((_, position) => position !== index));
+    clearValidationError('destinations');
   };
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setValidationError(undefined);
-    const reportValidationError = (message: string) => {
-      setValidationError(message);
-      requestAnimationFrame(() => validationRef.current?.focus());
+    const reportValidationError = (field: ValidationField, message: string) => {
+      setValidationError({ field, message });
+      if (field === 'retention' || field === 'schedule') {
+        optionalStagesRef.current?.setAttribute('open', '');
+      }
+      requestAnimationFrame(() => {
+        if (field === 'name') nameRef.current?.focus();
+        if (field === 'source') sourceDirectoryRef.current?.focus();
+        if (field === 'retention') retentionHoursRef.current?.focus();
+        if (field === 'schedule') scheduleIdRef.current?.focus();
+        if (field === 'titleTemplate') titleTemplateRef.current?.focus();
+        if (field === 'destinations') {
+          const firstIncompleteDestination = formRef.current?.querySelector<HTMLSelectElement>(
+            'select[name^="workflow-destination-"]:invalid',
+          );
+          (firstIncompleteDestination ?? addDestinationRef.current)?.focus();
+        }
+      });
     };
-    if (name.trim().length === 0) return reportValidationError('Give this workflow a name.');
+    if (name.trim().length === 0) {
+      return reportValidationError('name', 'Give this workflow a name.');
+    }
     if (remoteSourceId.length === 0 && sourceDirectory.trim().length === 0) {
-      return reportValidationError('Choose a watched folder or a remote source.');
+      return reportValidationError('source', 'Choose a watched folder or a remote source.');
+    }
+    if (
+      remoteSourceId.length > 0 &&
+      retention === 'keep_for_duration' &&
+      (!Number.isFinite(Number(retentionHours)) || Number(retentionHours) < 1)
+    ) {
+      return reportValidationError('retention', 'Enter a retention duration of at least one hour.');
     }
     if (
       destinations.length === 0 ||
       destinations.some((destination) => destination.accountId.trim().length === 0)
     ) {
-      return reportValidationError('Add at least one complete destination.');
+      return reportValidationError('destinations', 'Add at least one complete destination.');
+    }
+    const destinationKeys = destinations.map(
+      (destination) => `${destination.destinationId}:${destination.accountId}`,
+    );
+    if (new Set(destinationKeys).size !== destinationKeys.length) {
+      return reportValidationError('destinations', 'Choose each destination only once.');
     }
     if (scheduleEnabled && scheduleId.trim().length === 0) {
-      return reportValidationError('Enter the schedule ID for the schedule step.');
+      return reportValidationError('schedule', 'Enter the schedule ID for the schedule step.');
+    }
+    if (titleTemplate.trim().length === 0) {
+      return reportValidationError('titleTemplate', 'Enter a title template.');
     }
     const sourceType =
       remoteSourceId.length === 0 ? ('watched_folder' as const) : ('remote' as const);
@@ -243,19 +295,31 @@ export function WorkflowEditor({
   };
 
   return (
-    <form className="grid gap-[var(--or-field-group-gap-setup)]" onSubmit={submit}>
+    <form
+      className="grid gap-[var(--or-field-group-gap-setup)]"
+      noValidate
+      onSubmit={submit}
+      ref={formRef}
+    >
       {validationError !== undefined && (
-        <div ref={validationRef} tabIndex={-1}>
-          <Alert title="Workflow needs attention" variant="error">
-            {validationError}
-          </Alert>
-        </div>
+        <Alert title="Workflow needs attention" variant="error">
+          {validationError.message}
+        </Alert>
       )}
-      <FormField label="Workflow name" required>
+      <FormField
+        {...(validationError?.field === 'name' ? { error: validationError.message } : {})}
+        label="Workflow name"
+        required
+      >
         <Input
           autoComplete="off"
+          disabled={isSubmitting}
           name="workflow-name"
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => {
+            setName(event.target.value);
+            clearValidationError('name');
+          }}
+          ref={nameRef}
           value={name}
         />
       </FormField>
@@ -267,9 +331,14 @@ export function WorkflowEditor({
         />
         <FormField label="Source type">
           <Select
+            disabled={isSubmitting}
             name="workflow-source-type"
             value={remoteSourceId}
-            onChange={(event) => setRemoteSourceId(event.target.value)}
+            onChange={(event) => {
+              setRemoteSourceId(event.target.value);
+              clearValidationError('source');
+              clearValidationError('retention');
+            }}
           >
             <option value="">Watched folder</option>
             {sources
@@ -282,13 +351,22 @@ export function WorkflowEditor({
           </Select>
         </FormField>
         {remoteSourceId.length === 0 ? (
-          <FormField label="Watched folder" required>
+          <FormField
+            {...(validationError?.field === 'source' ? { error: validationError.message } : {})}
+            label="Watched folder"
+            required
+          >
             <Input
               autoComplete="off"
+              disabled={isSubmitting}
               name="workflow-source-directory"
-              onChange={(event) => setSourceDirectory(event.target.value)}
+              onChange={(event) => {
+                setSourceDirectory(event.target.value);
+                clearValidationError('source');
+              }}
               placeholder="C:\\Media\\watched"
               spellCheck={false}
+              ref={sourceDirectoryRef}
               value={sourceDirectory}
             />
           </FormField>
@@ -296,9 +374,13 @@ export function WorkflowEditor({
           <>
             <FormField label="Source retention">
               <Select
+                disabled={isSubmitting}
                 name="workflow-source-retention"
                 value={retention}
-                onChange={(event) => setRetention(event.target.value)}
+                onChange={(event) => {
+                  setRetention(event.target.value);
+                  clearValidationError('retention');
+                }}
               >
                 <option value="delete_after_success">Delete after destinations succeed</option>
                 <option value="keep_for_duration">Keep for a duration</option>
@@ -306,25 +388,40 @@ export function WorkflowEditor({
               </Select>
             </FormField>
             {retention === 'keep_for_duration' && (
-              <FormField label="Retention hours" required>
+              <FormField
+                {...(validationError?.field === 'retention'
+                  ? { error: validationError.message }
+                  : {})}
+                label="Retention hours"
+                required
+              >
                 <Input
+                  disabled={isSubmitting}
                   min="1"
                   name="workflow-retention-hours"
                   type="number"
                   value={retentionHours}
-                  onChange={(event) => setRetentionHours(event.target.value)}
+                  onChange={(event) => {
+                    setRetentionHours(event.target.value);
+                    clearValidationError('retention');
+                  }}
+                  ref={retentionHoursRef}
                 />
               </FormField>
             )}
             <Checkbox
               checked={rightsConfirmed}
+              disabled={isSubmitting}
               label="I own this source media or am authorized to reuse it."
               onChange={(event) => setRightsConfirmed(event.target.checked)}
             />
           </>
         )}
       </Panel>
-      <details className="group rounded-[var(--or-setup-section-radius)] border border-[var(--or-border-subtle)] bg-[var(--or-bg-surface)]">
+      <details
+        className="group rounded-[var(--or-setup-section-radius)] border border-[var(--or-border-subtle)] bg-[var(--or-bg-surface)]"
+        ref={optionalStagesRef}
+      >
         <summary className="flex min-h-[var(--or-control-default-height)] cursor-pointer list-none items-center justify-between gap-[var(--or-space-3)] rounded-[var(--or-setup-section-radius)] px-[var(--or-pane-padding)] py-[var(--or-space-3)] text-[var(--or-text-primary)] focus-visible:outline-[var(--or-focus-width)] focus-visible:outline-offset-[var(--or-focus-offset)] focus-visible:[outline-color:var(--or-focus-ring)]">
           <span>
             <span className="block font-semibold [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
@@ -359,7 +456,7 @@ export function WorkflowEditor({
             </div>
             <Checkbox
               checked={filterEnabled}
-              disabled={remoteSourceId.length === 0}
+              disabled={isSubmitting || remoteSourceId.length === 0}
               label="Enable title filter"
               onChange={(event) => setFilterEnabled(event.target.checked)}
             />
@@ -367,6 +464,7 @@ export function WorkflowEditor({
               <FormField label="Title contains">
                 <Input
                   autoComplete="off"
+                  disabled={isSubmitting}
                   name="workflow-title-filter"
                   onChange={(event) => setFilterTitle(event.target.value)}
                   placeholder="Text to match"
@@ -392,6 +490,7 @@ export function WorkflowEditor({
             </div>
             <Checkbox
               checked={transformEnabled}
+              disabled={isSubmitting}
               label="Include pass-through transform step"
               onChange={(event) => setTransformEnabled(event.target.checked)}
             />
@@ -414,15 +513,30 @@ export function WorkflowEditor({
             </div>
             <Checkbox
               checked={scheduleEnabled}
+              disabled={isSubmitting}
               label="Hold this workflow at a schedule boundary"
-              onChange={(event) => setScheduleEnabled(event.target.checked)}
+              onChange={(event) => {
+                setScheduleEnabled(event.target.checked);
+                if (!event.target.checked) clearValidationError('schedule');
+              }}
             />
             {scheduleEnabled && (
-              <FormField label="Schedule ID" required>
+              <FormField
+                {...(validationError?.field === 'schedule'
+                  ? { error: validationError.message }
+                  : {})}
+                label="Schedule ID"
+                required
+              >
                 <Input
                   autoComplete="off"
+                  disabled={isSubmitting}
                   name="workflow-schedule-id"
-                  onChange={(event) => setScheduleId(event.target.value)}
+                  onChange={(event) => {
+                    setScheduleId(event.target.value);
+                    clearValidationError('schedule');
+                  }}
+                  ref={scheduleIdRef}
                   value={scheduleId}
                 />
               </FormField>
@@ -439,9 +553,18 @@ export function WorkflowEditor({
         {destinations.map((destination, index) => (
           <div className="flex flex-col gap-[var(--or-space-2)] sm:flex-row" key={index}>
             <Select
+              aria-describedby={
+                validationError?.field === 'destinations' ? 'workflow-destination-error' : undefined
+              }
+              aria-invalid={
+                validationError?.field === 'destinations' &&
+                destination.accountId.trim().length === 0
+              }
               aria-label={`Destination ${index + 1}`}
               className="min-w-0 flex-1"
+              disabled={isSubmitting}
               name={`workflow-destination-${index + 1}`}
+              required
               value={`${destination.destinationId}:${destination.accountId}`}
               onChange={(event) => updateDestination(index, event.target.value)}
             >
@@ -454,9 +577,8 @@ export function WorkflowEditor({
               ))}
             </Select>
             <Button
-              onClick={() =>
-                setDestinations((current) => current.filter((_, position) => position !== index))
-              }
+              disabled={isSubmitting}
+              onClick={() => removeDestination(index)}
               size="sm"
               variant="ghost"
             >
@@ -464,7 +586,20 @@ export function WorkflowEditor({
             </Button>
           </div>
         ))}
-        <Button className="w-fit" onClick={addDestination}>
+        {validationError?.field === 'destinations' && (
+          <p
+            className="text-[var(--or-status-danger-fg)] [font-size:var(--or-field-help-size)] [line-height:var(--or-field-help-line)]"
+            id="workflow-destination-error"
+          >
+            {validationError.message}
+          </p>
+        )}
+        <Button
+          className="w-fit"
+          disabled={isSubmitting}
+          onClick={addDestination}
+          ref={addDestinationRef}
+        >
           Add destination
         </Button>
       </Panel>
@@ -477,17 +612,29 @@ export function WorkflowEditor({
             Apply the same title and description rules to every destination in this route.
           </p>
         </div>
-        <FormField label="Title template" required>
+        <FormField
+          {...(validationError?.field === 'titleTemplate'
+            ? { error: validationError.message }
+            : {})}
+          label="Title template"
+          required
+        >
           <Input
             autoComplete="off"
+            disabled={isSubmitting}
             name="workflow-title-template"
-            onChange={(event) => setTitleTemplate(event.target.value)}
+            onChange={(event) => {
+              setTitleTemplate(event.target.value);
+              clearValidationError('titleTemplate');
+            }}
+            ref={titleTemplateRef}
             spellCheck={false}
             value={titleTemplate}
           />
         </FormField>
         <FormField label="Description template">
           <Textarea
+            disabled={isSubmitting}
             name="workflow-description-template"
             onChange={(event) => setDescriptionTemplate(event.target.value)}
             value={descriptionTemplate}

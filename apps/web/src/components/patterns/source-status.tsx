@@ -17,8 +17,9 @@ const sourceStates: Record<
 };
 
 export function SourceStatus({ status }: SourceStatusProps) {
-  const presentation = sourceStates[status as KnownSourceStatus] ?? {
-    label: status,
+  const displayStatus = status.trim();
+  const presentation = sourceStates[displayStatus as KnownSourceStatus] ?? {
+    label: displayStatus.length === 0 ? 'Unknown' : displayStatus,
     variant: 'neutral' as const,
   };
   return <Badge variant={presentation.variant}>{presentation.label}</Badge>;

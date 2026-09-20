@@ -19,6 +19,7 @@ function workflowsProps(overrides: Partial<WorkflowsPageProps> = {}): WorkflowsP
     isLoading: false,
     metaTargets: [],
     onCreateWorkflow: async () => undefined,
+    onRetry: () => undefined,
     sources: [],
     workflows: [],
     ...overrides,
@@ -113,6 +114,7 @@ describe('web workflows page', () => {
     expect(errorMarkup).toContain('role="alert"');
     expect(errorMarkup).toContain('Workflow request failed');
     expect(errorMarkup).toContain('Workflow list is unavailable.');
+    expect(errorMarkup).toContain('Reload workflow data');
   });
 
   it('offers only active remote sources in the current source selector', () => {

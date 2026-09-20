@@ -25,6 +25,7 @@ function sourcesProps(overrides: Partial<SourcesPageProps> = {}): SourcesPagePro
     onChannelIdChange: () => undefined,
     onDisplayNameChange: () => undefined,
     onNavigateAccounts: () => undefined,
+    onRetry: () => undefined,
     onSourceAction: () => undefined,
     sources: [],
     ...overrides,
@@ -110,6 +111,11 @@ describe('web sources page', () => {
     expect(progressMarkup).toContain('Last poll failed');
     expect(progressMarkup).toContain('AUTH_EXPIRED');
     expect(progressMarkup).toContain('No media has been observed from this source yet.');
+
+    const errorMarkup = renderToStaticMarkup(
+      createElement(SourcesPage, sourcesProps({ error: 'Source service is unavailable.' })),
+    );
+    expect(errorMarkup).toContain('Reload sources');
   });
 
   it('provides recovery when no connected YouTube account or source exists', () => {

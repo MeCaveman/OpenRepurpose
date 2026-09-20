@@ -9,7 +9,7 @@ export function JobsRoute() {
   const [attempts, setAttempts] = useState<readonly JobAttemptView[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const [selectedJob, setSelectedJob] = useState<JobView>();
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [activeAction, setActiveAction] = useState<string>();
   const [error, setError] = useState<string>();
@@ -48,13 +48,20 @@ export function JobsRoute() {
     }
   };
 
-  useEffect(() => {
+  const retryJobs = async () => {
+    setError(undefined);
     setIsLoading(true);
-    void loadJobs()
-      .catch((failure: unknown) =>
-        setError(failure instanceof Error ? failure.message : 'Could not load jobs.'),
-      )
-      .finally(() => setIsLoading(false));
+    try {
+      await loadJobs();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not load jobs.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void retryJobs();
   }, []);
 
   const cancelJob = async (jobId: string) => {
@@ -89,6 +96,7 @@ export function JobsRoute() {
         setSelectedJob(undefined);
         setAttempts([]);
       }}
+      onRetry={() => void retryJobs()}
       onSelectJob={(jobId) => void showAttempts(jobId)}
       selectedJob={selectedJob}
       selectedJobId={selectedJobId}

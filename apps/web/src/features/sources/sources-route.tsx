@@ -19,7 +19,7 @@ export function SourcesRoute({ onNavigateAccounts }: SourcesRouteProps) {
   const [channelId, setChannelId] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [activeAction, setActiveAction] = useState<string>();
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>();
 
   const loadAccounts = async () => {
@@ -44,13 +44,20 @@ export function SourcesRoute({ onNavigateAccounts }: SourcesRouteProps) {
     setItemsBySource(Object.fromEntries(details));
   };
 
-  useEffect(() => {
+  const retrySources = async () => {
+    setError(undefined);
     setIsLoading(true);
-    void Promise.all([loadAccounts(), loadSources()])
-      .catch((failure: unknown) =>
-        setError(failure instanceof Error ? failure.message : 'Could not load sources.'),
-      )
-      .finally(() => setIsLoading(false));
+    try {
+      await Promise.all([loadAccounts(), loadSources()]);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not load sources.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void retrySources();
   }, []);
 
   const addYouTubeSource = async (event: FormEvent<HTMLFormElement>) => {
@@ -107,6 +114,7 @@ export function SourcesRoute({ onNavigateAccounts }: SourcesRouteProps) {
       onChannelIdChange={setChannelId}
       onDisplayNameChange={setDisplayName}
       onNavigateAccounts={onNavigateAccounts}
+      onRetry={() => void retrySources()}
       onSourceAction={(sourceId, action) => void sourceAction(sourceId, action)}
       sources={sources}
     />

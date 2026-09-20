@@ -40,6 +40,7 @@ export function AccountsRoute() {
   >({});
   const [activeAction, setActiveAction] = useState<string>();
   const [error, setError] = useState<string>();
+  const [isLoading, setIsLoading] = useState(true);
 
   const loadAccounts = async () => {
     const response = await fetch('/api/accounts');
@@ -74,10 +75,20 @@ export function AccountsRoute() {
     setTikTokCapabilities(Object.fromEntries(views));
   };
 
+  const retryAccounts = async () => {
+    setError(undefined);
+    setIsLoading(true);
+    try {
+      await loadAccounts();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not load accounts.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    void loadAccounts().catch((failure: unknown) =>
-      setError(failure instanceof Error ? failure.message : 'Could not load accounts.'),
-    );
+    void retryAccounts();
   }, []);
 
   const saveYouTubeCredentials = async (event: FormEvent<HTMLFormElement>) => {
@@ -240,6 +251,7 @@ export function AccountsRoute() {
         tiktok: query.get('tiktok'),
         youtube: query.get('youtube'),
       }}
+      isLoading={isLoading}
       meta={{
         clientId: metaClientId,
         clientSecret: metaClientSecret,
@@ -254,6 +266,7 @@ export function AccountsRoute() {
       onMetaClientSecretChange={setMetaClientSecret}
       onMetaTargetChange={(target, enabled) => void setMetaTarget(target, enabled)}
       onRediscoverMetaTargets={(credentialId) => void rediscoverMetaTargets(credentialId)}
+      onRetry={() => void retryAccounts()}
       onRemoveAccount={(accountId) => void removeAccount(accountId)}
       onSaveMeta={saveMetaCredentials}
       onSaveTikTok={saveTikTokCredentials}

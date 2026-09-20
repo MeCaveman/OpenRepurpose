@@ -23,14 +23,17 @@ export function ConnectionCard({
   status,
   statusLabel,
 }: ConnectionCardProps) {
+  const displayName = name.trim() || 'Unnamed account';
+  const displayExternalId = externalId?.trim();
+
   return (
     <article className="rounded-[var(--or-setup-section-radius)] border border-[var(--or-border-subtle)] bg-[var(--or-bg-surface)] p-[var(--or-pane-padding)] text-[var(--or-text-secondary)]">
       <header className="flex flex-wrap items-start justify-between gap-[var(--or-space-3)]">
         <div className="min-w-0">
-          <PlatformIdentity label={name} platform={platform} />
-          {externalId !== undefined && (
-            <p className="mt-[var(--or-space-1)] truncate font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]">
-              {externalId}
+          <PlatformIdentity label={displayName} platform={platform} />
+          {displayExternalId !== undefined && displayExternalId.length > 0 && (
+            <p className="mt-[var(--or-space-1)] break-all font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]">
+              {displayExternalId}
             </p>
           )}
         </div>

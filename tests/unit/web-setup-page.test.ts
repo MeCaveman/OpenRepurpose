@@ -9,6 +9,8 @@ describe('web setup page', () => {
     const markup = renderToStaticMarkup(
       createElement(SetupPage, {
         error: undefined,
+        isLoading: false,
+        onRetry: () => undefined,
         tiktokStatus: {
           configured: true,
           flow: 'desktop',
@@ -35,6 +37,8 @@ describe('web setup page', () => {
     const markup = renderToStaticMarkup(
       createElement(SetupPage, {
         error: undefined,
+        isLoading: false,
+        onRetry: () => undefined,
         tiktokStatus: {
           configured: false,
           flow: 'web',
@@ -57,6 +61,8 @@ describe('web setup page', () => {
     const markup = renderToStaticMarkup(
       createElement(SetupPage, {
         error: undefined,
+        isLoading: true,
+        onRetry: () => undefined,
         tiktokStatus: undefined,
         youtubeStatus: undefined,
       }),
@@ -72,6 +78,8 @@ describe('web setup page', () => {
     const markup = renderToStaticMarkup(
       createElement(SetupPage, {
         error: 'Setup status is unavailable.',
+        isLoading: false,
+        onRetry: () => undefined,
         tiktokStatus: undefined,
         youtubeStatus: undefined,
       }),
@@ -80,6 +88,7 @@ describe('web setup page', () => {
     expect(markup).toContain('role="alert"');
     expect(markup).toContain('Setup status unavailable');
     expect(markup).toContain('Setup status is unavailable.');
+    expect(markup).toContain('Retry setup check');
     expect(markup).not.toContain('Action required');
   });
 });

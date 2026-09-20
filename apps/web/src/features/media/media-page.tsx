@@ -1,4 +1,5 @@
-import type { FormEventHandler } from 'react';
+import { useEffect, useId, useRef } from 'react';
+import type { FormEventHandler, RefObject } from 'react';
 
 import { PlatformIdentity, ResourceEmptyState } from '../../components/patterns';
 import {
@@ -57,7 +58,11 @@ export interface MediaPageProps {
   readonly isLoading: boolean;
   readonly media: readonly MediaAssetView[];
   readonly onAccountIdChange: (value: string) => void;
-  readonly onBeginPublish: (asset: MediaAssetView, platform: MediaPublishPlatform) => void;
+  readonly onBeginPublish: (
+    asset: MediaAssetView,
+    platform: MediaPublishPlatform,
+    trigger?: HTMLButtonElement,
+  ) => void;
   readonly onCancelPublish: () => void;
   readonly onCaptionChange: (value: string) => void;
   readonly onDescriptionChange: (value: string) => void;
@@ -68,26 +73,32 @@ export interface MediaPageProps {
   readonly onImportPathChange: (value: string) => void;
   readonly onPrivacyChange: (value: string) => void;
   readonly onPublish: FormEventHandler<HTMLFormElement>;
+  readonly onRetry: () => void;
   readonly onTitleChange: (value: string) => void;
   readonly publish: MediaPublishDraft;
 }
 
 function filename(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+  return path.split(/[\\/]/).filter(Boolean).pop() || 'Unnamed media file';
 }
 
 function humanize(value: string): string {
-  return value
+  const label = value
+    .trim()
     .split('_')
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(' ');
+  return label || 'Unknown';
 }
 
 function mediaStateVariant(state: string): BadgeVariant {
-  if (state === 'available' || state === 'ready' || state === 'imported') return 'success';
-  if (state === 'processing' || state === 'probing') return 'info';
-  if (state === 'failed' || state === 'unavailable') return 'error';
+  const normalized = state.trim().toLowerCase();
+  if (normalized === 'available' || normalized === 'ready' || normalized === 'imported') {
+    return 'success';
+  }
+  if (normalized === 'processing' || normalized === 'probing') return 'info';
+  if (normalized === 'failed' || normalized === 'unavailable') return 'error';
   return 'neutral';
 }
 
@@ -96,9 +107,13 @@ function MediaState({ state }: { readonly state: string }) {
 }
 
 function formatTechnicalDetails(asset: MediaAssetView): string {
-  const dimensions = `${asset.metadata.width ?? '—'}×${asset.metadata.height ?? '—'}`;
+  const displayDimension = (value: number | undefined) =>
+    value !== undefined && Number.isFinite(value) && value > 0 ? value : '—';
+  const dimensions = `${displayDimension(asset.metadata.width)}×${displayDimension(asset.metadata.height)}`;
   const duration =
-    asset.metadata.durationSeconds === undefined
+    asset.metadata.durationSeconds === undefined ||
+    !Number.isFinite(asset.metadata.durationSeconds) ||
+    asset.metadata.durationSeconds < 0
       ? '—'
       : new Intl.NumberFormat(undefined, {
           maximumFractionDigits: 1,
@@ -137,27 +152,48 @@ function PublishActions({
   readonly hasTikTokAccount: boolean;
   readonly onBeginPublish: MediaPageProps['onBeginPublish'];
 }) {
-  const disabled = activeAction !== undefined;
+  const unavailable = asset.state !== 'available';
+  const disabled = activeAction !== undefined || unavailable;
+  const unavailableReason = unavailable
+    ? 'Publishing is available after local media inspection succeeds.'
+    : undefined;
+  const unavailableReasonId = useId();
 
   return (
-    <div className="flex flex-wrap gap-[var(--or-space-2)]">
-      <Button
-        disabled={disabled}
-        onClick={() => onBeginPublish(asset, 'youtube')}
-        size="sm"
-        variant="secondary"
-      >
-        Publish to YouTube
-      </Button>
-      {hasTikTokAccount && (
+    <div className="grid gap-[var(--or-space-2)]">
+      <div className="flex flex-wrap gap-[var(--or-space-2)]">
         <Button
+          aria-describedby={unavailable ? unavailableReasonId : undefined}
+          data-media-id={asset.id}
+          data-media-publish-trigger="youtube"
           disabled={disabled}
-          onClick={() => onBeginPublish(asset, 'tiktok')}
+          onClick={(event) => onBeginPublish(asset, 'youtube', event.currentTarget)}
           size="sm"
           variant="secondary"
         >
-          Publish to TikTok
+          Publish to YouTube
         </Button>
+        {hasTikTokAccount && (
+          <Button
+            aria-describedby={unavailable ? unavailableReasonId : undefined}
+            data-media-id={asset.id}
+            data-media-publish-trigger="tiktok"
+            disabled={disabled}
+            onClick={(event) => onBeginPublish(asset, 'tiktok', event.currentTarget)}
+            size="sm"
+            variant="secondary"
+          >
+            Publish to TikTok
+          </Button>
+        )}
+      </div>
+      {unavailableReason !== undefined && (
+        <p
+          className="max-w-[var(--or-empty-state-max-width)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-micro-size)] [line-height:var(--or-type-body-line)]"
+          id={unavailableReasonId}
+        >
+          {unavailableReason}
+        </p>
       )}
     </div>
   );
@@ -269,6 +305,7 @@ function PublishPanel({
   onPublish,
   onTitleChange,
   publish,
+  headingRef,
 }: Omit<
   MediaPageProps,
   | 'error'
@@ -278,8 +315,10 @@ function PublishPanel({
   | 'onBeginPublish'
   | 'onImport'
   | 'onImportPathChange'
+  | 'onRetry'
 > & {
   readonly asset: MediaAssetView | undefined;
+  readonly headingRef: RefObject<HTMLHeadingElement | null>;
 }) {
   const platformAccounts = accounts.filter((account) => account.provider === publish.platform);
   const isPublishing = activeAction === `publish:${publish.platform}`;
@@ -298,6 +337,8 @@ function PublishPanel({
             <h3
               className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
               id="publish-preparation-heading"
+              ref={headingRef}
+              tabIndex={-1}
             >
               Queue {platformLabel} {publish.platform === 'youtube' ? 'upload' : 'post'}
             </h3>
@@ -311,7 +352,7 @@ function PublishPanel({
             </code>
           )}
         </div>
-        <Button onClick={onCancelPublish} size="sm" variant="ghost">
+        <Button disabled={isPublishing} onClick={onCancelPublish} size="sm" variant="ghost">
           Close
         </Button>
       </header>
@@ -332,6 +373,7 @@ function PublishPanel({
       >
         <FormField label="Connected account" required>
           <Select
+            disabled={isPublishing}
             name="accountId"
             onChange={(event) => onAccountIdChange(event.target.value)}
             value={publish.accountId}
@@ -339,7 +381,7 @@ function PublishPanel({
             <option value="">Select a {platformLabel} account</option>
             {platformAccounts.map((account) => (
               <option key={account.id} value={account.id}>
-                {account.displayName}
+                {account.displayName.trim() || 'Unnamed account'}
               </option>
             ))}
           </Select>
@@ -349,6 +391,8 @@ function PublishPanel({
           <>
             <FormField label="Title" required>
               <Input
+                autoComplete="off"
+                disabled={isPublishing}
                 name="title"
                 onChange={(event) => onTitleChange(event.target.value)}
                 value={publish.title}
@@ -356,6 +400,8 @@ function PublishPanel({
             </FormField>
             <FormField label="Description">
               <Textarea
+                autoComplete="off"
+                disabled={isPublishing}
                 name="description"
                 onChange={(event) => onDescriptionChange(event.target.value)}
                 value={publish.description}
@@ -366,6 +412,8 @@ function PublishPanel({
           <>
             <FormField label="Caption" required>
               <Textarea
+                autoComplete="off"
+                disabled={isPublishing}
                 maxLength={publish.captionMaxLength}
                 name="caption"
                 onChange={(event) => onCaptionChange(event.target.value)}
@@ -378,6 +426,7 @@ function PublishPanel({
               required
             >
               <Select
+                disabled={isPublishing}
                 name="privacyLevel"
                 onChange={(event) => onPrivacyChange(event.target.value)}
                 value={publish.privacy}
@@ -395,18 +444,21 @@ function PublishPanel({
               </legend>
               <Checkbox
                 checked={publish.disableComment}
+                disabled={isPublishing}
                 label="Disable comments"
                 name="disableComment"
                 onChange={(event) => onDisableCommentChange(event.target.checked)}
               />
               <Checkbox
                 checked={publish.disableDuet}
+                disabled={isPublishing}
                 label="Disable duet"
                 name="disableDuet"
                 onChange={(event) => onDisableDuetChange(event.target.checked)}
               />
               <Checkbox
                 checked={publish.disableStitch}
+                disabled={isPublishing}
                 label="Disable stitch"
                 name="disableStitch"
                 onChange={(event) => onDisableStitchChange(event.target.checked)}
@@ -452,17 +504,64 @@ export function MediaPage({
   onImportPathChange,
   onPrivacyChange,
   onPublish,
+  onRetry,
   onTitleChange,
   publish,
 }: MediaPageProps) {
   const hasTikTokAccount = accounts.some((account) => account.provider === 'tiktok');
   const selectedAsset = media.find((asset) => asset.id === publish.mediaId);
   const publishOpen = publish.mediaId !== undefined;
+  const publishHeadingRef = useRef<HTMLHeadingElement>(null);
+  const publishTriggerRef = useRef<{
+    readonly assetId: string;
+    readonly element: HTMLButtonElement;
+    readonly platform: MediaPublishPlatform;
+  } | null>(null);
+  const publishWasOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (publishOpen) {
+      requestAnimationFrame(() => publishHeadingRef.current?.focus());
+    } else if (publishWasOpenRef.current) {
+      requestAnimationFrame(() => {
+        const previousTrigger = publishTriggerRef.current;
+        if (previousTrigger === null) return;
+        const visibleTrigger = [
+          ...document.querySelectorAll<HTMLButtonElement>('[data-media-publish-trigger]'),
+        ].find(
+          (candidate) =>
+            candidate.dataset.mediaId === previousTrigger.assetId &&
+            candidate.dataset.mediaPublishTrigger === previousTrigger.platform &&
+            candidate.getClientRects().length > 0,
+        );
+        (visibleTrigger ?? previousTrigger.element).focus();
+      });
+    }
+    publishWasOpenRef.current = publishOpen;
+  }, [publish.mediaId, publish.platform, publishOpen]);
+
+  const beginPublish: MediaPageProps['onBeginPublish'] = (asset, platform, trigger) => {
+    publishTriggerRef.current =
+      trigger === undefined ? null : { assetId: asset.id, element: trigger, platform };
+    onBeginPublish(asset, platform, trigger);
+  };
+
+  const closePublish = () => {
+    onCancelPublish();
+  };
 
   return (
-    <div className="grid gap-[var(--or-space-6)]">
+    <div aria-busy={isLoading || undefined} className="grid gap-[var(--or-space-6)]">
       {error !== undefined && (
-        <Alert title="Media request failed" variant="error">
+        <Alert
+          action={
+            <Button onClick={onRetry} size="sm" variant="secondary">
+              Reload media
+            </Button>
+          }
+          title="Media request failed"
+          variant="error"
+        >
           {error}
         </Alert>
       )}
@@ -491,6 +590,7 @@ export function MediaPage({
               <FormField className="w-full flex-1" label="Local file path" required>
                 <Input
                   autoComplete="off"
+                  disabled={activeAction !== undefined}
                   name="path"
                   onChange={(event) => onImportPathChange(event.target.value)}
                   placeholder="C:\\Media\\video file.mp4"
@@ -554,13 +654,13 @@ export function MediaPage({
                   activeAction={activeAction}
                   hasTikTokAccount={hasTikTokAccount}
                   media={media}
-                  onBeginPublish={onBeginPublish}
+                  onBeginPublish={beginPublish}
                 />
                 <MediaList
                   activeAction={activeAction}
                   hasTikTokAccount={hasTikTokAccount}
                   media={media}
-                  onBeginPublish={onBeginPublish}
+                  onBeginPublish={beginPublish}
                 />
               </>
             )}
@@ -572,8 +672,9 @@ export function MediaPage({
             accounts={accounts}
             activeAction={activeAction}
             asset={selectedAsset}
+            headingRef={publishHeadingRef}
             onAccountIdChange={onAccountIdChange}
-            onCancelPublish={onCancelPublish}
+            onCancelPublish={closePublish}
             onCaptionChange={onCaptionChange}
             onDescriptionChange={onDescriptionChange}
             onDisableCommentChange={onDisableCommentChange}

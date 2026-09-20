@@ -7,9 +7,12 @@ export function SetupRoute() {
   const [youtubeStatus, setYoutubeStatus] = useState<SetupCredentialStatusView>();
   const [tiktokStatus, setTikTokStatus] = useState<TikTokSetupCredentialStatusView>();
   const [error, setError] = useState<string>();
+  const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    const loadSetup = async () => {
+  const loadSetup = async () => {
+    setError(undefined);
+    setIsLoading(true);
+    try {
       const response = await fetch('/api/setup');
       if (!response.ok) throw new Error('Setup status is unavailable.');
       const body = (await response.json()) as {
@@ -18,12 +21,24 @@ export function SetupRoute() {
       };
       setYoutubeStatus(body.youtube);
       setTikTokStatus(body.tiktok);
-    };
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not load setup status.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    void loadSetup().catch((failure: unknown) =>
-      setError(failure instanceof Error ? failure.message : 'Could not load setup status.'),
-    );
+  useEffect(() => {
+    void loadSetup();
   }, []);
 
-  return <SetupPage error={error} tiktokStatus={tiktokStatus} youtubeStatus={youtubeStatus} />;
+  return (
+    <SetupPage
+      error={error}
+      isLoading={isLoading}
+      onRetry={() => void loadSetup()}
+      tiktokStatus={tiktokStatus}
+      youtubeStatus={youtubeStatus}
+    />
+  );
 }

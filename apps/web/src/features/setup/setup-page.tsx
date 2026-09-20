@@ -1,5 +1,5 @@
 import { PlatformIdentity } from '../../components/patterns';
-import { Alert, Badge, Panel, Spinner } from '../../components/ui';
+import { Alert, Badge, Button, Panel, Spinner } from '../../components/ui';
 
 export interface SetupCredentialStatusView {
   readonly configured: boolean;
@@ -12,6 +12,8 @@ export interface TikTokSetupCredentialStatusView extends SetupCredentialStatusVi
 
 export interface SetupPageProps {
   readonly error: string | undefined;
+  readonly isLoading: boolean;
+  readonly onRetry: () => void;
   readonly tiktokStatus: TikTokSetupCredentialStatusView | undefined;
   readonly youtubeStatus: SetupCredentialStatusView | undefined;
 }
@@ -77,12 +79,15 @@ function CredentialSetupPanel({
   );
 }
 
-export function SetupPage({ error, tiktokStatus, youtubeStatus }: SetupPageProps) {
-  const isLoading =
-    error === undefined && (youtubeStatus === undefined || tiktokStatus === undefined);
-
+export function SetupPage({
+  error,
+  isLoading,
+  onRetry,
+  tiktokStatus,
+  youtubeStatus,
+}: SetupPageProps) {
   return (
-    <div className="space-y-[var(--or-setup-section-gap)]">
+    <div aria-busy={isLoading || undefined} className="space-y-[var(--or-setup-section-gap)]">
       <section aria-labelledby="destination-readiness-title">
         <h2
           className="font-semibold tracking-[var(--or-tracking-section)] text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
@@ -97,7 +102,15 @@ export function SetupPage({ error, tiktokStatus, youtubeStatus }: SetupPageProps
       </section>
 
       {error !== undefined && (
-        <Alert title="Setup status unavailable" variant="error">
+        <Alert
+          action={
+            <Button onClick={onRetry} size="sm" variant="secondary">
+              Retry setup check
+            </Button>
+          }
+          title="Setup status unavailable"
+          variant="error"
+        >
           {error}
         </Alert>
       )}
@@ -116,28 +129,25 @@ export function SetupPage({ error, tiktokStatus, youtubeStatus }: SetupPageProps
         </Panel>
       )}
 
-      {!isLoading &&
-        error === undefined &&
-        youtubeStatus !== undefined &&
-        tiktokStatus !== undefined && (
-          <div className="space-y-[var(--or-space-4)]">
-            <CredentialSetupPanel
-              configured={youtubeStatus.configured}
-              description="BYO Google OAuth desktop client"
-              platform="youtube"
-              redirectUri={youtubeStatus.redirectUri}
-              title="YouTube credentials"
-            />
-            <CredentialSetupPanel
-              configured={tiktokStatus.configured}
-              description={`BYO TikTok Login Kit app · ${tiktokStatus.flow} flow`}
-              platform="tiktok"
-              redirectUri={tiktokStatus.redirectUri}
-              title="TikTok credentials"
-              warning="TikTok unaudited clients can publish only with private visibility."
-            />
-          </div>
-        )}
+      {!isLoading && youtubeStatus !== undefined && tiktokStatus !== undefined && (
+        <div className="space-y-[var(--or-space-4)]">
+          <CredentialSetupPanel
+            configured={youtubeStatus.configured}
+            description="BYO Google OAuth desktop client"
+            platform="youtube"
+            redirectUri={youtubeStatus.redirectUri}
+            title="YouTube credentials"
+          />
+          <CredentialSetupPanel
+            configured={tiktokStatus.configured}
+            description={`BYO TikTok Login Kit app · ${tiktokStatus.flow} flow`}
+            platform="tiktok"
+            redirectUri={tiktokStatus.redirectUri}
+            title="TikTok credentials"
+            warning="TikTok unaudited clients can publish only with private visibility."
+          />
+        </div>
+      )}
     </div>
   );
 }

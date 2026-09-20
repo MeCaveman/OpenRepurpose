@@ -32,6 +32,7 @@ function jobsProps(overrides: Partial<JobsPageProps> = {}): JobsPageProps {
     jobs: [],
     onCancelJob: () => undefined,
     onCloseDetails: () => undefined,
+    onRetry: () => undefined,
     onSelectJob: () => undefined,
     selectedJob: undefined,
     selectedJobId: undefined,
@@ -80,7 +81,7 @@ describe('web jobs page', () => {
       ),
     );
 
-    expect(markup).toContain('aria-current="true"');
+    expect(markup).toContain('aria-pressed="true"');
     expect(markup).toContain('Attempt history');
     expect(markup).toContain('Attempt 1');
     expect(markup).toContain('>Failed<');
@@ -120,6 +121,7 @@ describe('web jobs page', () => {
     );
     expect(errorMarkup).toContain('role="alert"');
     expect(errorMarkup).toContain('Job request failed');
+    expect(errorMarkup).toContain('Reload jobs');
   });
 
   it('keeps cancellation progress and persisted requests distinct', () => {

@@ -1,3 +1,6 @@
+import { useEffect, useRef } from 'react';
+import type { RefObject } from 'react';
+
 import { JobStatus, ResourceEmptyState } from '../../components/patterns';
 import { Alert, Badge, Button, Panel, Spinner } from '../../components/ui';
 
@@ -44,6 +47,7 @@ export interface JobsPageProps {
   readonly jobs: readonly JobView[];
   readonly onCancelJob: (jobId: string) => void;
   readonly onCloseDetails: () => void;
+  readonly onRetry: () => void;
   readonly onSelectJob: (jobId: string) => void;
   readonly selectedJob: JobView | undefined;
   readonly selectedJobId: string | undefined;
@@ -52,7 +56,7 @@ export interface JobsPageProps {
 function formatTimestamp(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  if (Number.isNaN(date.getTime())) return 'Timestamp unavailable';
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
@@ -67,8 +71,35 @@ function formatBytes(value: number): string {
   return `${amount.toFixed(unitIndex === 0 ? 0 : amount >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
+function formatAttemptCount(value: number): string {
+  return Number.isFinite(value) && value >= 0 ? String(Math.floor(value)) : '—';
+}
+
 function canCancel(job: JobView): boolean {
   return job.status === 'pending' || job.status === 'retrying' || job.status === 'running';
+}
+
+function destinationStatusVariant(status: string) {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === 'succeeded' || normalized === 'published') return 'success' as const;
+  if (
+    normalized === 'processing' ||
+    normalized === 'publishing' ||
+    normalized === 'uploading' ||
+    normalized === 'verifying'
+  ) {
+    return 'info' as const;
+  }
+  if (normalized === 'failed' || normalized === 'unavailable') return 'error' as const;
+  if (
+    normalized === 'rate_limited' ||
+    normalized === 'rate limited' ||
+    normalized === 'retrying' ||
+    normalized === 'waiting'
+  ) {
+    return 'warning' as const;
+  }
+  return 'neutral' as const;
 }
 
 function JobIdentity({
@@ -77,7 +108,7 @@ function JobIdentity({
   selected,
 }: {
   readonly job: JobView;
-  readonly onSelect: JobsPageProps['onSelectJob'];
+  readonly onSelect: (jobId: string, trigger: HTMLButtonElement) => void;
   readonly selected: boolean;
 }) {
   const createdAt = formatTimestamp(job.createdAt);
@@ -85,13 +116,14 @@ function JobIdentity({
   return (
     <div className="min-w-0">
       <button
-        aria-current={selected || undefined}
+        aria-pressed={selected}
         className="min-h-[var(--or-target-min)] max-w-full rounded-[var(--or-radius-sm)] text-left text-[var(--or-text-link)] outline-none hover:underline focus-visible:outline-[var(--or-focus-width)] focus-visible:outline-offset-[var(--or-focus-offset)] focus-visible:[outline-color:var(--or-focus-ring)]"
-        onClick={() => onSelect(job.id)}
+        data-job-select={job.id}
+        onClick={(event) => onSelect(job.id, event.currentTarget)}
         type="button"
       >
         <span className="block break-words font-semibold [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]">
-          {job.type}
+          {job.type.trim() || 'Unknown job type'}
         </span>
         <span
           className="mt-[var(--or-space-1)] block break-all font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]"
@@ -120,10 +152,13 @@ function JobIdentity({
 }
 
 function DestinationCheckpoint({ destination }: { readonly destination: DestinationJobView }) {
+  const destinationId = destination.destinationId.trim() || 'unknown destination';
+  const remoteStatus = destination.remoteStatus.trim().replaceAll('_', ' ') || 'unknown status';
+
   return (
     <div className="mt-[var(--or-space-2)] flex flex-wrap items-center gap-[var(--or-space-2)]">
-      <Badge variant="neutral">
-        {destination.destinationId} · {destination.remoteStatus}
+      <Badge variant={destinationStatusVariant(remoteStatus)}>
+        {destinationId} · {remoteStatus}
       </Badge>
       <span className="text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]">
         {formatBytes(destination.uploadedBytes)}
@@ -183,7 +218,9 @@ function JobsTable({
   onCancelJob,
   onSelectJob,
   selectedJobId,
-}: Pick<JobsPageProps, 'activeAction' | 'jobs' | 'onCancelJob' | 'onSelectJob' | 'selectedJobId'>) {
+}: Pick<JobsPageProps, 'activeAction' | 'jobs' | 'onCancelJob' | 'selectedJobId'> & {
+  readonly onSelectJob: (jobId: string, trigger: HTMLButtonElement) => void;
+}) {
   return (
     <Panel className="hidden overflow-x-auto md:block" padding="none">
       <table className="w-full text-left [font-size:var(--or-type-interface-size)]">
@@ -221,7 +258,7 @@ function JobsTable({
                   <JobStatus status={job.status} />
                 </td>
                 <td className="px-[var(--or-table-cell-padding-inline)] py-[var(--or-space-3)] font-[family-name:var(--or-font-technical)] text-[var(--or-text-secondary)] tabular-nums">
-                  {job.attemptCount}/{job.maxAttempts}
+                  {formatAttemptCount(job.attemptCount)}/{formatAttemptCount(job.maxAttempts)}
                 </td>
                 <td className="px-[var(--or-table-cell-padding-inline)] py-[var(--or-space-3)]">
                   <CancelAction activeAction={activeAction} job={job} onCancel={onCancelJob} />
@@ -241,7 +278,9 @@ function JobsList({
   onCancelJob,
   onSelectJob,
   selectedJobId,
-}: Pick<JobsPageProps, 'activeAction' | 'jobs' | 'onCancelJob' | 'onSelectJob' | 'selectedJobId'>) {
+}: Pick<JobsPageProps, 'activeAction' | 'jobs' | 'onCancelJob' | 'selectedJobId'> & {
+  readonly onSelectJob: (jobId: string, trigger: HTMLButtonElement) => void;
+}) {
   return (
     <div className="grid gap-[var(--or-space-3)] md:hidden">
       {jobs.map((job) => {
@@ -262,7 +301,8 @@ function JobsList({
             )}
             <div className="mt-[var(--or-space-4)] flex flex-wrap items-center justify-between gap-[var(--or-space-3)] border-t border-[var(--or-border-subtle)] pt-[var(--or-space-3)]">
               <span className="font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] tabular-nums [font-size:var(--or-type-metadata-size)]">
-                {job.attemptCount}/{job.maxAttempts} attempts
+                {formatAttemptCount(job.attemptCount)}/{formatAttemptCount(job.maxAttempts)}{' '}
+                attempts
               </span>
               <CancelAction activeAction={activeAction} job={job} onCancel={onCancelJob} />
             </div>
@@ -277,11 +317,13 @@ function AttemptHistory({
   attempts,
   isLoading,
   job,
+  headingRef,
   onClose,
 }: {
   readonly attempts: readonly JobAttemptView[];
   readonly isLoading: boolean;
   readonly job: JobView | undefined;
+  readonly headingRef: RefObject<HTMLHeadingElement | null>;
   readonly onClose: () => void;
 }) {
   return (
@@ -294,6 +336,8 @@ function AttemptHistory({
           <h3
             className="font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
             id="attempt-history-heading"
+            ref={headingRef}
+            tabIndex={-1}
           >
             Attempt history
           </h3>
@@ -394,14 +438,56 @@ export function JobsPage({
   jobs,
   onCancelJob,
   onCloseDetails,
+  onRetry,
   onSelectJob,
   selectedJob,
   selectedJobId,
 }: JobsPageProps) {
+  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const detailTriggerRef = useRef<{
+    readonly element: HTMLButtonElement;
+    readonly jobId: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (selectedJobId !== undefined) {
+      requestAnimationFrame(() => detailHeadingRef.current?.focus());
+    }
+  }, [selectedJobId]);
+
+  const selectJob = (jobId: string, trigger: HTMLButtonElement) => {
+    detailTriggerRef.current = { element: trigger, jobId };
+    onSelectJob(jobId);
+  };
+
+  const closeDetails = () => {
+    onCloseDetails();
+    requestAnimationFrame(() => {
+      const previousTrigger = detailTriggerRef.current;
+      if (previousTrigger === null) return;
+      const visibleTrigger = [
+        ...document.querySelectorAll<HTMLButtonElement>('[data-job-select]'),
+      ].find(
+        (candidate) =>
+          candidate.dataset.jobSelect === previousTrigger.jobId &&
+          candidate.getClientRects().length > 0,
+      );
+      (visibleTrigger ?? previousTrigger.element).focus();
+    });
+  };
+
   return (
-    <div className="grid gap-[var(--or-space-6)]">
+    <div aria-busy={isLoading || undefined} className="grid gap-[var(--or-space-6)]">
       {error !== undefined && (
-        <Alert title="Job request failed" variant="error">
+        <Alert
+          action={
+            <Button onClick={onRetry} size="sm" variant="secondary">
+              Reload jobs
+            </Button>
+          }
+          title="Job request failed"
+          variant="error"
+        >
           {error}
         </Alert>
       )}
@@ -452,23 +538,24 @@ export function JobsPage({
                 activeAction={activeAction}
                 jobs={jobs}
                 onCancelJob={onCancelJob}
-                onSelectJob={onSelectJob}
+                onSelectJob={selectJob}
                 selectedJobId={selectedJobId}
               />
               <JobsList
                 activeAction={activeAction}
                 jobs={jobs}
                 onCancelJob={onCancelJob}
-                onSelectJob={onSelectJob}
+                onSelectJob={selectJob}
                 selectedJobId={selectedJobId}
               />
             </div>
             {selectedJobId !== undefined && (
               <AttemptHistory
                 attempts={attempts}
+                headingRef={detailHeadingRef}
                 isLoading={isDetailLoading}
                 job={selectedJob}
-                onClose={onCloseDetails}
+                onClose={closeDetails}
               />
             )}
           </div>

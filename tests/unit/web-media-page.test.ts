@@ -34,6 +34,7 @@ function renderMediaPage(overrides: Partial<MediaPageProps> = {}): string {
     onImportPathChange: () => undefined,
     onPrivacyChange: () => undefined,
     onPublish: () => undefined,
+    onRetry: () => undefined,
     onTitleChange: () => undefined,
     publish: {
       accountId: '',
@@ -78,6 +79,25 @@ describe('web media page', () => {
     expect(empty).toContain('No local media has been imported yet.');
     expect(error).toContain('Media request failed');
     expect(error).toContain('Media library is unavailable.');
+    expect(error).toContain('Reload media');
+  });
+
+  it('blocks publish preparation until local media inspection succeeds', () => {
+    const markup = renderMediaPage({
+      media: [
+        {
+          id: 'media-processing',
+          metadata: { durationSeconds: Number.NaN, height: 0, width: Number.POSITIVE_INFINITY },
+          path: '',
+          state: 'processing',
+        },
+      ],
+    });
+
+    expect(markup).toContain('Unnamed media file');
+    expect(markup).toContain('—×— · —');
+    expect(markup).toContain('Publishing is available after local media inspection succeeds.');
+    expect(markup).toContain('disabled=""');
   });
 
   it('reveals the YouTube publish preparation only after an asset is selected', () => {

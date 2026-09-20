@@ -119,7 +119,7 @@ export function ResourceNavigation({
         return (
           <a
             aria-current={isCurrent ? 'page' : undefined}
-            className={`relative inline-flex shrink-0 items-center justify-center rounded-[var(--or-radius-sm)] border font-medium transition-[background-color,border-color,color] duration-[var(--or-duration-fast)] ease-[var(--or-ease-out)] motion-reduce:transition-none ${
+            className={`relative inline-flex shrink-0 items-center justify-center rounded-[var(--or-radius-sm)] border font-medium transition-[background-color,border-color,color] duration-[var(--or-duration-fast)] ease-[var(--or-ease-out)] active:bg-[var(--or-bg-selected)] motion-reduce:transition-none ${
               isRail
                 ? 'size-[var(--or-nav-rail-control-size)] border-transparent'
                 : 'min-h-[var(--or-target-mobile)] gap-[var(--or-space-2)] border-transparent px-[var(--or-space-3)] [font-size:var(--or-type-interface-size)] [line-height:var(--or-type-interface-line)]'

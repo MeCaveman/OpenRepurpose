@@ -337,7 +337,7 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
   );
   await page.reload();
   await page.getByRole('button', { name: 'Publish to YouTube' }).click();
-  await expect(page.getByRole('heading', { name: 'Queue YouTube upload' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Queue YouTube upload' })).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -350,6 +350,7 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
   await page.getByLabel('Connected account').selectOption('account-1');
   await page.getByRole('button', { name: 'Queue upload' }).click();
   await expect.poll(() => queued).toBe(true);
+  await expect(page.getByRole('button', { name: 'Publish to YouTube' })).toBeFocused();
   expect(queuedRequest).toEqual({
     mediaId: 'media-1',
     accountId: 'account-1',
@@ -496,6 +497,9 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
   await page.goto('/workflows');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Workflows');
   await expect(page.getByRole('heading', { name: 'Create a workflow' })).toBeVisible();
+  await page.getByRole('button', { name: 'Save workflow' }).click();
+  await expect(page.getByLabel('Workflow name')).toBeFocused();
+  await expect(page.getByText('Give this workflow a name.').last()).toBeVisible();
   const optionalStages = page.locator('summary').filter({ hasText: 'Optional route stages' });
   await expect(page.locator('details')).not.toHaveAttribute('open', '');
   await optionalStages.focus();

@@ -20,11 +20,11 @@ export function WorkflowCard({
     <article className="rounded-[var(--or-setup-section-radius)] border border-[var(--or-border-subtle)] bg-[var(--or-bg-surface)] p-[var(--or-pane-padding)]">
       <header className="flex flex-wrap items-start justify-between gap-[var(--or-space-3)]">
         <div className="min-w-0">
-          <h3 className="truncate font-medium text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]">
-            {name}
+          <h3 className="break-words font-medium text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]">
+            {name.trim() || 'Unnamed workflow'}
           </h3>
-          <p className="mt-[var(--or-space-1)] truncate font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]">
-            {sourceLabel}
+          <p className="mt-[var(--or-space-1)] break-all font-[family-name:var(--or-font-technical)] text-[var(--or-text-tertiary)] [font-size:var(--or-type-metadata-size)] [line-height:var(--or-type-metadata-line)]">
+            {sourceLabel.trim() || 'Source unavailable'}
           </p>
         </div>
         <WorkflowStatus enabled={enabled} />

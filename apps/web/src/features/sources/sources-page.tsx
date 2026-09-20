@@ -56,6 +56,7 @@ export interface SourcesPageProps {
   readonly onChannelIdChange: (value: string) => void;
   readonly onDisplayNameChange: (value: string) => void;
   readonly onNavigateAccounts: (event: MouseEvent<HTMLAnchorElement>) => void;
+  readonly onRetry: () => void;
   readonly onSourceAction: (sourceId: string, action: 'pause' | 'poll' | 'resume') => void;
   readonly sources: readonly SourceConnectionView[];
 }
@@ -63,7 +64,7 @@ export interface SourcesPageProps {
 function formatTimestamp(value: string | undefined): string {
   if (value === undefined) return 'Never';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  if (Number.isNaN(date.getTime())) return 'Timestamp unavailable';
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
@@ -71,39 +72,44 @@ function formatTimestamp(value: string | undefined): string {
 }
 
 function humanizeStatus(value: string): string {
-  return value
+  const label = value
+    .trim()
     .split('_')
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(' ');
+  return label || 'Unknown';
 }
 
 function stateVariant(kind: 'cleanup' | 'lifecycle' | 'resolution', state: string): BadgeVariant {
+  const normalized = state.trim().toLowerCase();
   if (
-    (kind === 'resolution' && state === 'ready') ||
-    (kind === 'lifecycle' && (state === 'published' || state === 'completed')) ||
-    (kind === 'cleanup' && state === 'completed')
+    (kind === 'resolution' && normalized === 'ready') ||
+    (kind === 'lifecycle' && (normalized === 'published' || normalized === 'completed')) ||
+    (kind === 'cleanup' && normalized === 'completed')
   )
     return 'success';
 
   if (
-    state === 'failed' ||
-    state === 'partial_failure' ||
-    (kind === 'resolution' && state === 'unavailable')
+    normalized === 'failed' ||
+    normalized === 'partial_failure' ||
+    (kind === 'resolution' && normalized === 'unavailable')
   )
-    return state === 'unavailable' ? 'warning' : 'error';
+    return normalized === 'unavailable' ? 'warning' : 'error';
 
   if (
-    state === 'resolving' ||
-    state === 'processing' ||
-    state === 'publishing' ||
-    state === 'running' ||
-    state === 'scheduled' ||
-    state === 'eligible'
+    normalized === 'resolving' ||
+    normalized === 'processing' ||
+    normalized === 'publishing' ||
+    normalized === 'running' ||
+    normalized === 'scheduled' ||
+    normalized === 'eligible'
   )
     return 'info';
 
-  if (state === 'queued' || state === 'retrying' || state === 'cleanup_pending') return 'warning';
+  if (normalized === 'queued' || normalized === 'retrying' || normalized === 'cleanup_pending') {
+    return 'warning';
+  }
   return 'neutral';
 }
 
@@ -122,7 +128,7 @@ function ItemStateBadge({
 }
 
 function SourceItem({ item }: { readonly item: SourceItemView }) {
-  const title = item.metadata.title ?? item.externalId;
+  const title = item.metadata.title?.trim() || item.externalId.trim() || 'Untitled source item';
 
   return (
     <article className="rounded-[var(--or-radius-sm)] border border-[var(--or-border-subtle)] bg-[var(--or-bg-surface)] p-[var(--or-pane-padding-compact)]">
@@ -168,7 +174,7 @@ function SourceConnection({
   const toggleAction = source.status === 'active' ? 'pause' : 'resume';
   const isPolling = activeAction === `poll:${source.id}`;
   const isToggling = activeAction === `${toggleAction}:${source.id}`;
-  const isSourceBusy = isPolling || isToggling;
+  const hasActiveAction = activeAction !== undefined;
   const headingId = `source-${source.id}`;
 
   return (
@@ -181,7 +187,7 @@ function SourceConnection({
               className="min-w-0 break-words font-semibold text-[var(--or-text-primary)] [font-size:var(--or-type-section-size)] [line-height:var(--or-type-section-line)]"
               id={headingId}
             >
-              {source.displayName}
+              {source.displayName.trim() || 'Unnamed source'}
             </h3>
           </div>
           <div className="mt-[var(--or-space-2)]">
@@ -190,7 +196,7 @@ function SourceConnection({
         </div>
         <div className="flex flex-wrap gap-[var(--or-space-2)]">
           <Button
-            disabled={isSourceBusy && !isPolling}
+            disabled={hasActiveAction && !isPolling}
             isLoading={isPolling}
             loadingLabel="Polling…"
             onClick={() => onAction(source.id, 'poll')}
@@ -200,7 +206,7 @@ function SourceConnection({
             Poll now
           </Button>
           <Button
-            disabled={isSourceBusy && !isToggling}
+            disabled={hasActiveAction && !isToggling}
             isLoading={isToggling}
             loadingLabel={toggleAction === 'pause' ? 'Pausing…' : 'Resuming…'}
             onClick={() => onAction(source.id, toggleAction)}
@@ -284,6 +290,7 @@ export function SourcesPage({
   onChannelIdChange,
   onDisplayNameChange,
   onNavigateAccounts,
+  onRetry,
   onSourceAction,
   sources,
 }: SourcesPageProps) {
@@ -292,9 +299,17 @@ export function SourcesPage({
   );
 
   return (
-    <div className="space-y-[var(--or-setup-section-gap)]">
+    <div aria-busy={isLoading || undefined} className="space-y-[var(--or-setup-section-gap)]">
       {error !== undefined && (
-        <Alert title="Source action unavailable" variant="error">
+        <Alert
+          action={
+            <Button onClick={onRetry} size="sm" variant="secondary">
+              Reload sources
+            </Button>
+          }
+          title="Source action unavailable"
+          variant="error"
+        >
           {error}
         </Alert>
       )}
@@ -338,7 +353,7 @@ export function SourcesPage({
           <div className="grid gap-[var(--or-field-group-gap)] lg:grid-cols-2">
             <FormField label="Connected YouTube account" required>
               <Select
-                disabled={isLoading || youtubeAccounts.length === 0}
+                disabled={isLoading || activeAction !== undefined || youtubeAccounts.length === 0}
                 name="source-account-id"
                 onChange={(event) => onAccountIdChange(event.target.value)}
                 value={draft.accountId}
@@ -348,7 +363,7 @@ export function SourcesPage({
                 </option>
                 {youtubeAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
-                    {account.displayName}
+                    {account.displayName.trim() || 'Unnamed account'}
                   </option>
                 ))}
               </Select>
@@ -356,6 +371,7 @@ export function SourcesPage({
             <FormField label="YouTube channel ID" required>
               <Input
                 autoComplete="off"
+                disabled={isLoading || activeAction !== undefined}
                 name="source-channel-id"
                 onChange={(event) => onChannelIdChange(event.target.value)}
                 placeholder="Example: UC…"
@@ -369,6 +385,7 @@ export function SourcesPage({
               label="Local display name (optional)"
             >
               <Input
+                disabled={isLoading || activeAction !== undefined}
                 name="source-display-name"
                 onChange={(event) => onDisplayNameChange(event.target.value)}
                 placeholder="Example: Workshop uploads"
@@ -378,7 +395,7 @@ export function SourcesPage({
           </div>
           <Button
             className="mt-[var(--or-space-4)]"
-            disabled={youtubeAccounts.length === 0}
+            disabled={isLoading || activeAction !== undefined || youtubeAccounts.length === 0}
             isLoading={activeAction === 'add'}
             loadingLabel="Adding source…"
             type="submit"
