@@ -329,7 +329,7 @@ function AttemptHistory({
   return (
     <Panel
       aria-labelledby="attempt-history-heading"
-      className="xl:sticky xl:top-[var(--or-space-4)]"
+      className="min-[90rem]:sticky min-[90rem]:top-[var(--or-space-4)]"
     >
       <header className="flex items-start justify-between gap-[var(--or-space-3)]">
         <div className="min-w-0">
@@ -531,9 +531,11 @@ export function JobsPage({
           />
         ) : (
           <div
-            className={`grid items-start gap-[var(--or-space-5)] ${selectedJobId === undefined ? '' : 'xl:grid-cols-[minmax(0,1fr)_var(--or-shell-inspector-width)]'}`}
+            className={`grid items-start gap-[var(--or-space-5)] ${selectedJobId === undefined ? '' : 'min-[90rem]:grid-cols-[minmax(0,1fr)_var(--or-shell-inspector-width)]'}`}
           >
-            <div className={`min-w-0 ${selectedJobId === undefined ? '' : 'hidden xl:block'}`}>
+            <div
+              className={`min-w-0 ${selectedJobId === undefined ? '' : 'hidden min-[90rem]:block'}`}
+            >
               <JobsTable
                 activeAction={activeAction}
                 jobs={jobs}

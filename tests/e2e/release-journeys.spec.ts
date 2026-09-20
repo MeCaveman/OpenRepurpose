@@ -350,6 +350,7 @@ test('manual import to publish queues one YouTube upload', async ({ page }) => {
   await page.getByLabel('Connected account').selectOption('account-1');
   await page.getByRole('button', { name: 'Queue upload' }).click();
   await expect.poll(() => queued).toBe(true);
+  await expect(page.getByRole('status')).toContainText('YouTube upload queued');
   await expect(page.getByRole('button', { name: 'Publish to YouTube' })).toBeFocused();
   expect(queuedRequest).toEqual({
     mediaId: 'media-1',

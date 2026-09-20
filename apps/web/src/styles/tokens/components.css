@@ -131,6 +131,15 @@
   --or-disabled-opacity: 0.48;
 }
 
+@media (max-width: 39.999rem) {
+  :root {
+    --or-target-min: var(--or-target-mobile);
+    --or-button-height-sm: var(--or-target-mobile);
+    --or-button-height-md: var(--or-target-mobile);
+    --or-field-height: var(--or-target-mobile);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --or-duration-fast: 0ms;

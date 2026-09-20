@@ -39,7 +39,7 @@ export function Alert({
         variants[variant],
         className,
       )}
-      role={role ?? (variant === 'error' ? 'alert' : undefined)}
+      role={role ?? (variant === 'error' ? 'alert' : variant === 'success' ? 'status' : undefined)}
     >
       {title !== undefined && <p className="font-semibold text-current">{title}</p>}
       <div

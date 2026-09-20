@@ -147,6 +147,7 @@ test('application shell prioritizes the workspace at desktop and compact widths'
 
 test('job history renders persisted status and attempt detail', async ({ page }) => {
   await serveProductionAssets(page);
+  await page.setViewportSize({ height: 768, width: 1366 });
   await page.route('http://openrepurpose.test/api/session', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
   );
@@ -228,9 +229,13 @@ test('job history renders persisted status and attempt detail', async ({ page })
   const jobTrigger = page.getByRole('button', { name: /fake\.publish/ });
   await jobTrigger.click();
   await expect(page.getByRole('heading', { name: 'Attempt history' })).toBeFocused();
+  await expect(jobTrigger).toBeHidden();
   await expect(page.getByText('Attempt 1')).toBeVisible();
   await expect(page.getByText('Failed')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Destination checkpoint' })).toBeVisible();
+
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await expect(jobTrigger).toBeVisible();
 
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();

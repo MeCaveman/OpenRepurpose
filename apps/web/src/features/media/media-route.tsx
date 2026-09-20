@@ -24,6 +24,10 @@ export function MediaRoute() {
   const [isLoading, setIsLoading] = useState(true);
   const [activeAction, setActiveAction] = useState<string>();
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<{
+    readonly description: string;
+    readonly title: string;
+  }>();
   const [publishMediaId, setPublishMediaId] = useState<string>();
   const [publishAccountId, setPublishAccountId] = useState('');
   const [publishTitle, setPublishTitle] = useState('');
@@ -71,6 +75,7 @@ export function MediaRoute() {
 
   const retryMedia = async () => {
     setError(undefined);
+    setNotice(undefined);
     setIsLoading(true);
     try {
       await Promise.all([loadMedia(), loadAccounts()]);
@@ -88,8 +93,10 @@ export function MediaRoute() {
   const importMedia = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(undefined);
+    setNotice(undefined);
     setActiveAction('import');
     try {
+      const importedPath = importPath;
       const response = await fetch('/api/media/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': await getCsrfToken() },
@@ -98,6 +105,10 @@ export function MediaRoute() {
       if (!response.ok) throw new Error('Import failed. Check the file and ffprobe.');
       setImportPath('');
       await loadMedia();
+      setNotice({
+        description: `${importedPath} is ready for local inspection and publishing.`,
+        title: 'Media imported',
+      });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Import failed.');
     } finally {
@@ -109,6 +120,7 @@ export function MediaRoute() {
     event.preventDefault();
     if (publishMediaId === undefined) return;
     setError(undefined);
+    setNotice(undefined);
     setActiveAction('publish:youtube');
     try {
       const response = await fetch('/api/publish/youtube', {
@@ -123,6 +135,10 @@ export function MediaRoute() {
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? 'The YouTube upload could not be queued.');
       setPublishMediaId(undefined);
+      setNotice({
+        description: 'Track upload progress and final platform processing in Jobs.',
+        title: 'YouTube upload queued',
+      });
     } catch (failure) {
       setError(
         failure instanceof Error ? failure.message : 'The YouTube upload could not be queued.',
@@ -136,6 +152,7 @@ export function MediaRoute() {
     event.preventDefault();
     if (publishMediaId === undefined) return;
     setError(undefined);
+    setNotice(undefined);
     setActiveAction('publish:tiktok');
     try {
       const response = await fetch('/api/publish/tiktok', {
@@ -156,6 +173,10 @@ export function MediaRoute() {
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? 'The TikTok post could not be queued.');
       setPublishMediaId(undefined);
+      setNotice({
+        description: 'Track upload progress and final platform processing in Jobs.',
+        title: 'TikTok post queued',
+      });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'The TikTok post could not be queued.');
     } finally {
@@ -164,6 +185,7 @@ export function MediaRoute() {
   };
 
   const beginPublish = (asset: MediaAssetView, platform: MediaPublishPlatform) => {
+    setNotice(undefined);
     const name = asset.path.split(/[\\/]/).pop() ?? 'Untitled video';
     setPublishMediaId(asset.id);
     setPublishPlatform(platform);
@@ -189,6 +211,7 @@ export function MediaRoute() {
       importPath={importPath}
       isLoading={isLoading}
       media={media}
+      notice={notice}
       onAccountIdChange={setPublishAccountId}
       onBeginPublish={beginPublish}
       onCancelPublish={() => setPublishMediaId(undefined)}

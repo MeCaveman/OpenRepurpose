@@ -61,6 +61,7 @@ export interface MediaPageProps {
   readonly importPath: string;
   readonly isLoading: boolean;
   readonly media: readonly MediaAssetView[];
+  readonly notice: { readonly description: string; readonly title: string } | undefined;
   readonly onAccountIdChange: (value: string) => void;
   readonly onBeginPublish: (
     asset: MediaAssetView,
@@ -309,6 +310,7 @@ function PublishPanel({
   | 'importPath'
   | 'isLoading'
   | 'media'
+  | 'notice'
   | 'onBeginPublish'
   | 'onImport'
   | 'onImportPathChange'
@@ -324,7 +326,7 @@ function PublishPanel({
   return (
     <Panel
       aria-labelledby="publish-preparation-heading"
-      className="xl:sticky xl:top-[var(--or-space-4)]"
+      className="min-[90rem]:sticky min-[90rem]:top-[var(--or-space-4)]"
       surface="raised"
     >
       <header className="flex items-start justify-between gap-[var(--or-space-3)]">
@@ -489,6 +491,7 @@ export function MediaPage({
   importPath,
   isLoading,
   media,
+  notice,
   onAccountIdChange,
   onBeginPublish,
   onCancelPublish,
@@ -563,11 +566,17 @@ export function MediaPage({
         </Alert>
       )}
 
+      {notice !== undefined && (
+        <Alert title={notice.title} variant="success">
+          {notice.description}
+        </Alert>
+      )}
+
       <div
-        className={`grid items-start gap-[var(--or-space-5)] ${publishOpen ? 'xl:grid-cols-[minmax(0,1fr)_var(--or-shell-inspector-width)]' : ''}`}
+        className={`grid items-start gap-[var(--or-space-5)] ${publishOpen ? 'min-[90rem]:grid-cols-[minmax(0,1fr)_var(--or-shell-inspector-width)]' : ''}`}
       >
         <div
-          className={`min-w-0 ${publishOpen ? 'hidden xl:grid xl:gap-[var(--or-space-6)]' : 'grid gap-[var(--or-space-6)]'}`}
+          className={`min-w-0 ${publishOpen ? 'hidden min-[90rem]:grid min-[90rem]:gap-[var(--or-space-6)]' : 'grid gap-[var(--or-space-6)]'}`}
         >
           <Panel aria-labelledby="local-import-heading" surface="inset">
             <h2

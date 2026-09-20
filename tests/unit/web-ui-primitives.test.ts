@@ -63,15 +63,19 @@ describe('web UI primitives', () => {
     expect(markup).toContain('size-[var(--or-target-min)]');
   });
 
-  it('uses an assertive role only for the error alert variant', () => {
+  it('uses assertive errors and polite success status semantics', () => {
     const errorMarkup = renderToStaticMarkup(
       createElement(Alert, { children: 'Could not save.', variant: 'error' }),
     );
     const neutralMarkup = renderToStaticMarkup(
       createElement(Alert, { children: 'Local-only operation.' }),
     );
+    const successMarkup = renderToStaticMarkup(
+      createElement(Alert, { children: 'Upload queued.', variant: 'success' }),
+    );
 
     expect(errorMarkup).toContain('role="alert"');
+    expect(successMarkup).toContain('role="status"');
     expect(neutralMarkup).not.toContain('role=');
   });
 

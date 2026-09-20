@@ -22,6 +22,7 @@ function renderMediaPage(overrides: Partial<MediaPageProps> = {}): string {
         state: 'available',
       },
     ],
+    notice: undefined,
     onAccountIdChange: () => undefined,
     onBeginPublish: () => undefined,
     onCancelPublish: () => undefined,
@@ -80,6 +81,19 @@ describe('web media page', () => {
     expect(error).toContain('Media request failed');
     expect(error).toContain('Media library is unavailable.');
     expect(error).toContain('Reload media');
+  });
+
+  it('announces successful import and publish outcomes', () => {
+    const markup = renderMediaPage({
+      notice: {
+        description: 'Track upload progress and final platform processing in Jobs.',
+        title: 'YouTube upload queued',
+      },
+    });
+
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('YouTube upload queued');
+    expect(markup).toContain('Track upload progress and final platform processing in Jobs.');
   });
 
   it('blocks publish preparation until local media inspection succeeds', () => {
