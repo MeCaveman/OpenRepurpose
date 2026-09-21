@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createTranscriptionCacheIdentity,
+  exportSubtitle,
   transcriptCueSchema,
+  TranscriptService,
+  TranscriptServiceError,
   TranscriptionProviderRegistry,
   type TranscriptionProvider,
 } from '../../packages/core/src/index.js';
@@ -16,6 +19,8 @@ import {
   SqliteTranscriptRepository,
 } from '../../packages/db/src/index.js';
 import { createTemporaryDatabase } from '../../packages/testkit/src/index.js';
+import { createCli } from '../../apps/cli/src/index.js';
+import type { Environment } from '../../packages/shared/src/index.js';
 
 const identityInput = {
   sourceAudioFingerprint: 'sha256:audio-a',
@@ -79,6 +84,32 @@ describe('transcription provider contract', () => {
         (variant) => createTranscriptionCacheIdentity(variant).cacheKey !== baseline.cacheKey,
       ),
     ).toBe(true);
+  });
+
+  it('exports deterministic SRT and WebVTT with UTF-8 text and chronological cues', () => {
+    const cues = [
+      { startMs: 0, endMs: 1_250, text: 'Hello\r\nworld' },
+      { startMs: 3_661_001, endMs: 3_662_005, text: 'أهلاً بالعالم' },
+    ];
+
+    expect(exportSubtitle(cues, 'srt')).toBe(
+      '1\n00:00:00,000 --> 00:00:01,250\nHello\nworld\n\n' +
+        '2\n01:01:01,001 --> 01:01:02,005\nأهلاً بالعالم\n',
+    );
+    expect(exportSubtitle(cues, 'vtt')).toBe(
+      'WEBVTT\n\n' +
+        '00:00:00.000 --> 00:00:01.250\nHello\nworld\n\n' +
+        '01:01:01.001 --> 01:01:02.005\nأهلاً بالعالم\n',
+    );
+    expect(() =>
+      exportSubtitle(
+        [
+          { startMs: 2_000, endMs: 3_000, text: 'Later' },
+          { startMs: 1_000, endMs: 1_500, text: 'Earlier' },
+        ],
+        'vtt',
+      ),
+    ).toThrow('chronological order');
   });
 });
 
@@ -150,6 +181,171 @@ describe('transcript persistence', () => {
         'cannot overwrite a user-edited',
       );
       expect(repository.findById('transcript-a')?.cues[0]?.text).toBe('Edited transcript');
+      expect(repository.listByMediaId('media-transcript').map((item) => item.id)).toEqual([
+        'transcript-a',
+      ]);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it('saves an edited cue set atomically and rejects stale revisions', () => {
+    const fixture = createTemporaryDatabase();
+    try {
+      new SqliteMediaRepository(fixture.database).create({
+        id: 'media-edit',
+        path: '/media/edit.mp4',
+        fingerprint: 'sha256:edit',
+        sizeBytes: 100,
+        modifiedAt: new Date(0),
+        state: 'available',
+        createdAt: new Date(0),
+        metadata: { hasAudio: true },
+      });
+      const repository = new SqliteTranscriptRepository(fixture.database);
+      repository.reserve({
+        id: 'transcript-edit',
+        identity: createTranscriptionCacheIdentity({
+          ...identityInput,
+          sourceAudioFingerprint: 'sha256:edit',
+        }),
+        now: new Date(1),
+        source: { kind: 'media', mediaId: 'media-edit' },
+      });
+      const generated = repository.replaceGeneratedCues('transcript-edit', [cue], new Date(2));
+      const service = new TranscriptService(repository, () => new Date(3));
+      const edited = service.save('transcript-edit', {
+        expectedRevision: generated.revision,
+        cues: [{ startMs: 100, endMs: 1_300, text: 'User-edited text' }],
+      });
+
+      expect(edited).toMatchObject({
+        hasUserEdits: true,
+        revision: 2,
+        updatedAt: new Date(3),
+        cues: [{ startMs: 100, endMs: 1_300, text: 'User-edited text' }],
+      });
+      expect(edited.cues[0]).not.toHaveProperty('words');
+      expect(() =>
+        service.save('transcript-edit', {
+          expectedRevision: generated.revision,
+          cues: [{ startMs: 0, endMs: 1_000, text: 'Stale edit' }],
+        }),
+      ).toThrowError(TranscriptServiceError);
+      expect(repository.findById('transcript-edit')?.cues[0]?.text).toBe('User-edited text');
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it('reloads user edits after the database is closed and reopened', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-transcript-restart-'));
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    let database: ReturnType<typeof openDatabase> | undefined = openDatabase(databasePath);
+    try {
+      runMigrations(database);
+      new SqliteMediaRepository(database).create({
+        id: 'media-restart',
+        path: '/media/restart.mp4',
+        fingerprint: 'sha256:restart-media',
+        sizeBytes: 100,
+        modifiedAt: new Date(0),
+        state: 'available',
+        createdAt: new Date(0),
+        metadata: { hasAudio: true },
+      });
+      const repository = new SqliteTranscriptRepository(database);
+      repository.reserve({
+        id: 'transcript-restart',
+        identity: createTranscriptionCacheIdentity({
+          ...identityInput,
+          sourceAudioFingerprint: 'sha256:restart-audio',
+        }),
+        now: new Date(1),
+        source: { kind: 'media', mediaId: 'media-restart' },
+      });
+      const generated = repository.replaceGeneratedCues('transcript-restart', [cue], new Date(2));
+      new TranscriptService(repository, () => new Date(3)).save('transcript-restart', {
+        expectedRevision: generated.revision,
+        cues: [{ startMs: 50, endMs: 1_250, text: 'Persist after restart' }],
+      });
+      database.close();
+      database = undefined;
+
+      database = openDatabase(databasePath);
+      runMigrations(database);
+      expect(new SqliteTranscriptRepository(database).findById('transcript-restart')).toMatchObject(
+        {
+          hasUserEdits: true,
+          revision: 2,
+          cues: [{ startMs: 50, endMs: 1_250, text: 'Persist after restart' }],
+        },
+      );
+    } finally {
+      database?.close();
+      rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
+
+  it('shows and exports a transcript through the CLI shared service path', async () => {
+    const fixture = createTemporaryDatabase();
+    try {
+      new SqliteMediaRepository(fixture.database).create({
+        id: 'media-cli-transcript',
+        path: '/media/cli.mp4',
+        fingerprint: 'sha256:cli-media',
+        sizeBytes: 100,
+        modifiedAt: new Date(0),
+        state: 'available',
+        createdAt: new Date(0),
+        metadata: { hasAudio: true },
+      });
+      const repository = new SqliteTranscriptRepository(fixture.database);
+      repository.reserve({
+        id: 'transcript-cli',
+        identity: createTranscriptionCacheIdentity({
+          ...identityInput,
+          sourceAudioFingerprint: 'sha256:cli-audio',
+        }),
+        now: new Date(1),
+        source: { kind: 'media', mediaId: 'media-cli-transcript' },
+      });
+      repository.replaceGeneratedCues(
+        'transcript-cli',
+        [{ startMs: 0, endMs: 750, text: 'CLI caption' }],
+        new Date(2),
+      );
+      const environment: Environment = {
+        APP_CONFIG_DIR: join(fixture.directory, 'config'),
+        APP_DATA_DIR: fixture.directory,
+        APP_TEMP_DIR: join(fixture.directory, 'temp'),
+        DATABASE_URL: join(fixture.directory, 'openrepurpose.sqlite'),
+      };
+      const output: string[] = [];
+
+      await createCli({ environment, write: (value) => output.push(value) }).parseAsync([
+        'node',
+        'openrepurpose',
+        'transcript',
+        'show',
+        'transcript-cli',
+        '--json',
+      ]);
+      expect(JSON.parse(output.at(-1) ?? '{}')).toMatchObject({
+        id: 'transcript-cli',
+        cues: [{ text: 'CLI caption' }],
+      });
+      output.length = 0;
+      await createCli({ environment, write: (value) => output.push(value) }).parseAsync([
+        'node',
+        'openrepurpose',
+        'transcript',
+        'export',
+        'transcript-cli',
+        '--format',
+        'srt',
+      ]);
+      expect(output.join('')).toBe('1\n00:00:00,000 --> 00:00:00,750\nCLI caption\n');
     } finally {
       fixture.dispose();
     }

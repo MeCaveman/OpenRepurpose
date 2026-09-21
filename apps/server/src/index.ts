@@ -17,6 +17,7 @@ import {
   SourceWorkflowCoordinator,
   DerivativeAwareMediaRepository,
   TransformService,
+  TranscriptService,
   WorkflowTransformService,
   WorkflowService,
   type JobHandler,
@@ -35,6 +36,7 @@ import {
   SqliteSourcePollingRepository,
   SqliteSourceWorkflowExecutionRepository,
   SqliteTransformDerivativeRepository,
+  SqliteTranscriptRepository,
   SqliteScheduleRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
@@ -80,6 +82,7 @@ export async function startServer(): Promise<void> {
     WHISPER_CPP_MODEL_CATALOG,
     config.paths.transcriptionModelDirectory,
   );
+  const transcriptService = new TranscriptService(new SqliteTranscriptRepository(database));
   const jobRepository = new SqliteJobRepository(database);
   const secretStore = new EncryptedFileSecretStore(
     config.paths.secretVaultPath,
@@ -262,6 +265,7 @@ export async function startServer(): Promise<void> {
     ...(sourceCoordinator === undefined ? {} : { sourceWorkflowCoordinator: sourceCoordinator }),
     tiktokOAuthService,
     transformService,
+    transcriptService,
     metaOAuthService,
     youtubeOAuthService,
     ...(mediaImportService === undefined ? {} : { mediaImportService }),

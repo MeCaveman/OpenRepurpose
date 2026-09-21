@@ -223,6 +223,158 @@ test('model manager requires explicit downloads and stays usable across audited 
   await expect(baseRow.getByRole('button', { name: 'Download model' })).toBeVisible();
 });
 
+test('transcript editor saves cues and preserves the audited workbench boundaries', async ({
+  page,
+}) => {
+  await serveProductionAssets(page);
+  let revision = 1;
+  let cueText = 'Opening caption';
+  await page.route('http://openrepurpose.test/api/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === '/api/session') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ csrfToken: 'csrf' }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/media') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          media: [
+            {
+              id: 'media-1',
+              metadata: { durationSeconds: 7, height: 1080, width: 1920 },
+              path: 'C:\\clips\\episode one.mp4',
+              state: 'available',
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/accounts') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ accounts: [] }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/media/media-1/transcripts') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          transcripts: [
+            {
+              cues: [{ startMs: 0, endMs: 1_250, text: cueText }],
+              hasUserEdits: revision > 1,
+              id: 'transcript-1',
+              language: 'en',
+              model: { id: 'base', version: 'v1' },
+              providerId: 'whisper-cpp',
+              revision,
+              updatedAt: new Date(0).toISOString(),
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/transcripts/transcript-1' && request.method() === 'PUT') {
+      const body = request.postDataJSON() as {
+        readonly cues: readonly { readonly text: string }[];
+        readonly expectedRevision: number;
+      };
+      expect(body.expectedRevision).toBe(revision);
+      cueText = body.cues[0]!.text;
+      revision += 1;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          transcript: {
+            cues: [{ startMs: 0, endMs: 1_250, text: cueText }],
+            hasUserEdits: true,
+            id: 'transcript-1',
+            language: 'en',
+            model: { id: 'base', version: 'v1' },
+            providerId: 'whisper-cpp',
+            revision,
+            updatedAt: new Date(1).toISOString(),
+          },
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/transcripts/transcript-1/export') {
+      await route.fulfill({
+        contentType: 'text/vtt; charset=utf-8',
+        headers: { 'Content-Disposition': 'attachment; filename="transcript.vtt"' },
+        body: `WEBVTT\n\n00:00:00.000 --> 00:00:01.250\n${cueText}\n`,
+      });
+      return;
+    }
+    await route.fulfill({ contentType: 'application/json', body: '{}', status: 404 });
+  });
+
+  await page.goto('/media');
+  await page.getByRole('button', { name: 'Transcript' }).click();
+  await expect(page.getByRole('heading', { name: 'Edit episode one.mp4' })).toBeVisible();
+  await expect(page.getByLabel('Start')).toHaveValue('00:00:00.000');
+  await expect(page.getByLabel('End')).toHaveValue('00:00:01.250');
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 412, height: 915 },
+    { width: 768, height: 1024 },
+    { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+    { width: 2560, height: 1440 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.getByRole('heading', { name: 'Edit episode one.mp4' })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    if (viewport.width === 1366)
+      await expect(page.getByRole('heading', { name: 'Media ledger' })).not.toBeVisible();
+    if (viewport.width >= 1440)
+      await expect(page.getByRole('heading', { name: 'Media ledger' })).toBeVisible();
+    if (viewport.width <= 412) {
+      const saveHeight = await page
+        .getByRole('button', { name: 'Save transcript' })
+        .evaluate((element) => element.getBoundingClientRect().height);
+      expect(saveHeight).toBeGreaterThanOrEqual(44);
+    }
+    if (process.env.CAPTURE_TRANSCRIPT_EDITOR === '1' && viewport.width === 390)
+      await page.screenshot({
+        path: 'test-results/transcript-editor-mobile.png',
+        fullPage: true,
+      });
+    if (process.env.CAPTURE_TRANSCRIPT_EDITOR === '1' && viewport.width === 1440)
+      await page.screenshot({
+        path: 'test-results/transcript-editor-desktop.png',
+        fullPage: true,
+      });
+  }
+
+  await page.getByLabel('End').fill('00:00:00.000');
+  await page.getByRole('button', { name: 'Save transcript' }).click();
+  await expect(page.getByText('End time must be later than start time.')).toBeVisible();
+  await page.getByLabel('End').fill('00:00:01.250');
+  await page.getByLabel('Caption text').fill('Edited caption أهلاً');
+  await page.getByRole('button', { name: 'Save transcript' }).click();
+  await expect(page.getByText('Your cue text and timestamps are persisted locally.')).toBeVisible();
+  expect(cueText).toBe('Edited caption أهلاً');
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export VTT' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('transcript-1.vtt');
+});
+
 test('unknown routes provide a direct workbench recovery path', async ({ page }) => {
   await serveProductionAssets(page);
   await page.goto('/not-a-current-view');

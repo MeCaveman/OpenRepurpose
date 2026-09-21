@@ -25,6 +25,7 @@ function renderMediaPage(overrides: Partial<MediaPageProps> = {}): string {
     notice: undefined,
     onAccountIdChange: () => undefined,
     onBeginPublish: () => undefined,
+    onBeginTranscript: () => undefined,
     onCancelPublish: () => undefined,
     onCaptionChange: () => undefined,
     onDescriptionChange: () => undefined,
@@ -36,6 +37,11 @@ function renderMediaPage(overrides: Partial<MediaPageProps> = {}): string {
     onPrivacyChange: () => undefined,
     onPublish: () => undefined,
     onRetry: () => undefined,
+    onTranscriptClose: () => undefined,
+    onTranscriptDirtyChange: () => undefined,
+    onTranscriptExport: () => undefined,
+    onTranscriptRetry: () => undefined,
+    onTranscriptSave: () => undefined,
     onTitleChange: () => undefined,
     publish: {
       accountId: '',
@@ -51,6 +57,7 @@ function renderMediaPage(overrides: Partial<MediaPageProps> = {}): string {
       privacyOptions: [],
       title: '',
     },
+    transcript: undefined,
     ...overrides,
   };
 
@@ -69,6 +76,7 @@ describe('web media page', () => {
     expect(markup).toContain('Available');
     expect(markup).toContain('Publish to YouTube');
     expect(markup).toContain('Publish to TikTok');
+    expect(markup).toContain('Transcript');
   });
 
   it('renders explicit loading, error, and empty states', () => {
@@ -166,6 +174,37 @@ describe('web media page', () => {
     expect(markup).toContain('Disable comments');
     expect(markup).toContain('Disable duet');
     expect(markup).toContain('Disable stitch');
+  });
+
+  it('renders an editable transcript workbench with deterministic export actions', () => {
+    const markup = renderMediaPage({
+      transcript: {
+        assetPath: 'C:\\clips\\episode one.mp4',
+        isLoading: false,
+        isSaving: false,
+        mediaId: 'media-1',
+        transcript: {
+          cues: [{ startMs: 0, endMs: 1_250, text: 'Opening caption' }],
+          hasUserEdits: false,
+          id: 'transcript-1',
+          language: 'en',
+          model: { id: 'base', version: 'v1' },
+          providerId: 'whisper-cpp',
+          revision: 1,
+          updatedAt: new Date(0).toISOString(),
+        },
+      },
+    });
+
+    expect(markup).toContain('Edit episode one.mp4');
+    expect(markup).toContain('Cue 1');
+    expect(markup).toContain('00:00:00.000');
+    expect(markup).toContain('00:00:01.250');
+    expect(markup).toContain('Opening caption');
+    expect(markup).toContain('Save transcript');
+    expect(markup).toContain('Export SRT');
+    expect(markup).toContain('Export VTT');
+    expect(markup).toContain('min-[90rem]:grid-cols');
   });
 
   it('uses OpenRepurpose tokens instead of feature colors', () => {

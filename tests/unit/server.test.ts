@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '@openrepurpose/server';
+import { createTranscriptionCacheIdentity, TranscriptService } from '@openrepurpose/core';
+import { SqliteMediaRepository, SqliteTranscriptRepository } from '@openrepurpose/db';
+import { createTemporaryDatabase } from '@openrepurpose/testkit';
 import type { ApplicationConfig } from '@openrepurpose/shared';
 import type {
   TranscriptionModelManager,
@@ -252,5 +255,90 @@ describe('Fastify local security boundary', () => {
     });
     expect(deleted.statusCode).toBe(200);
     expect(calls).toEqual(['list', 'download:fixture', 'delete:fixture']);
+  });
+
+  it('lists, edits, and exports persisted transcripts through the shared service', async () => {
+    const fixture = createTemporaryDatabase();
+    try {
+      new SqliteMediaRepository(fixture.database).create({
+        id: 'media-transcript-api',
+        path: '/media/clip.mp4',
+        fingerprint: 'sha256:media-api',
+        sizeBytes: 100,
+        modifiedAt: new Date(0),
+        state: 'available',
+        createdAt: new Date(0),
+        metadata: { hasAudio: true },
+      });
+      const repository = new SqliteTranscriptRepository(fixture.database);
+      repository.reserve({
+        id: 'transcript-api',
+        identity: createTranscriptionCacheIdentity({
+          model: { id: 'base', version: 'v1' },
+          providerId: 'whisper-cpp',
+          sourceAudioFingerprint: 'sha256:audio-api',
+        }),
+        now: new Date(1),
+        source: { kind: 'media', mediaId: 'media-transcript-api' },
+      });
+      repository.replaceGeneratedCues(
+        'transcript-api',
+        [{ startMs: 0, endMs: 1_000, text: 'Original' }],
+        new Date(2),
+      );
+      server = buildServer({
+        config,
+        sessionKey: Buffer.alloc(32, 7),
+        staticRoot: false,
+        transcriptService: new TranscriptService(repository, () => new Date(3)),
+      });
+
+      const listed = await server.inject({
+        method: 'GET',
+        url: '/api/media/media-transcript-api/transcripts',
+        headers: allowedHost,
+      });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json()).toMatchObject({
+        transcripts: [{ id: 'transcript-api', revision: 1, cues: [{ text: 'Original' }] }],
+      });
+
+      const session = await server.inject({
+        method: 'GET',
+        url: '/api/session',
+        headers: allowedHost,
+      });
+      const { csrfToken } = session.json<{ csrfToken: string }>();
+      const updated = await server.inject({
+        method: 'PUT',
+        url: '/api/transcripts/transcript-api',
+        headers: {
+          ...allowedHost,
+          origin: config.appUrl.origin,
+          cookie: String(session.headers['set-cookie']),
+          'content-type': 'application/json',
+          'x-csrf-token': csrfToken,
+        },
+        payload: { expectedRevision: 1, cues: [{ startMs: 25, endMs: 1_100, text: 'Edited' }] },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json()).toMatchObject({
+        transcript: { hasUserEdits: true, revision: 2, cues: [{ text: 'Edited' }] },
+      });
+
+      const exported = await server.inject({
+        method: 'GET',
+        url: '/api/transcripts/transcript-api/export?format=vtt',
+        headers: allowedHost,
+      });
+      expect(exported.statusCode).toBe(200);
+      expect(exported.headers['content-type']).toContain('text/vtt');
+      expect(exported.headers['content-disposition']).toBe('attachment; filename="transcript.vtt"');
+      expect(exported.body).toBe('WEBVTT\n\n00:00:00.025 --> 00:00:01.100\nEdited\n');
+    } finally {
+      await server?.close();
+      server = undefined;
+      fixture.dispose();
+    }
   });
 });

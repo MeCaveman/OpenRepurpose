@@ -7,6 +7,7 @@ import {
   ScheduleService,
   SourceService,
   TransformService,
+  TranscriptService,
   WorkflowService,
 } from '@openrepurpose/core';
 import type {
@@ -25,6 +26,7 @@ import {
   SqliteScheduleRepository,
   SqliteSourcePollingRepository,
   SqliteTransformDerivativeRepository,
+  SqliteTranscriptRepository,
   SqliteWorkflowRepository,
 } from '@openrepurpose/db';
 import {
@@ -131,6 +133,16 @@ function derivativeContext(environment: Environment) {
   return {
     database,
     derivatives: new SqliteTransformDerivativeRepository(database),
+  };
+}
+
+function transcriptContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  return {
+    database,
+    service: new TranscriptService(new SqliteTranscriptRepository(database)),
   };
 }
 
@@ -447,6 +459,44 @@ export function createCli(options: CreateCliOptions = {}): Command {
       const manager = options.modelManager ?? createModelManager(environment);
       const model = await manager.delete(id);
       write(commandOptions.json ? `${JSON.stringify(model)}\n` : `${model.id}\t${model.status}\n`);
+    });
+
+  const transcript = program.command('transcript').description('Inspect and export transcripts');
+  transcript
+    .command('show <id>')
+    .option('--json', 'write JSON')
+    .action((id: string, commandOptions: { json?: boolean }) => {
+      const context = transcriptContext(environment);
+      try {
+        const result = context.service.show(id);
+        if (result === undefined) throw new Error(`Transcript not found: ${id}`);
+        write(
+          commandOptions.json
+            ? `${JSON.stringify(result)}\n`
+            : [
+                `${result.id}\t${result.language ?? 'auto'}\t${result.providerId}/${result.model.id}`,
+                ...result.cues.map(
+                  (cue, index) =>
+                    `${index + 1}\t${cue.startMs}-${cue.endMs}\t${cue.text.replace(/\r?\n/g, ' ')}`,
+                ),
+              ].join('\n') + '\n',
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+  transcript
+    .command('export <id>')
+    .requiredOption('--format <format>', 'srt or vtt')
+    .action((id: string, commandOptions: { format: string }) => {
+      if (commandOptions.format !== 'srt' && commandOptions.format !== 'vtt')
+        throw new Error('Subtitle format must be srt or vtt.');
+      const context = transcriptContext(environment);
+      try {
+        write(context.service.export(id, commandOptions.format).content);
+      } finally {
+        context.database.close();
+      }
     });
 
   const media = program.command('media').description('Manage local media');

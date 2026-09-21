@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 const identifier = z.string().trim().min(1).max(200);
-const milliseconds = z.number().int().nonnegative();
+const milliseconds = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const cueText = z
+  .string()
+  .trim()
+  .min(1)
+  .max(20_000)
+  .refine((value) => !value.includes('\u0000'), 'Cue text cannot contain a null character.');
 
 export const transcriptionWordSchema = z
   .object({ endMs: milliseconds, startMs: milliseconds, text: z.string().min(1) })
@@ -16,7 +22,7 @@ export const transcriptCueSchema = z
   .object({
     endMs: milliseconds,
     startMs: milliseconds,
-    text: z.string().trim().min(1).max(20_000),
+    text: cueText,
     words: z.array(transcriptionWordSchema).max(10_000).optional(),
   })
   .strict()
@@ -33,6 +39,45 @@ export const transcriptCueSchema = z
 
 export type TranscriptionWord = z.output<typeof transcriptionWordSchema>;
 export type TranscriptCue = z.output<typeof transcriptCueSchema>;
+
+export const transcriptCueListSchema = z
+  .array(transcriptCueSchema)
+  .min(1, 'A transcript must contain at least one cue.')
+  .max(100_000)
+  .superRefine((cues, context) => {
+    for (let index = 1; index < cues.length; index += 1) {
+      if (cues[index]!.startMs < cues[index - 1]!.startMs) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Cue start times must be in chronological order.',
+          path: [index, 'startMs'],
+        });
+      }
+    }
+  });
+
+export const transcriptEditRequestSchema = z
+  .object({
+    cues: transcriptCueListSchema,
+    expectedRevision: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type TranscriptEditRequest = z.output<typeof transcriptEditRequestSchema>;
+export type SubtitleFormat = 'srt' | 'vtt';
+
+export type TranscriptServiceErrorCode =
+  'TRANSCRIPT_INVALID' | 'TRANSCRIPT_NOT_FOUND' | 'TRANSCRIPT_REVISION_CONFLICT';
+
+export class TranscriptServiceError extends Error {
+  public constructor(
+    public readonly code: TranscriptServiceErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'TranscriptServiceError';
+  }
+}
 
 export interface TranscriptionModel {
   readonly id: string;
@@ -218,7 +263,112 @@ export interface ReserveTranscriptResult {
 export interface TranscriptRepository {
   findByCacheKey(cacheKey: string): Transcript | undefined;
   findById(id: string): Transcript | undefined;
+  listByMediaId(mediaId: string): readonly Transcript[];
   replaceGeneratedCues(id: string, cues: readonly TranscriptCue[], now: Date): Transcript;
+  replaceUserEditedCues(
+    id: string,
+    expectedRevision: number,
+    cues: readonly TranscriptCue[],
+    now: Date,
+  ): Transcript | undefined;
   reserve(input: ReserveTranscriptInput): ReserveTranscriptResult;
   updateCue(id: string, position: number, cue: TranscriptCue, now: Date): Transcript;
+}
+
+function normalizedCueText(value: string): string {
+  return value.replace(/\r\n?/g, '\n');
+}
+
+function subtitleTimestamp(millisecondsValue: number, separator: ',' | '.'): string {
+  const hours = Math.floor(millisecondsValue / 3_600_000);
+  const minutes = Math.floor((millisecondsValue % 3_600_000) / 60_000);
+  const seconds = Math.floor((millisecondsValue % 60_000) / 1_000);
+  const millisecondsPart = millisecondsValue % 1_000;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}${separator}${String(millisecondsPart).padStart(3, '0')}`;
+}
+
+/** Deterministic UTF-8 subtitle serialization with LF line endings. */
+export function exportSubtitle(
+  cuesInput: readonly TranscriptCue[],
+  format: SubtitleFormat,
+): string {
+  if (format !== 'srt' && format !== 'vtt')
+    throw new TranscriptServiceError('TRANSCRIPT_INVALID', 'Subtitle format must be srt or vtt.');
+  const parsed = transcriptCueListSchema.safeParse(cuesInput);
+  if (!parsed.success)
+    throw new TranscriptServiceError(
+      'TRANSCRIPT_INVALID',
+      parsed.error.issues[0]?.message ?? 'The transcript contains invalid cues.',
+    );
+  const cues = parsed.data;
+  const blocks = cues.map((cue, index) => {
+    const separator = format === 'srt' ? ',' : '.';
+    const timing = `${subtitleTimestamp(cue.startMs, separator)} --> ${subtitleTimestamp(cue.endMs, separator)}`;
+    const text = normalizedCueText(cue.text);
+    return format === 'srt' ? `${index + 1}\n${timing}\n${text}` : `${timing}\n${text}`;
+  });
+  return `${format === 'vtt' ? 'WEBVTT\n\n' : ''}${blocks.join('\n\n')}\n`;
+}
+
+/** Shared application service used by HTTP, CLI, and future workflow entry points. */
+export class TranscriptService {
+  public constructor(
+    private readonly repository: TranscriptRepository,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  public listForMedia(mediaId: string): readonly Transcript[] {
+    return this.repository.listByMediaId(this.parseId(mediaId));
+  }
+
+  public show(id: string): Transcript | undefined {
+    return this.repository.findById(this.parseId(id));
+  }
+
+  public save(id: string, edit: TranscriptEditRequest): Transcript {
+    const transcriptId = this.parseId(id);
+    const parsed = transcriptEditRequestSchema.safeParse(edit);
+    if (!parsed.success)
+      throw new TranscriptServiceError(
+        'TRANSCRIPT_INVALID',
+        parsed.error.issues[0]?.message ?? 'The transcript edit is invalid.',
+      );
+    const existing = this.repository.findById(transcriptId);
+    if (existing === undefined)
+      throw new TranscriptServiceError('TRANSCRIPT_NOT_FOUND', 'Transcript not found.');
+    if (existing.revision !== parsed.data.expectedRevision)
+      throw new TranscriptServiceError(
+        'TRANSCRIPT_REVISION_CONFLICT',
+        'The transcript changed after this editor was opened. Reload it before saving.',
+      );
+    const updated = this.repository.replaceUserEditedCues(
+      transcriptId,
+      parsed.data.expectedRevision,
+      parsed.data.cues,
+      this.now(),
+    );
+    if (updated === undefined)
+      throw new TranscriptServiceError(
+        'TRANSCRIPT_REVISION_CONFLICT',
+        'The transcript changed after this editor was opened. Reload it before saving.',
+      );
+    return updated;
+  }
+
+  public export(
+    id: string,
+    format: SubtitleFormat,
+  ): { readonly content: string; readonly format: SubtitleFormat } {
+    const transcript = this.show(id);
+    if (transcript === undefined)
+      throw new TranscriptServiceError('TRANSCRIPT_NOT_FOUND', 'Transcript not found.');
+    return { content: exportSubtitle(transcript.cues, format), format };
+  }
+
+  private parseId(value: string): string {
+    const parsed = identifier.safeParse(value);
+    if (!parsed.success)
+      throw new TranscriptServiceError('TRANSCRIPT_INVALID', 'Transcript identifier is invalid.');
+    return parsed.data;
+  }
 }

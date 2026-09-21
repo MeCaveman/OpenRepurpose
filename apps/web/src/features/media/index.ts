@@ -7,3 +7,11 @@ export type {
   MediaPublishDraft,
   MediaPublishPlatform,
 } from './media-page';
+export { TranscriptEditor } from './transcript-editor';
+export type {
+  SubtitleFormat,
+  TranscriptCueView,
+  TranscriptEditorProps,
+  TranscriptView,
+  TranscriptWorkspaceView,
+} from './transcript-editor';

@@ -22,7 +22,9 @@ import type {
   SourceService,
   SourceWorkflowCoordinator,
   TransformService,
+  TranscriptService,
 } from '@openrepurpose/core';
+import { TranscriptServiceError, transcriptEditRequestSchema } from '@openrepurpose/core';
 
 declare module '@fastify/secure-session' {
   interface SessionData {
@@ -54,6 +56,7 @@ export interface BuildServerOptions {
   readonly staticRoot?: false | string;
   readonly tiktokOAuthService?: TikTokOAuthService;
   readonly transformService?: TransformService;
+  readonly transcriptService?: TranscriptService;
   readonly youtubeOAuthService?: YouTubeOAuthService;
   readonly workflowService?: WorkflowService;
 }
@@ -280,6 +283,76 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
           return { model: await models.delete(request.params.id) };
         } catch (error) {
           return modelFailure(error, reply);
+        }
+      },
+    );
+  }
+
+  if (options.transcriptService !== undefined) {
+    const transcripts = options.transcriptService;
+    const transcriptFailure = (error: unknown, reply: FastifyReply) => {
+      if (!(error instanceof TranscriptServiceError)) throw error;
+      const statusCode =
+        error.code === 'TRANSCRIPT_NOT_FOUND'
+          ? 404
+          : error.code === 'TRANSCRIPT_REVISION_CONFLICT'
+            ? 409
+            : 422;
+      return reply.code(statusCode).send({ error: error.message, code: error.code });
+    };
+
+    server.get<{ Params: { id: string } }>('/api/media/:id/transcripts', async (request, reply) => {
+      try {
+        return { transcripts: transcripts.listForMedia(request.params.id) };
+      } catch (error) {
+        return transcriptFailure(error, reply);
+      }
+    });
+    server.get<{ Params: { id: string } }>('/api/transcripts/:id', async (request, reply) => {
+      try {
+        const transcript = transcripts.show(request.params.id);
+        return transcript === undefined
+          ? reply.code(404).send({ error: 'Transcript not found.', code: 'TRANSCRIPT_NOT_FOUND' })
+          : { transcript };
+      } catch (error) {
+        return transcriptFailure(error, reply);
+      }
+    });
+    server.put<{ Params: { id: string }; Body: unknown }>(
+      '/api/transcripts/:id',
+      async (request, reply) => {
+        const edit = transcriptEditRequestSchema.safeParse(request.body);
+        if (!edit.success)
+          return reply.code(400).send({
+            error: edit.error.issues[0]?.message ?? 'The transcript edit is invalid.',
+            code: 'TRANSCRIPT_INVALID',
+          });
+        try {
+          return { transcript: transcripts.save(request.params.id, edit.data) };
+        } catch (error) {
+          return transcriptFailure(error, reply);
+        }
+      },
+    );
+    server.get<{ Params: { id: string }; Querystring: { format?: string } }>(
+      '/api/transcripts/:id/export',
+      async (request, reply) => {
+        const format = request.query.format;
+        if (format !== 'srt' && format !== 'vtt')
+          return reply.code(400).send({
+            error: 'Subtitle format must be srt or vtt.',
+            code: 'TRANSCRIPT_EXPORT_FORMAT_INVALID',
+          });
+        try {
+          const exported = transcripts.export(request.params.id, format);
+          return reply
+            .type(
+              format === 'srt' ? 'application/x-subrip; charset=utf-8' : 'text/vtt; charset=utf-8',
+            )
+            .header('Content-Disposition', `attachment; filename="transcript.${format}"`)
+            .send(exported.content);
+        } catch (error) {
+          return transcriptFailure(error, reply);
         }
       },
     );

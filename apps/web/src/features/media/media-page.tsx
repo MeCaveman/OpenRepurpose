@@ -19,6 +19,12 @@ import {
   Textarea,
 } from '../../components/ui';
 import type { BadgeVariant } from '../../components/ui';
+import { TranscriptEditor } from './transcript-editor';
+import type {
+  SubtitleFormat,
+  TranscriptCueView,
+  TranscriptWorkspaceView,
+} from './transcript-editor';
 
 export type MediaPublishPlatform = 'tiktok' | 'youtube';
 
@@ -68,6 +74,7 @@ export interface MediaPageProps {
     platform: MediaPublishPlatform,
     trigger?: HTMLButtonElement,
   ) => void;
+  readonly onBeginTranscript: (asset: MediaAssetView, trigger?: HTMLButtonElement) => void;
   readonly onCancelPublish: () => void;
   readonly onCaptionChange: (value: string) => void;
   readonly onDescriptionChange: (value: string) => void;
@@ -79,8 +86,14 @@ export interface MediaPageProps {
   readonly onPrivacyChange: (value: string) => void;
   readonly onPublish: FormEventHandler<HTMLFormElement>;
   readonly onRetry: () => void;
+  readonly onTranscriptClose: () => void;
+  readonly onTranscriptDirtyChange: (isDirty: boolean) => void;
+  readonly onTranscriptExport: (format: SubtitleFormat) => void;
+  readonly onTranscriptRetry: () => void;
+  readonly onTranscriptSave: (cues: readonly TranscriptCueView[], expectedRevision: number) => void;
   readonly onTitleChange: (value: string) => void;
   readonly publish: MediaPublishDraft;
+  readonly transcript: TranscriptWorkspaceView | undefined;
 }
 
 function filename(path: string): string {
@@ -151,11 +164,13 @@ function PublishActions({
   asset,
   hasTikTokAccount,
   onBeginPublish,
+  onBeginTranscript,
 }: {
   readonly activeAction: string | undefined;
   readonly asset: MediaAssetView;
   readonly hasTikTokAccount: boolean;
   readonly onBeginPublish: MediaPageProps['onBeginPublish'];
+  readonly onBeginTranscript: MediaPageProps['onBeginTranscript'];
 }) {
   const unavailable = asset.state !== 'available';
   const disabled = activeAction !== undefined || unavailable;
@@ -184,6 +199,17 @@ function PublishActions({
             Publish to {getPlatformMetadata(platform).label}
           </Button>
         ))}
+        <Button
+          aria-describedby={unavailable ? unavailableReasonId : undefined}
+          data-media-id={asset.id}
+          data-media-transcript-trigger
+          disabled={disabled}
+          onClick={(event) => onBeginTranscript(asset, event.currentTarget)}
+          size="sm"
+          variant="secondary"
+        >
+          Transcript
+        </Button>
       </div>
       {unavailableReason !== undefined && (
         <p
@@ -202,8 +228,10 @@ function MediaTable({
   hasTikTokAccount,
   media,
   onBeginPublish,
+  onBeginTranscript,
 }: Pick<MediaPageProps, 'activeAction' | 'media' | 'onBeginPublish'> & {
   readonly hasTikTokAccount: boolean;
+  readonly onBeginTranscript: MediaPageProps['onBeginTranscript'];
 }) {
   return (
     <Panel className="hidden overflow-x-auto md:block" padding="none">
@@ -245,6 +273,7 @@ function MediaTable({
                   asset={asset}
                   hasTikTokAccount={hasTikTokAccount}
                   onBeginPublish={onBeginPublish}
+                  onBeginTranscript={onBeginTranscript}
                 />
               </td>
             </tr>
@@ -260,8 +289,10 @@ function MediaList({
   hasTikTokAccount,
   media,
   onBeginPublish,
+  onBeginTranscript,
 }: Pick<MediaPageProps, 'activeAction' | 'media' | 'onBeginPublish'> & {
   readonly hasTikTokAccount: boolean;
+  readonly onBeginTranscript: MediaPageProps['onBeginTranscript'];
 }) {
   return (
     <div className="grid gap-[var(--or-space-3)] md:hidden">
@@ -280,6 +311,7 @@ function MediaList({
               asset={asset}
               hasTikTokAccount={hasTikTokAccount}
               onBeginPublish={onBeginPublish}
+              onBeginTranscript={onBeginTranscript}
             />
           </div>
         </Panel>
@@ -312,9 +344,16 @@ function PublishPanel({
   | 'media'
   | 'notice'
   | 'onBeginPublish'
+  | 'onBeginTranscript'
   | 'onImport'
   | 'onImportPathChange'
   | 'onRetry'
+  | 'onTranscriptClose'
+  | 'onTranscriptDirtyChange'
+  | 'onTranscriptExport'
+  | 'onTranscriptRetry'
+  | 'onTranscriptSave'
+  | 'transcript'
 > & {
   readonly asset: MediaAssetView | undefined;
   readonly headingRef: RefObject<HTMLHeadingElement | null>;
@@ -494,6 +533,7 @@ export function MediaPage({
   notice,
   onAccountIdChange,
   onBeginPublish,
+  onBeginTranscript,
   onCancelPublish,
   onCaptionChange,
   onDescriptionChange,
@@ -505,12 +545,20 @@ export function MediaPage({
   onPrivacyChange,
   onPublish,
   onRetry,
+  onTranscriptClose,
+  onTranscriptDirtyChange,
+  onTranscriptExport,
+  onTranscriptRetry,
+  onTranscriptSave,
   onTitleChange,
   publish,
+  transcript,
 }: MediaPageProps) {
   const hasTikTokAccount = accounts.some((account) => account.provider === 'tiktok');
   const selectedAsset = media.find((asset) => asset.id === publish.mediaId);
   const publishOpen = publish.mediaId !== undefined;
+  const transcriptOpen = transcript !== undefined;
+  const secondaryTaskOpen = publishOpen || transcriptOpen;
   const publishHeadingRef = useRef<HTMLHeadingElement>(null);
   const publishTriggerRef = useRef<{
     readonly assetId: string;
@@ -518,6 +566,11 @@ export function MediaPage({
     readonly platform: MediaPublishPlatform;
   } | null>(null);
   const publishWasOpenRef = useRef(false);
+  const transcriptTriggerRef = useRef<{
+    readonly assetId: string;
+    readonly element: HTMLButtonElement;
+  } | null>(null);
+  const transcriptWasOpenRef = useRef(false);
 
   useEffect(() => {
     if (publishOpen) {
@@ -540,6 +593,24 @@ export function MediaPage({
     publishWasOpenRef.current = publishOpen;
   }, [publish.mediaId, publish.platform, publishOpen]);
 
+  useEffect(() => {
+    if (!transcriptOpen && transcriptWasOpenRef.current) {
+      requestAnimationFrame(() => {
+        const previousTrigger = transcriptTriggerRef.current;
+        if (previousTrigger === null) return;
+        const visibleTrigger = [
+          ...document.querySelectorAll<HTMLButtonElement>('[data-media-transcript-trigger]'),
+        ].find(
+          (candidate) =>
+            candidate.dataset.mediaId === previousTrigger.assetId &&
+            candidate.getClientRects().length > 0,
+        );
+        (visibleTrigger ?? previousTrigger.element).focus();
+      });
+    }
+    transcriptWasOpenRef.current = transcriptOpen;
+  }, [transcriptOpen]);
+
   const beginPublish: MediaPageProps['onBeginPublish'] = (asset, platform, trigger) => {
     publishTriggerRef.current =
       trigger === undefined ? null : { assetId: asset.id, element: trigger, platform };
@@ -548,6 +619,12 @@ export function MediaPage({
 
   const closePublish = () => {
     onCancelPublish();
+  };
+
+  const beginTranscript: MediaPageProps['onBeginTranscript'] = (asset, trigger) => {
+    transcriptTriggerRef.current =
+      trigger === undefined ? null : { assetId: asset.id, element: trigger };
+    onBeginTranscript(asset, trigger);
   };
 
   return (
@@ -573,10 +650,10 @@ export function MediaPage({
       )}
 
       <div
-        className={`grid items-start gap-[var(--or-space-5)] ${publishOpen ? 'min-[90rem]:grid-cols-[minmax(0,1fr)_var(--or-shell-inspector-width)]' : ''}`}
+        className={`grid items-start gap-[var(--or-space-5)] ${secondaryTaskOpen ? 'min-[90rem]:grid-cols-[minmax(0,1fr)_var(--or-shell-inspector-width)]' : ''}`}
       >
         <div
-          className={`min-w-0 ${publishOpen ? 'hidden min-[90rem]:grid min-[90rem]:gap-[var(--or-space-6)]' : 'grid gap-[var(--or-space-6)]'}`}
+          className={`min-w-0 ${secondaryTaskOpen ? 'hidden min-[90rem]:grid min-[90rem]:gap-[var(--or-space-6)]' : 'grid gap-[var(--or-space-6)]'}`}
         >
           <Panel aria-labelledby="local-import-heading" surface="inset">
             <h2
@@ -661,12 +738,14 @@ export function MediaPage({
                   hasTikTokAccount={hasTikTokAccount}
                   media={media}
                   onBeginPublish={beginPublish}
+                  onBeginTranscript={beginTranscript}
                 />
                 <MediaList
                   activeAction={activeAction}
                   hasTikTokAccount={hasTikTokAccount}
                   media={media}
                   onBeginPublish={beginPublish}
+                  onBeginTranscript={beginTranscript}
                 />
               </>
             )}
@@ -690,6 +769,16 @@ export function MediaPage({
             onPublish={onPublish}
             onTitleChange={onTitleChange}
             publish={publish}
+          />
+        )}
+        {transcript !== undefined && (
+          <TranscriptEditor
+            onClose={onTranscriptClose}
+            onDirtyChange={onTranscriptDirtyChange}
+            onExport={onTranscriptExport}
+            onRetry={onTranscriptRetry}
+            onSave={onTranscriptSave}
+            workspace={transcript}
           />
         )}
       </div>

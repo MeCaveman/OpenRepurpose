@@ -7,6 +7,7 @@ import { drizzle } from 'drizzle-orm/node-sqlite';
 import {
   compileWorkflowExecutionPlan,
   serializeNormalizedTransformPlan,
+  transcriptCueListSchema,
   transcriptCueSchema,
   transformPlanSchema,
 } from '@openrepurpose/core';
@@ -673,8 +674,15 @@ export class SqliteTranscriptRepository implements TranscriptRepository {
     return row === undefined ? undefined : this.withCues(row);
   }
 
+  public listByMediaId(mediaId: string): readonly Transcript[] {
+    const rows = this.database.client
+      .prepare('SELECT * FROM transcripts WHERE media_id = ? ORDER BY updated_at DESC, id ASC')
+      .all(mediaId) as unknown as RawTranscriptRow[];
+    return rows.map((row) => this.withCues(row));
+  }
+
   public replaceGeneratedCues(id: string, cues: readonly TranscriptCue[], now: Date): Transcript {
-    const normalized = cues.map((cue) => transcriptCueSchema.parse(cue));
+    const normalized = transcriptCueListSchema.parse(cues);
     this.database.client.exec('BEGIN IMMEDIATE;');
     try {
       const update = this.database.client
@@ -686,6 +694,50 @@ export class SqliteTranscriptRepository implements TranscriptRepository {
         .run(now.getTime(), now.getTime(), id);
       if (Number(update.changes) !== 1)
         throw new Error('Generated cues cannot overwrite a user-edited or missing transcript.');
+      this.database.client.prepare('DELETE FROM transcript_cues WHERE transcript_id = ?').run(id);
+      const insert = this.database.client.prepare(
+        `INSERT INTO transcript_cues (
+          transcript_id, position, start_millis, end_millis, text, words_json
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      normalized.forEach((cue, position) =>
+        insert.run(
+          id,
+          position,
+          cue.startMs,
+          cue.endMs,
+          cue.text,
+          cue.words === undefined ? null : JSON.stringify(cue.words),
+        ),
+      );
+      this.database.client.exec('COMMIT;');
+    } catch (error) {
+      this.database.client.exec('ROLLBACK;');
+      throw error;
+    }
+    return this.required(id);
+  }
+
+  public replaceUserEditedCues(
+    id: string,
+    expectedRevision: number,
+    cues: readonly TranscriptCue[],
+    now: Date,
+  ): Transcript | undefined {
+    const normalized = transcriptCueListSchema.parse(cues);
+    this.database.client.exec('BEGIN IMMEDIATE;');
+    try {
+      const update = this.database.client
+        .prepare(
+          `UPDATE transcripts
+           SET has_user_edits = 1, revision = revision + 1, updated_at = ?
+           WHERE id = ? AND revision = ?`,
+        )
+        .run(now.getTime(), id, expectedRevision);
+      if (Number(update.changes) !== 1) {
+        this.database.client.exec('ROLLBACK;');
+        return undefined;
+      }
       this.database.client.prepare('DELETE FROM transcript_cues WHERE transcript_id = ?').run(id);
       const insert = this.database.client.prepare(
         `INSERT INTO transcript_cues (
