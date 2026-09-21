@@ -5,6 +5,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { LogController } from 'fastify';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ApplicationConfig } from '@openrepurpose/shared';
+import { ModelManagerError, type TranscriptionModelManager } from '@openrepurpose/media';
 import { isPlatformError, REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
 import type { YouTubeOAuthService } from '@openrepurpose/youtube';
 import type { TikTokOAuthService } from '@openrepurpose/tiktok';
@@ -46,6 +47,7 @@ export interface BuildServerOptions {
   readonly mediaImportService?: MediaImportService;
   readonly mediaRepository?: MediaRepository;
   readonly metaOAuthService?: MetaOAuthService;
+  readonly modelManager?: TranscriptionModelManager;
   readonly sessionKey: Buffer;
   readonly sourceService?: SourceService;
   readonly sourceWorkflowCoordinator?: Pick<SourceWorkflowCoordinator, 'retryFailedDestinations'>;
@@ -233,6 +235,55 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     },
     async () => ({ service: 'openrepurpose', status: 'ok', version: '0.1.0' }),
   );
+
+  if (options.modelManager !== undefined) {
+    const models = options.modelManager;
+    const modelFailure = (error: unknown, reply: FastifyReply) => {
+      if (!(error instanceof ModelManagerError)) throw error;
+      const statusCode =
+        error.code === 'MODEL_NOT_FOUND' || error.code === 'MODEL_NOT_INSTALLED'
+          ? 404
+          : error.code === 'MODEL_ALREADY_DOWNLOADING'
+            ? 409
+            : error.code === 'MODEL_DISK_SPACE_LOW' ||
+                error.code === 'MODEL_CHECKSUM_MISMATCH' ||
+                error.code === 'MODEL_STORAGE_UNSAFE'
+              ? 422
+              : 502;
+      return reply.code(statusCode).send({ error: error.message, code: error.code });
+    };
+    server.get('/api/transcription/models', async () => models.list());
+    server.post<{ Params: { id: string } }>(
+      '/api/transcription/models/:id/download',
+      async (request, reply) => {
+        try {
+          return reply.code(202).send({ model: await models.startDownload(request.params.id) });
+        } catch (error) {
+          return modelFailure(error, reply);
+        }
+      },
+    );
+    server.post<{ Params: { id: string } }>(
+      '/api/transcription/models/:id/verify',
+      async (request, reply) => {
+        try {
+          return { model: await models.verify(request.params.id) };
+        } catch (error) {
+          return modelFailure(error, reply);
+        }
+      },
+    );
+    server.delete<{ Params: { id: string } }>(
+      '/api/transcription/models/:id',
+      async (request, reply) => {
+        try {
+          return { model: await models.delete(request.params.id) };
+        } catch (error) {
+          return modelFailure(error, reply);
+        }
+      },
+    );
+  }
 
   if (
     options.youtubeOAuthService !== undefined ||

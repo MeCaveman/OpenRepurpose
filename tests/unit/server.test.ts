@@ -3,6 +3,11 @@ import { resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '@openrepurpose/server';
 import type { ApplicationConfig } from '@openrepurpose/shared';
+import type {
+  TranscriptionModelManager,
+  WhisperModelManagerView,
+  WhisperModelView,
+} from '@openrepurpose/media';
 
 const config: ApplicationConfig = {
   appUrl: new URL('http://127.0.0.1:3000'),
@@ -25,6 +30,7 @@ const config: ApplicationConfig = {
     secretVaultPath: resolve('test-results/data/secrets.vault.json'),
     sessionKeyPath: resolve('test-results/config/session.key'),
     temporaryDirectory: resolve('test-results/temp'),
+    transcriptionModelDirectory: resolve('test-results/data/models/whisper-cpp'),
   },
   port: 3000,
 };
@@ -162,5 +168,89 @@ describe('Fastify local security boundary', () => {
     expect(output).not.toContain('client-secret-value');
     expect(output).not.toContain('raw-error-secret');
     expect(output).toContain('[REDACTED]');
+  });
+
+  it('lists models without downloading and protects explicit model mutations with CSRF', async () => {
+    const calls: string[] = [];
+    const model = (status: WhisperModelView['status']): WhisperModelView => ({
+      checksum: { algorithm: 'sha1', value: 'a'.repeat(40) },
+      description: 'Fixture model',
+      diskRequiredBytes: 2,
+      diskWarning: false,
+      displayName: 'Fixture model',
+      id: 'fixture',
+      integrity: status === 'installed' ? 'verified' : 'not-installed',
+      languageSupport: 'multilingual',
+      performance: 'fast',
+      sizeBytes: 1,
+      sourceUrl: 'https://models.example.test/fixture.bin',
+      status,
+      version: 'sha1-aaaaaaaaaaaa',
+    });
+    const snapshot: WhisperModelManagerView = {
+      availableBytes: 100,
+      models: [model('not-installed')],
+      reserveBytes: 1,
+      storagePath: resolve('test-results/models'),
+    };
+    const manager: TranscriptionModelManager = {
+      list: async () => {
+        calls.push('list');
+        return snapshot;
+      },
+      startDownload: async (id) => {
+        calls.push(`download:${id}`);
+        return model('downloading');
+      },
+      download: async () => model('installed'),
+      verify: async (id) => {
+        calls.push(`verify:${id}`);
+        return model('installed');
+      },
+      delete: async (id) => {
+        calls.push(`delete:${id}`);
+        return model('not-installed');
+      },
+    };
+    server = buildServer({
+      config,
+      modelManager: manager,
+      sessionKey: Buffer.alloc(32, 7),
+      staticRoot: false,
+    });
+
+    const listed = await server.inject({
+      method: 'GET',
+      url: '/api/transcription/models',
+      headers: allowedHost,
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(calls).toEqual(['list']);
+
+    const session = await server.inject({
+      method: 'GET',
+      url: '/api/session',
+      headers: allowedHost,
+    });
+    const { csrfToken } = session.json<{ csrfToken: string }>();
+    const mutationHeaders = {
+      ...allowedHost,
+      origin: config.appUrl.origin,
+      cookie: String(session.headers['set-cookie']),
+      'x-csrf-token': csrfToken,
+    };
+    const started = await server.inject({
+      method: 'POST',
+      url: '/api/transcription/models/fixture/download',
+      headers: mutationHeaders,
+    });
+    expect(started.statusCode).toBe(202);
+    const deleted = await server.inject({
+      method: 'DELETE',
+      url: '/api/transcription/models/fixture',
+      headers: mutationHeaders,
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(calls).toEqual(['list', 'download:fixture', 'delete:fixture']);
   });
 });

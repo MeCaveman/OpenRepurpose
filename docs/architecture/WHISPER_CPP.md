@@ -42,7 +42,22 @@ source and copied executable before activation and applies the executable bit on
 Archive acquisition is deliberately outside the process bridge. A packaging layer or a future
 user-initiated installer can download and verify an official release, extract it, then hand the
 prepared directory to the store. This keeps installation Python-free and prevents silent downloads.
-Model downloading, checksums, deletion, and disk-space UX belong to v0.7 Packet 3.
+## Model management
+
+`LocalWhisperModelManager` owns the curated official catalog, local storage, disk-space preflight,
+streaming transfer, checksum verification, and deletion. Both the API and CLI compose this same
+service. No catalog request starts a download; only an explicit `download` mutation does.
+
+The default model root remains `<data>/models/whisper-cpp` and can be replaced with the absolute
+`WHISPER_MODEL_DIR` configuration value for a separate disk or mounted container volume. Downloads
+write a uniquely named partial file below the selected model/version directory, stream bytes without
+buffering the model in memory, verify the published SHA-1 checksum from whisper.cpp's official model
+table, and only then rename to `ggml-model.bin`. Failed or mismatched partial files are removed.
+
+The manager keeps a 256 MiB free-space reserve during preflight, reports progress through a
+transport-neutral view, and records a small verification manifest beside the model. Existing files
+without a matching manifest remain visible as unverified and can be checked explicitly. Deletion is
+limited to the catalog-controlled model/version directory and refuses symbolic-link targets.
 
 The upstream build and binary conventions are documented in the
 [whisper.cpp quick start](https://github.com/ggml-org/whisper.cpp#quick-start). Its converted model

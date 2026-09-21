@@ -46,7 +46,7 @@ Desktop.ini
 .pnpm-store/
 
 # Local AI/model/media artifacts
-models/
+/models/
 /media/
 derivatives/
 transcripts/

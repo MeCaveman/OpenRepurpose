@@ -100,6 +100,10 @@ LAN/VPS exposure remains disabled until its roadmap packet adds authentication a
 The first server start generates a persistent encrypted-session key at `SESSION_KEY_PATH` (or the
 host-native configuration directory by default).
 
+Local transcription models are never downloaded automatically. The web model manager or
+`openrepurpose models download <id>` starts an explicit verified transfer. Set the absolute
+`WHISPER_MODEL_DIR` path before startup to place model files on another local disk or mounted volume.
+
 YouTube BYO OAuth credential setup is documented in
 [`docs/platform-setup/youtube.md`](docs/platform-setup/youtube.md). Client credentials and refresh
 tokens are encrypted in the local secret vault configured by `SECRET_VAULT_PATH` and

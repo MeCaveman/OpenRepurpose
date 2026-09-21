@@ -34,6 +34,7 @@ function config(bindHost: string, appUrl = 'http://127.0.0.1:3000'): Application
       secretVaultPath: resolve('test-results/data/secrets.vault.json'),
       sessionKeyPath: keyPath,
       temporaryDirectory: resolve('test-results/temp'),
+      transcriptionModelDirectory: resolve('test-results/data/models/whisper-cpp'),
     },
     port: 3000,
   };

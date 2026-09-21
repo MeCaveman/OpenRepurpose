@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { WHISPER_CPP_MODEL_CATALOG } from '../../packages/media/src/index';
 
 const webRoot = resolve('apps/web/dist');
 
@@ -67,18 +68,22 @@ test('settings maps existing configuration without inventing controls', async ({
   await expect(page.getByRole('heading', { name: 'Configuration ownership' })).toBeVisible();
 
   const areas = page.getByRole('list', { name: 'Configuration areas' });
-  await expect(areas.getByRole('link')).toHaveCount(3);
+  await expect(areas.getByRole('link')).toHaveCount(4);
   await expect(areas.getByRole('link', { name: /Review setup/ })).toHaveAttribute('href', '/setup');
   await expect(areas.getByRole('link', { name: /Manage accounts/ })).toHaveAttribute(
     'href',
     '/accounts',
+  );
+  await expect(areas.getByRole('link', { name: /Manage models/ })).toHaveAttribute(
+    'href',
+    '/models',
   );
   await expect(areas.getByRole('link', { name: /Manage workflows/ })).toHaveAttribute(
     'href',
     '/workflows',
   );
   await expect(page.getByRole('heading', { name: 'Installation policy' })).toBeVisible();
-  await expect(page.getByText('No global preference controls in v0.5')).toBeVisible();
+  await expect(page.getByText('No in-app global preference controls')).toBeVisible();
   await expect(
     page.locator('main input, main select, main textarea, main [role="switch"]'),
   ).toHaveCount(0);
@@ -88,6 +93,134 @@ test('settings maps existing configuration without inventing controls', async ({
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
+});
+
+test('model manager requires explicit downloads and stays usable across audited viewports', async ({
+  page,
+}) => {
+  await serveProductionAssets(page);
+  await page.route('http://openrepurpose.test/api/session', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
+  );
+  let status: 'not-installed' | 'downloading' | 'installed' = 'not-installed';
+  let readsAfterStart = 0;
+  await page.route('http://openrepurpose.test/api/transcription/models**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname.endsWith('/download')) {
+      status = 'downloading';
+      readsAfterStart = 0;
+      await route.fulfill({
+        contentType: 'application/json',
+        status: 202,
+        body: JSON.stringify({ model: { id: 'base', status } }),
+      });
+      return;
+    }
+    if (request.method() === 'POST' && pathname.endsWith('/verify')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ model: { id: 'base', status: 'installed', integrity: 'verified' } }),
+      });
+      return;
+    }
+    if (request.method() === 'DELETE') {
+      status = 'not-installed';
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ model: { id: 'base', status } }),
+      });
+      return;
+    }
+    if (status === 'downloading') {
+      readsAfterStart += 1;
+      if (readsAfterStart > 1) status = 'installed';
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        availableBytes: 8 * 1024 ** 3,
+        reserveBytes: 256 * 1024 ** 2,
+        storagePath: 'C:\\OpenRepurpose\\models\\whisper-cpp',
+        models: WHISPER_CPP_MODEL_CATALOG.map((entry) => ({
+          ...entry,
+          diskRequiredBytes: entry.sizeBytes + 256 * 1024 ** 2,
+          diskWarning: false,
+          status: entry.id === 'base' ? status : 'not-installed',
+          integrity: entry.id === 'base' && status === 'installed' ? 'verified' : 'not-installed',
+          ...(entry.id === 'base' && status === 'downloading'
+            ? {
+                progress: {
+                  downloadedBytes: 71 * 1024 ** 2,
+                  totalBytes: 142 * 1024 ** 2,
+                  percent: 50,
+                },
+              }
+            : {}),
+        })),
+      }),
+    });
+  });
+
+  await page.goto('/models');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Transcription models');
+  await expect(page.getByText('downloads nothing until you choose a model')).toBeVisible();
+  const baseRow = page.getByRole('listitem').filter({ hasText: 'Base · Multilingual' });
+  await expect(baseRow.getByRole('button', { name: 'Download model' })).toBeVisible();
+  await baseRow.getByRole('button', { name: 'Download model' }).click();
+  await expect(page.getByText('Download started.')).toBeVisible();
+  await expect(page.getByText('Installed · verified')).toBeVisible();
+  await baseRow.getByRole('button', { name: 'Verify checksum' }).click();
+  await expect(page.getByText('matches its published checksum')).toBeVisible();
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 412, height: 915 },
+    { width: 768, height: 1024 },
+    { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+    { width: 2560, height: 1440 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(page.getByRole('heading', { name: 'Whisper model catalog' })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    if (viewport.width <= 412) {
+      const activeModelNavigation = page
+        .locator('[data-navigation-mode="compact"]')
+        .getByRole('link', { name: 'Models' });
+      await expect(activeModelNavigation).toHaveAttribute('aria-current', 'page');
+      await expect
+        .poll(() =>
+          activeModelNavigation.evaluate((element) => {
+            const item = element.getBoundingClientRect();
+            const navigation = element.parentElement?.getBoundingClientRect();
+            return (
+              navigation !== undefined &&
+              item.left >= navigation.left &&
+              item.right <= navigation.right
+            );
+          }),
+        )
+        .toBe(true);
+    }
+    if (process.env.CAPTURE_MODEL_MANAGER === '1' && viewport.width === 390)
+      await page.screenshot({
+        path: 'test-results/model-manager-mobile.png',
+        fullPage: true,
+      });
+    if (process.env.CAPTURE_MODEL_MANAGER === '1' && viewport.width === 1440)
+      await page.screenshot({
+        path: 'test-results/model-manager-desktop.png',
+        fullPage: true,
+      });
+  }
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await baseRow.getByRole('button', { name: 'Delete model' }).click();
+  await expect(baseRow.getByRole('button', { name: 'Download model' })).toBeVisible();
 });
 
 test('unknown routes provide a direct workbench recovery path', async ({ page }) => {

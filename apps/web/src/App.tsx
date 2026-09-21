@@ -13,6 +13,7 @@ import {
 import { AccountsRoute } from './features/accounts';
 import { JobsRoute } from './features/jobs';
 import { MediaRoute } from './features/media';
+import { ModelsRoute } from './features/models';
 import { NotFoundPage } from './features/not-found';
 import { OverviewPage } from './features/overview';
 import { SettingsPage } from './features/settings';
@@ -96,6 +97,15 @@ const routes: readonly RouteDefinition[] = [
     title: 'Jobs',
     description: 'Inspect persisted work, attempts, and actionable execution errors.',
     render: () => <JobsRoute />,
+  },
+  {
+    href: '/models',
+    icon: 'models',
+    label: 'Models',
+    eyebrow: 'Local AI',
+    title: 'Transcription models',
+    description: 'Choose, verify, and remove local whisper.cpp model files.',
+    render: () => <ModelsRoute />,
   },
   {
     href: '/settings',

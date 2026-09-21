@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { SettingsPage } from '../../apps/web/src/features/settings/index';
 
 describe('web settings page', () => {
-  it('maps configuration to the existing setup, account, and workflow surfaces', () => {
+  it('maps configuration to setup, account, model, and workflow surfaces', () => {
     const markup = renderToStaticMarkup(
       createElement(SettingsPage, { onNavigate: () => undefined }),
     );
@@ -14,6 +14,7 @@ describe('web settings page', () => {
     expect(markup).toContain('aria-label="Configuration areas"');
     expect(markup).toContain('href="/setup"');
     expect(markup).toContain('href="/accounts"');
+    expect(markup).toContain('href="/models"');
     expect(markup).toContain('href="/workflows"');
   });
 
@@ -34,7 +35,7 @@ describe('web settings page', () => {
       createElement(SettingsPage, { onNavigate: () => undefined }),
     );
 
-    expect(markup).toContain('No global preference controls in v0.5');
+    expect(markup).toContain('No in-app global preference controls');
     expect(markup).not.toMatch(/<(?:button|input|select|textarea)\b/);
     expect(markup).not.toMatch(/(?:bg|border|text)-(?:slate|cyan|fuchsia|rose|emerald)-/);
   });

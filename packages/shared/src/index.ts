@@ -14,6 +14,7 @@ export interface ApplicationPaths {
   readonly secretVaultPath: string;
   readonly sessionKeyPath: string;
   readonly temporaryDirectory: string;
+  readonly transcriptionModelDirectory: string;
 }
 
 export interface ApplicationConfig {
@@ -97,6 +98,8 @@ export function resolveApplicationPaths(
       environment.SESSION_KEY_PATH ?? runtime.path.resolve(configDirectory, 'session.key'),
     temporaryDirectory:
       environment.APP_TEMP_DIR ?? runtime.path.resolve(runtime.temporaryDirectory, 'OpenRepurpose'),
+    transcriptionModelDirectory:
+      environment.WHISPER_MODEL_DIR ?? runtime.path.resolve(dataDirectory, 'models', 'whisper-cpp'),
   };
 }
 
@@ -115,6 +118,7 @@ export function loadApplicationConfig(
       SECRET_KEY_PATH: absolutePath.optional(),
       SECRET_VAULT_PATH: absolutePath.optional(),
       SESSION_KEY_PATH: absolutePath.optional(),
+      WHISPER_MODEL_DIR: absolutePath.optional(),
       BIND_HOST: z.string().trim().min(1).default('127.0.0.1'),
       PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
       APP_URL: httpUrlSchema().default('http://127.0.0.1:3000'),
@@ -147,6 +151,7 @@ export function loadApplicationConfig(
     secretVaultPath: parsed.SECRET_VAULT_PATH ?? defaults.secretVaultPath,
     sessionKeyPath: parsed.SESSION_KEY_PATH ?? defaults.sessionKeyPath,
     temporaryDirectory: parsed.APP_TEMP_DIR ?? defaults.temporaryDirectory,
+    transcriptionModelDirectory: parsed.WHISPER_MODEL_DIR ?? defaults.transcriptionModelDirectory,
   };
   const sensitivePaths = [paths.secretKeyPath, paths.secretVaultPath, paths.sessionKeyPath].map(
     (path) => {

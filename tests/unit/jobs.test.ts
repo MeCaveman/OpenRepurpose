@@ -44,6 +44,7 @@ function testConfig(directory: string): ApplicationConfig {
       secretVaultPath: join(directory, 'secrets.vault.json'),
       sessionKeyPath: join(directory, 'config', 'session.key'),
       temporaryDirectory: join(directory, 'temp'),
+      transcriptionModelDirectory: join(directory, 'models', 'whisper-cpp'),
     },
     port: 3000,
   };

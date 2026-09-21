@@ -1,7 +1,15 @@
-import type { MouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent } from 'react';
 
 export type ResourceNavigationIcon =
-  'accounts' | 'dashboard' | 'jobs' | 'media' | 'settings' | 'setup' | 'sources' | 'workflows';
+  | 'accounts'
+  | 'dashboard'
+  | 'jobs'
+  | 'media'
+  | 'models'
+  | 'settings'
+  | 'setup'
+  | 'sources'
+  | 'workflows';
 
 export interface ResourceNavigationItem {
   readonly href: string;
@@ -82,6 +90,13 @@ function NavigationIcon({ icon }: { readonly icon: ResourceNavigationIcon }) {
           <circle cx="10" cy="19" r="1.5" />
         </svg>
       );
+    case 'models':
+      return (
+        <svg {...commonProps}>
+          <path d="M5 4h14v4H5zM5 10h14v4H5zM5 16h14v4H5z" />
+          <path d="M8 6h.01M8 12h.01M8 18h.01M16 6h1M16 12h1M16 18h1" />
+        </svg>
+      );
     case 'settings':
       return (
         <svg {...commonProps}>
@@ -99,6 +114,37 @@ export function ResourceNavigation({
   onNavigate,
 }: ResourceNavigationProps) {
   const isRail = mode === 'rail';
+  const navigationRef = useRef<HTMLElement>(null);
+  const currentItemRef = useRef<HTMLAnchorElement>(null);
+
+  useEffect(() => {
+    if (isRail) return;
+
+    let animationFrame: number | undefined;
+    const revealCurrentItem = () => {
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        const navigation = navigationRef.current;
+        const currentItem = currentItemRef.current;
+        if (navigation === null || currentItem === null || navigation.clientWidth === 0) return;
+
+        const itemStart = currentItem.offsetLeft;
+        const itemEnd = itemStart + currentItem.offsetWidth;
+        const visibleStart = navigation.scrollLeft;
+        const visibleEnd = visibleStart + navigation.clientWidth;
+        if (itemStart < visibleStart) navigation.scrollTo({ left: itemStart });
+        else if (itemEnd > visibleEnd)
+          navigation.scrollTo({ left: itemEnd - navigation.clientWidth });
+      });
+    };
+
+    revealCurrentItem();
+    window.addEventListener('resize', revealCurrentItem);
+    return () => {
+      window.removeEventListener('resize', revealCurrentItem);
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+    };
+  }, [currentPath, isRail]);
 
   return (
     <nav
@@ -109,6 +155,7 @@ export function ResourceNavigation({
           : 'flex gap-[var(--or-space-1)] overflow-x-auto border-b border-[var(--or-border-subtle)] bg-[var(--or-bg-shell)] px-[var(--or-space-3)] py-[var(--or-space-2)] lg:hidden'
       }
       data-navigation-mode={mode}
+      ref={navigationRef}
     >
       {items.map(({ href, icon, label }) => {
         const isCurrent = currentPath === href;
@@ -131,6 +178,7 @@ export function ResourceNavigation({
             href={href}
             key={href}
             onClick={(event) => onNavigate(event, href)}
+            ref={isCurrent ? currentItemRef : undefined}
             title={isRail ? label : undefined}
           >
             {isCurrent && (

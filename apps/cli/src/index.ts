@@ -31,7 +31,10 @@ import {
   discoverMediaExecutables,
   FfprobeMediaProbe,
   LocalMediaFileInspector,
+  LocalWhisperModelManager,
   readFfmpegVersion,
+  WHISPER_CPP_MODEL_CATALOG,
+  type TranscriptionModelManager,
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import type { Environment } from '@openrepurpose/shared';
@@ -67,6 +70,10 @@ export function runDoctor(environment: Environment = process.env): readonly Doct
       writableDirectoryCheck('data directory', config.paths.dataDirectory),
       writableDirectoryCheck('temporary directory', config.paths.temporaryDirectory),
       writableDirectoryCheck('database directory', dirname(config.paths.databasePath)),
+      writableDirectoryCheck(
+        'transcription model directory',
+        config.paths.transcriptionModelDirectory,
+      ),
     ];
     try {
       const database = openDatabase(config.paths.databasePath);
@@ -271,9 +278,27 @@ export interface CreateCliOptions {
   readonly environment?: Environment;
   /** Test/runtime composition hook; normal CLI use discovers local ffprobe. */
   readonly mediaProbe?: MediaProbe;
+  /** Test/runtime composition hook; normal CLI use manages models below the configured local root. */
+  readonly modelManager?: TranscriptionModelManager;
   /** Test/runtime composition hook; normal CLI use discovers the concrete local FFmpeg build. */
   readonly transformTool?: TransformToolIdentity;
   readonly write?: (value: string) => void;
+}
+
+function createModelManager(environment: Environment): TranscriptionModelManager {
+  const config = loadApplicationConfig(environment);
+  return new LocalWhisperModelManager(
+    WHISPER_CPP_MODEL_CATALOG,
+    config.paths.transcriptionModelDirectory,
+  );
+}
+
+function formatModelBytes(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return 'unknown';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  const unitIndex = value === 0 ? 0 : Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
+  const amount = value / 1024 ** unitIndex;
+  return `${amount.toFixed(unitIndex === 0 ? 0 : amount >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
 type TransformPresetName = 'landscape' | 'square' | 'vertical';
@@ -351,6 +376,78 @@ export function createCli(options: CreateCliOptions = {}): Command {
       write(`${check.ok ? 'OK' : 'FAIL'} ${check.name}: ${check.detail}\n`);
     if (checks.some((check) => !check.ok)) process.exitCode = 1;
   });
+
+  const models = program
+    .command('models')
+    .description('Manage local whisper.cpp transcription models');
+  models
+    .command('list')
+    .option('--json', 'write JSON')
+    .action(async (commandOptions: { json?: boolean }) => {
+      const manager = options.modelManager ?? createModelManager(environment);
+      const snapshot = await manager.list();
+      write(
+        commandOptions.json
+          ? `${JSON.stringify(snapshot)}\n`
+          : [
+              `storage\t${snapshot.storagePath}`,
+              `free\t${formatModelBytes(snapshot.availableBytes)}`,
+              ...snapshot.models.map(
+                (model) =>
+                  `${model.id}\t${model.status}\t${model.languageSupport}\t${formatModelBytes(model.sizeBytes)}\t${model.performance}\t${model.integrity}`,
+              ),
+            ].join('\n') + '\n',
+      );
+    });
+  models
+    .command('download <id>')
+    .description('Download and verify one model after an explicit user request')
+    .option('--json', 'write JSON')
+    .action(async (id: string, commandOptions: { json?: boolean }) => {
+      const manager = options.modelManager ?? createModelManager(environment);
+      let lastReported = -1;
+      const model = await manager.download(id, {
+        ...(commandOptions.json
+          ? {}
+          : {
+              onProgress: (progress) => {
+                const percent = Math.floor(progress.percent ?? 0);
+                if (percent < 100 && percent - lastReported < 5) return;
+                lastReported = percent;
+                write(
+                  `${id}\tdownloading\t${percent}%\t${formatModelBytes(progress.downloadedBytes)}/${formatModelBytes(progress.totalBytes)}\n`,
+                );
+              },
+            }),
+      });
+      write(
+        commandOptions.json
+          ? `${JSON.stringify(model)}\n`
+          : `${model.id}\t${model.status}\t${model.integrity}\n`,
+      );
+    });
+  models
+    .command('verify <id>')
+    .description('Recompute and compare the published model checksum')
+    .option('--json', 'write JSON')
+    .action(async (id: string, commandOptions: { json?: boolean }) => {
+      const manager = options.modelManager ?? createModelManager(environment);
+      const model = await manager.verify(id);
+      write(
+        commandOptions.json
+          ? `${JSON.stringify(model)}\n`
+          : `${model.id}\t${model.status}\t${model.integrity}\n`,
+      );
+    });
+  models
+    .command('delete <id>')
+    .description('Delete one locally installed transcription model')
+    .option('--json', 'write JSON')
+    .action(async (id: string, commandOptions: { json?: boolean }) => {
+      const manager = options.modelManager ?? createModelManager(environment);
+      const model = await manager.delete(id);
+      write(commandOptions.json ? `${JSON.stringify(model)}\n` : `${model.id}\t${model.status}\n`);
+    });
 
   const media = program.command('media').description('Manage local media');
   media.command('import <path>').action(async (path: string) => {

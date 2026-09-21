@@ -24,6 +24,14 @@ const configurationAreas = [
     scope: 'Accounts',
   },
   {
+    action: 'Manage models',
+    description:
+      'Choose which local transcription models occupy disk space and inspect their integrity.',
+    href: '/models',
+    label: 'Local transcription models',
+    scope: 'Models',
+  },
+  {
     action: 'Manage workflows',
     description:
       'Keep source, processing, and destination behavior attached to each durable automation route.',
@@ -52,7 +60,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
         </h2>
         <p className="mt-[var(--or-space-2)] max-w-[var(--or-empty-state-max-width)] text-pretty text-[var(--or-text-secondary)] [font-size:var(--or-type-body-size)] [line-height:var(--or-type-body-line)]">
           OpenRepurpose keeps settings beside the resource they control. Use this ledger to reach
-          the existing v0.5 configuration surfaces.
+          the configuration surfaces owned by each local resource.
         </p>
 
         <Panel className="mt-[var(--or-space-5)]" padding="none" surface="surface">
@@ -123,9 +131,9 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
         </Panel>
       </section>
 
-      <Alert title="No global preference controls in v0.5" variant="neutral">
-        This route does not expose standalone application preferences yet. Current configuration
-        remains with setup, accounts, and workflows so the UI does not imply unsupported behavior.
+      <Alert title="No in-app global preference controls" variant="neutral">
+        Current configuration remains with setup, accounts, models, and workflows. Host-level paths
+        continue to use typed environment configuration.
       </Alert>
     </div>
   );

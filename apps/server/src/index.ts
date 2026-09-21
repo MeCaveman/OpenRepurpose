@@ -44,11 +44,13 @@ import {
   FfprobeMediaProbe,
   LocalManagedTemporaryStorage,
   LocalMediaFileInspector,
+  LocalWhisperModelManager,
   LocalTransformOutputStorage,
   FfmpegProcessRunner,
   TransformJobHandler,
   TransformRecoveryService,
   WatchedFolderRunner,
+  WHISPER_CPP_MODEL_CATALOG,
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import { createRedactingLogger, redactLogText, SourceRegistry } from '@openrepurpose/platform-sdk';
@@ -74,6 +76,10 @@ export async function startServer(): Promise<void> {
   runMigrations(database);
   const executables = await discoverMediaExecutables();
   const mediaRepository = new SqliteMediaRepository(database);
+  const modelManager = new LocalWhisperModelManager(
+    WHISPER_CPP_MODEL_CATALOG,
+    config.paths.transcriptionModelDirectory,
+  );
   const jobRepository = new SqliteJobRepository(database);
   const secretStore = new EncryptedFileSecretStore(
     config.paths.secretVaultPath,
@@ -250,6 +256,7 @@ export async function startServer(): Promise<void> {
     logger: true,
     sessionKey: loadOrCreateSessionKey(config.paths.sessionKeyPath),
     mediaRepository,
+    modelManager,
     workflowService,
     sourceService: new SourceService(sourceRepository),
     ...(sourceCoordinator === undefined ? {} : { sourceWorkflowCoordinator: sourceCoordinator }),
