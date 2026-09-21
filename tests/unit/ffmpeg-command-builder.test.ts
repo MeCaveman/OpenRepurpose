@@ -103,6 +103,18 @@ describe('FFmpeg transform command builder', () => {
     expect(command.args).not.toContain('0:a:0?');
   });
 
+  it('maps an unfiltered input video as a stream specifier rather than a filter label', () => {
+    const command = compileTransformCommand({
+      inputPath: 'variable-rate.mp4',
+      outputPath: 'capped.mp4',
+      sourceHasAudio: false,
+      plan: { user: { steps: [], output: { maxFrameRate: 30 } } },
+    });
+    const mapIndex = command.args.indexOf('-map');
+    expect(command.args[mapIndex + 1]).toBe('0:v:0');
+    expect(command.args).not.toContain('[0:v:0]');
+  });
+
   it('keeps preserve, normalize, gain, and remove-audio semantics deterministic', () => {
     const normalized = compileTransformCommand({
       inputPath: 'source.mp4',

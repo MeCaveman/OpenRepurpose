@@ -207,7 +207,9 @@ export function compileTransformCommand(input: CompileTransformCommandInput): Ff
   if (hasAudio && audioFilters.length > 0) graph.push(`[0:a:0]${audioFilters.join(',')}[aout]`);
 
   if (graph.length > 0) args.push('-filter_complex', graph.join(';'));
-  args.push('-map', videoLabel);
+  // A direct input stream uses FFmpeg's stream specifier syntax. Square brackets are reserved
+  // for filter-graph output labels and make a pass-through/VFR recipe fail before encoding.
+  args.push('-map', videoLabel === '[0:v:0]' ? '0:v:0' : videoLabel);
   if (hasAudio && recipe.output.audioCodec === 'aac')
     args.push('-map', audioFilters.length > 0 ? '[aout]' : '0:a:0?');
   appendOutputArguments(args, recipe.output, hasAudio && recipe.output.audioCodec === 'aac');
