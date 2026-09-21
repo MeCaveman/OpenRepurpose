@@ -22,6 +22,7 @@ import {
 } from '@openrepurpose/core';
 
 export * from './transform-runner.js';
+export * from './whisper-cpp.js';
 
 export interface FfmpegCommand {
   /** Executable path/name to pass directly to child_process.spawn. */

@@ -68,7 +68,13 @@ export interface TranscriptionResult {
   readonly detectedLanguage?: string;
 }
 
+/** Transport-neutral inference progress suitable for jobs, CLI output, and the web UI. */
+export interface TranscriptionProgress {
+  readonly percent: number;
+}
+
 export interface TranscriptionProviderContext {
+  readonly onProgress?: (progress: TranscriptionProgress) => void;
   readonly signal: AbortSignal;
 }
 
