@@ -49,6 +49,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0019_transform_progress' },
       { id: '0020_job_dependencies' },
       { id: '0021_transcripts' },
+      { id: '0022_transform_caption_sidecars' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -134,7 +135,7 @@ describe('SQLite migrations and repositories', () => {
 
     expect(
       fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toHaveLength(21);
+    ).toHaveLength(22);
     expect(
       fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
     ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);

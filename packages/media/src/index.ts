@@ -1,9 +1,18 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, lstat, mkdir, realpath, rename, rm } from 'node:fs/promises';
+import { access, lstat, mkdir, readFile, realpath, rename, rm } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import {
+  delimiter,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolve,
+} from 'node:path';
 import { spawn } from 'node:child_process';
 import type {
   LocalFileInspector,
@@ -12,6 +21,10 @@ import type {
   MediaProbe,
   MediaProbeMetadata,
   SourceCursorRepository,
+  WatchedFolderSourceSettings,
+  WatchedMediaMetadata,
+  Workflow,
+  WorkflowSourceStep,
   WorkflowService,
 } from '@openrepurpose/core';
 import type { MediaImportService } from '@openrepurpose/core';
@@ -42,6 +55,8 @@ export interface CompileTransformCommandInput {
   readonly sourceHasAudio?: boolean;
   /** Resolved local paths for typed watermark asset references. */
   readonly watermarkPaths?: Readonly<Record<string, string>>;
+  /** Local, managed SRT paths keyed by the immutable caption step source ID. */
+  readonly captionPaths?: Readonly<Record<string, string>>;
 }
 
 function nonBlankPath(value: string, description: string): string {
@@ -112,6 +127,11 @@ function appendOutputArguments(
   args.push('-movflags', '+faststart');
 }
 
+/** Escapes a filename for FFmpeg filter option syntax, not a shell. */
+export function escapeFfmpegFilterPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/([\\':,[\];])/g, '\\$1');
+}
+
 /**
  * Compiles validated transform intent into a spawn-safe FFmpeg invocation. It performs no I/O,
  * never constructs shell syntax, and intentionally keeps watermark asset lookup at the caller boundary.
@@ -166,6 +186,18 @@ export function compileTransformCommand(input: CompileTransformCommandInput): Ff
           `loudnorm=I=${step.targetLufs}:TP=${step.truePeakDb}:LRA=${step.loudnessRangeLufs}`,
         );
       else if (hasAudio && step.mode === 'gain') audioFilters.push(`volume=${step.gainDb}dB`);
+    } else if (step.type === 'captions') {
+      if (step.mode !== 'burn-in') continue;
+      const subtitlePath = input.captionPaths?.[step.source];
+      if (subtitlePath === undefined)
+        throw new Error(`No managed subtitle path was supplied for transcript "${step.source}".`);
+      const style =
+        step.theme === 'large-centered'
+          ? 'Alignment=5,FontSize=28,Outline=3,Shadow=1'
+          : 'Alignment=2,FontSize=20,Outline=2,Shadow=1,MarginV=28';
+      videoFilters.push(
+        `subtitles=filename='${escapeFfmpegFilterPath(nonBlankPath(subtitlePath, 'Subtitle path'))}':charenc=UTF-8:force_style='${style}'`,
+      );
     } else {
       const assetPath = input.watermarkPaths?.[step.assetId];
       if (assetPath === undefined)
@@ -594,6 +626,83 @@ export interface WatchedFolderRunnerOptions {
   readonly settleMs?: number;
 }
 
+const obsTimestampPattern =
+  /^(?:replay(?: buffer)?[ _-]*)?(\d{4})-(\d{2})-(\d{2})[ _-](\d{2})-(\d{2})-(\d{2})(?:[ _-]+(.+))?$/iu;
+
+function filenameStem(path: string): string {
+  const name = path.replace(/^.*[\\/]/u, '');
+  const suffix = extname(name);
+  return suffix.length === 0 ? name : name.slice(0, -suffix.length);
+}
+
+/** Reads common OBS timestamp filenames without assuming that users keep the default format. */
+export function parseObsFilename(path: string): WatchedMediaMetadata {
+  const stem = filenameStem(path);
+  const match = obsTimestampPattern.exec(stem);
+  if (match === null) return { title: stem };
+  const [, year, month, day, hour, minute, second, suffix] = match;
+  const localTimestamp = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+  return {
+    publishedAt: localTimestamp,
+    title: suffix?.trim() || stem,
+  };
+}
+
+function fileSourceKey(details: Awaited<ReturnType<typeof stat>>): string | undefined {
+  if (Number.isFinite(details.ino) && details.ino > 0) return `file:${details.dev}:${details.ino}`;
+  if (Number.isFinite(details.birthtimeMs) && details.birthtimeMs > 0)
+    return `created:${details.dev}:${details.birthtimeMs}`;
+  return undefined;
+}
+
+function watchedFolderSettings(workflow: Workflow): WatchedFolderSourceSettings | undefined {
+  return workflow.definition.steps.find(
+    (step): step is WorkflowSourceStep =>
+      step.kind === 'source' && step.sourceType === 'watched_folder',
+  )?.watchedFolder;
+}
+
+function sidecarPath(path: string): string {
+  return `${path.slice(0, -extname(path).length)}.json`;
+}
+
+async function watchedMediaMetadata(
+  path: string,
+  settings: WatchedFolderSourceSettings | undefined,
+): Promise<WatchedMediaMetadata | undefined> {
+  if (settings === undefined) return undefined;
+  const filename =
+    settings.filenameMetadata === 'obs' ? parseObsFilename(path) : { title: filenameStem(path) };
+  if (!settings.sidecarMetadata) return filename;
+  try {
+    const candidate = sidecarPath(path);
+    const details = await stat(candidate);
+    if (!details.isFile() || details.size > 65_536) return filename;
+    const parsed = JSON.parse(await readFile(candidate, 'utf8')) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return filename;
+    const values = parsed as Readonly<Record<string, unknown>>;
+    const publishedAt =
+      typeof values.publishedAt === 'string'
+        ? values.publishedAt
+        : typeof values.recordedAt === 'string'
+          ? values.recordedAt
+          : filename.publishedAt;
+    return {
+      ...filename,
+      ...(typeof values.title === 'string' && values.title.trim().length > 0
+        ? { title: values.title.trim() }
+        : {}),
+      ...(typeof values.description === 'string' ? { description: values.description } : {}),
+      ...(typeof values.externalId === 'string' && values.externalId.trim().length > 0
+        ? { externalId: values.externalId.trim() }
+        : {}),
+      ...(publishedAt === undefined ? {} : { publishedAt }),
+    };
+  } catch {
+    return filename;
+  }
+}
+
 /**
  * Uses fs.watch only as an acceleration signal; periodic scans remain authoritative because
  * Windows/Linux watchers can coalesce or miss events. Cursor rows make restarts idempotent.
@@ -630,19 +739,20 @@ export class WatchedFolderRunner {
     if (this.running) return;
     this.running = true;
     try {
-      for (const workflow of this.workflows.list(true))
-        await this.scanWorkflow(workflow.id, workflow.sourceDirectory);
+      for (const workflow of this.workflows.list(true)) await this.scanWorkflow(workflow);
     } finally {
       this.running = false;
     }
   }
-  private async scanWorkflow(workflowId: string, directory: string): Promise<void> {
+  private async scanWorkflow(workflow: Workflow): Promise<void> {
     let files: string[];
     try {
-      files = await this.listFiles(directory);
+      files = await this.listFiles(workflow.sourceDirectory);
     } catch {
       return;
     }
+    const settings = watchedFolderSettings(workflow);
+    const settleMs = settings?.settleMs ?? this.settleMs;
     for (const path of files) {
       let details: Awaited<ReturnType<typeof stat>>;
       let canonical: string;
@@ -652,8 +762,16 @@ export class WatchedFolderRunner {
       } catch {
         continue;
       }
-      const sourceKey = canonical;
-      const cursor = this.cursors.find(workflowId, sourceKey);
+      const sourceKey = fileSourceKey(details) ?? canonical;
+      let cursor = this.cursors.find(workflow.id, sourceKey);
+      if (cursor === undefined && sourceKey !== canonical) {
+        const legacy = this.cursors.find(workflow.id, canonical);
+        if (legacy !== undefined) {
+          cursor = { ...legacy, path: canonical, sourceKey };
+          this.cursors.save(cursor);
+          this.cursors.delete(workflow.id, canonical);
+        }
+      }
       const signatureChanged =
         cursor === undefined ||
         cursor.sizeBytes !== details.size ||
@@ -661,7 +779,7 @@ export class WatchedFolderRunner {
       const now = this.now();
       if (signatureChanged) {
         this.cursors.save({
-          workflowId,
+          workflowId: workflow.id,
           sourceKey,
           path: canonical,
           sizeBytes: details.size,
@@ -671,14 +789,16 @@ export class WatchedFolderRunner {
         });
         continue;
       }
-      if (
-        cursor.state === 'processed' ||
-        now.getTime() - cursor.observedAt.getTime() < this.settleMs
-      )
+      if (cursor === undefined) continue;
+      if (cursor.state === 'processed' || now.getTime() - cursor.observedAt.getTime() < settleMs)
         continue;
       try {
         const result = await this.media.import(canonical);
-        this.workflows.executeWatchedMedia(workflowId, result.asset);
+        this.workflows.executeWatchedMedia(
+          workflow.id,
+          result.asset,
+          await watchedMediaMetadata(canonical, settings),
+        );
         this.cursors.save({
           ...cursor,
           path: canonical,

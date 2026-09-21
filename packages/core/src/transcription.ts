@@ -1,5 +1,13 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import type { CaptionsTransform } from './transform.js';
+import type {
+  JobHandler,
+  JobHandlerContext,
+  JsonValue,
+  MediaAsset,
+  MediaRepository,
+} from './index.js';
 
 const identifier = z.string().trim().min(1).max(200);
 const milliseconds = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -310,6 +318,25 @@ export function exportSubtitle(
   return `${format === 'vtt' ? 'WEBVTT\n\n' : ''}${blocks.join('\n\n')}\n`;
 }
 
+/**
+ * Creates immutable caption-render input at reservation time. Persisting the SRT snapshot means
+ * later transcript edits cannot silently alter a queued derivative.
+ */
+export function createCaptionRenderStep(
+  transcript: Transcript,
+  mode: CaptionsTransform['mode'],
+  theme: CaptionsTransform['theme'] = 'clean-bottom',
+): CaptionsTransform {
+  return {
+    type: 'captions',
+    source: transcript.id,
+    revision: transcript.revision,
+    mode,
+    theme,
+    subtitle: exportSubtitle(transcript.cues, 'srt'),
+  };
+}
+
 /** Shared application service used by HTTP, CLI, and future workflow entry points. */
 export class TranscriptService {
   public constructor(
@@ -370,5 +397,168 @@ export class TranscriptService {
     if (!parsed.success)
       throw new TranscriptServiceError('TRANSCRIPT_INVALID', 'Transcript identifier is invalid.');
     return parsed.data;
+  }
+}
+
+export interface WorkflowTranscriptionStepInput {
+  readonly language?: string;
+  readonly model: TranscriptionModel;
+  readonly options?: Readonly<Record<string, TranscriptionOptionValue>>;
+  readonly providerId: string;
+}
+
+export interface WorkflowTranscriptionJobQueue {
+  create(input: {
+    readonly idempotencyKey: string;
+    readonly input: JsonValue;
+    readonly maxAttempts: number;
+    readonly type: string;
+  }): { readonly created: boolean; readonly job: { readonly id: string } };
+}
+
+export interface WorkflowTranscriptionPreparation {
+  readonly transcript: Transcript;
+  readonly transcriptionJobId?: string;
+}
+
+/**
+ * Reserves transcript cache entries before jobs are enqueued. A completed or user-edited
+ * transcript is always reused; inference never replaces it implicitly.
+ */
+export class WorkflowTranscriptionService {
+  public constructor(
+    private readonly transcripts: TranscriptRepository,
+    private readonly jobs: WorkflowTranscriptionJobQueue,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  public prepare(input: {
+    readonly continuation: JsonValue;
+    readonly media: MediaAsset;
+    readonly step: WorkflowTranscriptionStepInput;
+  }): WorkflowTranscriptionPreparation {
+    if (!input.media.metadata.hasAudio)
+      throw new Error('A workflow transcription step requires source media with audio.');
+    const identity = createTranscriptionCacheIdentity({
+      providerId: input.step.providerId,
+      model: input.step.model,
+      ...(input.step.language === undefined ? {} : { language: input.step.language }),
+      ...(input.step.options === undefined ? {} : { options: input.step.options }),
+      // The imported media fingerprint is the immutable local source-audio identity at this
+      // workflow boundary. Audio extraction can later supply a more specific fingerprint.
+      sourceAudioFingerprint: input.media.fingerprint,
+    });
+    const reserved = this.transcripts.reserve({
+      id: randomUUID(),
+      identity,
+      now: this.now(),
+      source: { kind: 'media', mediaId: input.media.id },
+    });
+    if (
+      reserved.transcript.cues.length > 0 &&
+      (reserved.transcript.generatedAt !== undefined || reserved.transcript.hasUserEdits)
+    )
+      return { transcript: reserved.transcript };
+    const queued = this.jobs.create({
+      type: 'workflow.transcribe',
+      idempotencyKey: `transcribe:${identity.cacheKey}`,
+      maxAttempts: 3,
+      input: {
+        continuation: input.continuation,
+        mediaId: input.media.id,
+        providerId: identity.providerId,
+        transcriptId: reserved.transcript.id,
+        request: {
+          audioPath: input.media.path,
+          language: identity.language ?? null,
+          model: identity.model,
+          options: identity.normalizedOptions,
+        },
+      } as unknown as JsonValue,
+    });
+    return { transcript: reserved.transcript, transcriptionJobId: queued.job.id };
+  }
+}
+
+export interface WorkflowTranscriptionJobHandlerOptions {
+  readonly onCompleted?: (continuation: JsonValue) => Promise<void> | void;
+  readonly now?: () => Date;
+}
+
+/** Durable job handler shared by workflow orchestration and any future explicit transcription UI. */
+export class WorkflowTranscriptionJobHandler implements JobHandler {
+  public readonly type = 'workflow.transcribe';
+
+  public constructor(
+    private readonly media: MediaRepository,
+    private readonly transcripts: TranscriptRepository,
+    private readonly providers: TranscriptionProviderRegistry,
+    private readonly options: WorkflowTranscriptionJobHandlerOptions = {},
+  ) {}
+
+  public async execute(input: JsonValue, context: JobHandlerContext): Promise<void> {
+    const parsed = this.parseInput(input);
+    const media = this.media.findById(parsed.mediaId);
+    if (media === undefined || media.state !== 'available')
+      throw new Error('Workflow media is unavailable.');
+    if (!media.metadata.hasAudio) throw new Error('Workflow media has no audio to transcribe.');
+    const provider = this.providers.require(parsed.providerId);
+    const result = await provider.transcribe(parsed.request, { signal: context.signal });
+    const current = this.transcripts.findById(parsed.transcriptId);
+    if (current === undefined) throw new Error('Workflow transcript reservation is missing.');
+    // A user may finish an edit while inference is running. Preserve it and continue from that
+    // revision instead of treating the generated result as authoritative.
+    if (!current.hasUserEdits)
+      this.transcripts.replaceGeneratedCues(current.id, result.cues, this.now());
+    await this.options.onCompleted?.(parsed.continuation);
+  }
+
+  private now(): Date {
+    return (this.options.now ?? (() => new Date()))();
+  }
+
+  private parseInput(input: JsonValue): {
+    readonly continuation: JsonValue;
+    readonly mediaId: string;
+    readonly providerId: string;
+    readonly request: TranscriptionRequest;
+    readonly transcriptId: string;
+  } {
+    if (input === null || typeof input !== 'object' || Array.isArray(input))
+      throw new Error('Workflow transcription job input is invalid.');
+    const value = input as Readonly<Record<string, JsonValue>>;
+    const request = value.request;
+    if (request === null || typeof request !== 'object' || Array.isArray(request))
+      throw new Error('Workflow transcription request is invalid.');
+    const requestValue = request as Readonly<Record<string, JsonValue>>;
+    const model = requestValue.model;
+    if (model === null || typeof model !== 'object' || Array.isArray(model))
+      throw new Error('Workflow transcription model is invalid.');
+    const modelValue = model as Readonly<Record<string, JsonValue>>;
+    if (
+      typeof value.continuation === 'undefined' ||
+      typeof value.mediaId !== 'string' ||
+      typeof value.providerId !== 'string' ||
+      typeof value.transcriptId !== 'string' ||
+      typeof requestValue.audioPath !== 'string' ||
+      typeof modelValue.id !== 'string' ||
+      typeof modelValue.version !== 'string' ||
+      requestValue.options === null ||
+      typeof requestValue.options !== 'object' ||
+      Array.isArray(requestValue.options)
+    )
+      throw new Error('Workflow transcription job input is invalid.');
+    return {
+      continuation: value.continuation,
+      mediaId: value.mediaId,
+      providerId: value.providerId,
+      transcriptId: value.transcriptId,
+      request: {
+        audioPath: requestValue.audioPath,
+        model: { id: modelValue.id, version: modelValue.version },
+        options: requestValue.options as Readonly<Record<string, TranscriptionOptionValue>>,
+        ...(typeof requestValue.language === 'string' ? { language: requestValue.language } : {}),
+      },
+    };
   }
 }

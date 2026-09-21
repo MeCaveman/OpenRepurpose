@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  createCaptionRenderStep,
   createTranscriptionCacheIdentity,
   exportSubtitle,
   transcriptCueSchema,
@@ -39,6 +40,28 @@ const cue = {
     { startMs: 600, endMs: 1_200, text: 'world' },
   ],
 };
+
+it('snapshots a transcript as SRT for deterministic caption rendering', () => {
+  const step = createCaptionRenderStep(
+    {
+      id: 'transcript-caption',
+      revision: 3,
+      cues: [cue],
+      cacheKey: 'sha256:c',
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      hasUserEdits: true,
+      model: { id: 'base', version: '1' },
+      options: {},
+      providerId: 'local',
+      source: { kind: 'media', mediaId: 'media-1' },
+      sourceAudioFingerprint: 'sha256:audio',
+    },
+    'sidecar',
+  );
+  expect(step).toMatchObject({ source: 'transcript-caption', revision: 3, mode: 'sidecar' });
+  expect(step.subtitle).toContain('00:00:00,000 --> 00:00:01,200');
+});
 
 describe('transcription provider contract', () => {
   it('registers providers without provider-specific core switches', () => {
@@ -110,6 +133,22 @@ describe('transcription provider contract', () => {
         'vtt',
       ),
     ).toThrow('chronological order');
+    expect(() =>
+      exportSubtitle([{ startMs: 500, endMs: 500, text: 'zero duration' }], 'srt'),
+    ).toThrow('cue endMs must be greater than startMs');
+    expect(() =>
+      exportSubtitle(
+        [
+          {
+            startMs: 0,
+            endMs: 1_000,
+            text: 'word outside cue',
+            words: [{ startMs: 0, endMs: 1_001, text: 'outside' }],
+          },
+        ],
+        'vtt',
+      ),
+    ).toThrow('word timestamps must stay within their cue');
   });
 });
 
@@ -127,7 +166,7 @@ describe('transcript persistence', () => {
       ).toEqual({ name: 'transcripts' });
       expect(
         database.client.prepare('SELECT id FROM __openrepurpose_migrations ORDER BY id DESC').get(),
-      ).toEqual({ id: '0021_transcripts' });
+      ).toEqual({ id: '0022_transform_caption_sidecars' });
     } finally {
       database.close();
       rmSync(directory, { recursive: true, force: true, maxRetries: 3 });

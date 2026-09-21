@@ -19,7 +19,12 @@ export type WorkflowDefinitionView = {
 };
 
 type WorkflowStepView =
-  | { id: string; kind: 'source'; sourceType: 'remote' | 'watched_folder' }
+  | {
+      id: string;
+      kind: 'source';
+      sourceType: 'remote' | 'watched_folder';
+      watchedFolder?: WatchedFolderSettingsView;
+    }
   | { id: string; kind: 'filter'; filters: Record<string, unknown> }
   | {
       id: string;
@@ -33,6 +38,14 @@ type WorkflowStepView =
 type TransformFitMode = 'contain' | 'crop' | 'stretch';
 type TransformAnchor = 'bottom' | 'center' | 'left' | 'right' | 'top';
 type TransformPreset = 'custom' | 'landscape' | 'square' | 'vertical';
+type WatchedFolderPreset = 'standard' | 'obs_recording' | 'obs_replay_buffer';
+
+type WatchedFolderSettingsView = {
+  filenameMetadata: 'file_stem' | 'obs';
+  preset: WatchedFolderPreset;
+  settleMs: number;
+  sidecarMetadata: boolean;
+};
 
 type TransformPlanView = {
   schemaVersion: 1;
@@ -63,6 +76,42 @@ const transformPresets: Readonly<
   vertical: { label: 'Vertical 9:16', width: 1080, height: 1920 },
   square: { label: 'Square 1:1', width: 1080, height: 1080 },
   landscape: { label: 'Landscape 16:9', width: 1920, height: 1080 },
+};
+
+const watchedFolderPresets: Readonly<
+  Record<
+    WatchedFolderPreset,
+    {
+      description: string;
+      label: string;
+      settings?: WatchedFolderSettingsView;
+    }
+  >
+> = {
+  standard: {
+    label: 'Standard watched folder',
+    description: 'Use the installation-wide settle window and the original file name.',
+  },
+  obs_recording: {
+    label: 'OBS recording folder',
+    description: 'Wait 10 seconds after the file stops changing before import.',
+    settings: {
+      filenameMetadata: 'obs',
+      preset: 'obs_recording',
+      settleMs: 10_000,
+      sidecarMetadata: true,
+    },
+  },
+  obs_replay_buffer: {
+    label: 'OBS Replay Buffer folder',
+    description: 'Wait 5 seconds after the completed replay file appears before import.',
+    settings: {
+      filenameMetadata: 'obs',
+      preset: 'obs_replay_buffer',
+      settleMs: 5_000,
+      sidecarMetadata: true,
+    },
+  },
 };
 
 export type WorkflowDestinationView = {
@@ -143,6 +192,7 @@ export function WorkflowEditor({
 }) {
   const [name, setName] = useState('');
   const [sourceDirectory, setSourceDirectory] = useState('');
+  const [watchedFolderPreset, setWatchedFolderPreset] = useState<WatchedFolderPreset>('standard');
   const [remoteSourceId, setRemoteSourceId] = useState('');
   const [retention, setRetention] = useState('delete_after_success');
   const [retentionHours, setRetentionHours] = useState('24');
@@ -334,8 +384,16 @@ export function WorkflowEditor({
     const schedule = scheduleEnabled
       ? { id: 'schedule', kind: 'schedule' as const, scheduleId: scheduleId.trim() }
       : undefined;
+    const watchedFolderSettings = watchedFolderPresets[watchedFolderPreset].settings;
     const steps: WorkflowStepView[] = [
-      { id: 'source', kind: 'source', sourceType },
+      {
+        id: 'source',
+        kind: 'source',
+        sourceType,
+        ...(sourceType === 'watched_folder' && watchedFolderSettings !== undefined
+          ? { watchedFolder: watchedFolderSettings }
+          : {}),
+      },
       ...(filter === undefined ? [] : [filter]),
       ...(transformEnabled
         ? [{ id: 'transform', kind: 'transform' as const, plan: transformPlan }]
@@ -447,25 +505,65 @@ export function WorkflowEditor({
           </Select>
         </FormField>
         {remoteSourceId.length === 0 ? (
-          <FormField
-            {...(validationError?.field === 'source' ? { error: validationError.message } : {})}
-            label="Watched folder"
-            required
-          >
-            <Input
-              autoComplete="off"
-              disabled={isSubmitting}
-              name="workflow-source-directory"
-              onChange={(event) => {
-                setSourceDirectory(event.target.value);
-                clearValidationError('source');
-              }}
-              placeholder="C:\\Media\\watched"
-              spellCheck={false}
-              ref={sourceDirectoryRef}
-              value={sourceDirectory}
-            />
-          </FormField>
+          <>
+            <FormField
+              description={watchedFolderPresets[watchedFolderPreset].description}
+              label="Folder preset"
+            >
+              <Select
+                disabled={isSubmitting}
+                name="workflow-watched-folder-preset"
+                onChange={(event) => {
+                  const preset = event.target.value as WatchedFolderPreset;
+                  setWatchedFolderPreset(preset);
+                  if (preset === 'standard' && titleTemplate === '{{source.title}}')
+                    setTitleTemplate('{{file.stem}}');
+                  if (preset !== 'standard' && titleTemplate === '{{file.stem}}')
+                    setTitleTemplate('{{source.title}}');
+                }}
+                value={watchedFolderPreset}
+              >
+                {Object.entries(watchedFolderPresets).map(([value, preset]) => (
+                  <option key={value} value={value}>
+                    {preset.label}
+                  </option>
+                ))}
+              </Select>
+            </FormField>
+            <FormField
+              {...(validationError?.field === 'source' ? { error: validationError.message } : {})}
+              description={
+                watchedFolderPreset === 'standard'
+                  ? 'Use an absolute Windows or Linux path accessible to this OpenRepurpose installation.'
+                  : 'Use the same absolute path configured in OBS. OpenRepurpose scans it locally. No OBS plugin is required.'
+              }
+              label="Watched folder"
+              required
+            >
+              <Input
+                autoComplete="off"
+                disabled={isSubmitting}
+                name="workflow-source-directory"
+                onChange={(event) => {
+                  setSourceDirectory(event.target.value);
+                  clearValidationError('source');
+                }}
+                placeholder="C:\\Media\\watched"
+                spellCheck={false}
+                ref={sourceDirectoryRef}
+                value={sourceDirectory}
+              />
+            </FormField>
+            {watchedFolderPreset !== 'standard' && (
+              <Alert title="OBS folder setup" variant="info">
+                Choose this path in OBS under Settings → Output → Recording. Files may grow or be
+                renamed while OBS finalizes them; OpenRepurpose waits for the selected settle window
+                and imports each completed file once. Common OBS timestamps are parsed, and an
+                optional same-name JSON sidecar can supply title, description, publishedAt, and
+                externalId metadata.
+              </Alert>
+            )}
+          </>
         ) : (
           <>
             <FormField label="Source retention">

@@ -18,6 +18,20 @@ import {
   type TransformPlanInput,
   type TransformToolIdentity,
 } from './transform.js';
+import {
+  ExternalDownloaderError,
+  type ExternalDownloader,
+  type ExternalDownloaderFailureCode,
+  type ExternalDownloaderRegistry,
+} from './external-downloader.js';
+import {
+  createCaptionRenderStep,
+  type Transcript,
+  type TranscriptionModel,
+  type TranscriptionOptionValue,
+  type WorkflowTranscriptionService,
+} from './transcription.js';
+import type { CaptionsTransform } from './transform.js';
 export type {
   SourceItemObservation,
   SourceJsonValue,
@@ -25,6 +39,7 @@ export type {
   SourceMediaResolutionStrategy,
 } from '@openrepurpose/platform-sdk';
 export * from './schedule.js';
+export * from './external-downloader.js';
 export * from './transcription.js';
 export * from './transform.js';
 
@@ -794,6 +809,8 @@ export type WorkflowStep =
   | WorkflowSourceStep
   | WorkflowFilterStep
   | WorkflowTransformStep
+  | WorkflowTranscriptionStep
+  | WorkflowCaptionStep
   | WorkflowScheduleStep
   | WorkflowDestinationStep;
 
@@ -801,6 +818,24 @@ export interface WorkflowSourceStep {
   readonly id: string;
   readonly kind: 'source';
   readonly sourceType: 'remote' | 'watched_folder';
+  readonly watchedFolder?: WatchedFolderSourceSettings;
+}
+
+export type WatchedFolderPreset = 'standard' | 'obs_recording' | 'obs_replay_buffer';
+
+/** Durable watched-folder behavior. Presets remain ordinary editable workflow source settings. */
+export interface WatchedFolderSourceSettings {
+  readonly filenameMetadata: 'file_stem' | 'obs';
+  readonly preset: WatchedFolderPreset;
+  readonly settleMs: number;
+  readonly sidecarMetadata: boolean;
+}
+
+export interface WatchedMediaMetadata {
+  readonly description?: string;
+  readonly externalId?: string;
+  readonly publishedAt?: string;
+  readonly title?: string;
 }
 export interface WorkflowFilterStep {
   readonly filters: SourceWorkflowFilters;
@@ -813,6 +848,22 @@ export interface WorkflowTransformStep {
   readonly kind: 'transform';
   readonly operation?: 'pass_through';
   readonly plan?: TransformPlanInput;
+}
+/** Local inference is a durable workflow prerequisite, never a browser-side operation. */
+export interface WorkflowTranscriptionStep {
+  readonly id: string;
+  readonly kind: 'transcription';
+  readonly language?: string;
+  readonly model: TranscriptionModel;
+  readonly options?: Readonly<Record<string, TranscriptionOptionValue>>;
+  readonly providerId: string;
+}
+/** Captions consume the preceding workflow transcript through an immutable SRT snapshot. */
+export interface WorkflowCaptionStep {
+  readonly id: string;
+  readonly kind: 'captions';
+  readonly mode: CaptionsTransform['mode'];
+  readonly theme?: CaptionsTransform['theme'];
 }
 /** A scheduling boundary is compiled, but scheduling owns dispatch timing. */
 export interface WorkflowScheduleStep {
@@ -910,6 +961,7 @@ export interface SourceCursor {
 }
 
 export interface SourceCursorRepository {
+  delete(workflowId: string, sourceKey: string): boolean;
   find(workflowId: string, sourceKey: string): SourceCursor | undefined;
   save(cursor: SourceCursor): SourceCursor;
 }
@@ -1419,6 +1471,22 @@ export interface MediaResolver {
   resolve(request: MediaResolverRequest, context: MediaResolverContext): Promise<void>;
 }
 
+function externalDownloaderResolutionFailure(error: ExternalDownloaderError): MediaResolutionError {
+  const publicMessages: Readonly<Record<ExternalDownloaderFailureCode, string>> = {
+    authentication_required: 'The external downloader requires authorization.',
+    cancelled: 'External media downloading was cancelled.',
+    download_failed: 'The external downloader could not acquire the media.',
+    rate_limited: 'The external downloader is temporarily rate-limited.',
+    unavailable: 'The external downloader is unavailable.',
+    unsupported_locator: 'No external downloader supports this media locator.',
+  };
+  return new MediaResolutionError(
+    `MEDIA_EXTERNAL_DOWNLOADER_${error.code.toUpperCase()}`,
+    error.retryable,
+    publicMessages[error.code],
+  );
+}
+
 export class MediaResolutionError extends Error {
   public constructor(
     public readonly code: string,
@@ -1427,6 +1495,94 @@ export class MediaResolutionError extends Error {
   ) {
     super(message);
     this.name = 'MediaResolutionError';
+  }
+}
+
+/**
+ * Application-layer bridge from generic media resolution to optional external downloader
+ * infrastructure. It deliberately knows no executable, arguments, version format, or tool output.
+ */
+export class ExternalDownloaderMediaResolver implements MediaResolver {
+  public readonly id = 'external-downloader';
+
+  public constructor(private readonly downloaders: ExternalDownloaderRegistry) {}
+
+  public canResolve(request: MediaResolverRequest): boolean {
+    if (request.strategy !== 'external_downloader') return false;
+    const locator = request.sourceItem.media?.externalDownload?.locator;
+    if (locator === undefined) return false;
+    return this.downloaders.list().some((downloader) => this.supports(downloader, { locator }));
+  }
+
+  public async resolve(
+    request: MediaResolverRequest,
+    context: MediaResolverContext,
+  ): Promise<void> {
+    const locator = request.sourceItem.media?.externalDownload?.locator;
+    if (request.strategy !== 'external_downloader' || locator === undefined)
+      throw new MediaResolutionError(
+        'MEDIA_EXTERNAL_DOWNLOADER_UNSUPPORTED_LOCATOR',
+        false,
+        'No external downloader supports this media locator.',
+      );
+
+    const downloadRequest = { locator } as const;
+    const downloader = this.downloaders
+      .list()
+      .find((candidate) => this.supports(candidate, downloadRequest));
+    if (downloader === undefined)
+      throw new MediaResolutionError(
+        'MEDIA_EXTERNAL_DOWNLOADER_UNSUPPORTED_LOCATOR',
+        false,
+        'No external downloader supports this media locator.',
+      );
+
+    let capabilities;
+    try {
+      capabilities = await downloader.capabilities();
+    } catch {
+      throw new MediaResolutionError(
+        'MEDIA_EXTERNAL_DOWNLOADER_UNAVAILABLE',
+        false,
+        'The external downloader is unavailable.',
+      );
+    }
+    if (capabilities.availability !== 'available' || !capabilities.operations.includes('download'))
+      throw new MediaResolutionError(
+        'MEDIA_EXTERNAL_DOWNLOADER_UNAVAILABLE',
+        false,
+        'The external downloader is unavailable.',
+      );
+
+    try {
+      const result = await downloader.download(downloadRequest, context);
+      if (result.destinationPath !== context.destinationPath)
+        throw new ExternalDownloaderError(
+          'download_failed',
+          false,
+          'The downloader returned an unexpected output path.',
+        );
+    } catch (error) {
+      throw error instanceof ExternalDownloaderError
+        ? externalDownloaderResolutionFailure(error)
+        : new MediaResolutionError(
+            context.signal.aborted
+              ? 'MEDIA_EXTERNAL_DOWNLOADER_CANCELLED'
+              : 'MEDIA_EXTERNAL_DOWNLOADER_DOWNLOAD_FAILED',
+            !context.signal.aborted,
+            context.signal.aborted
+              ? 'External media downloading was cancelled.'
+              : 'The external downloader could not acquire the media.',
+          );
+    }
+  }
+
+  private supports(downloader: ExternalDownloader, request: { readonly locator: string }): boolean {
+    try {
+      return downloader.supports(request);
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -1728,9 +1884,22 @@ const workflowStepOrder: Readonly<Record<WorkflowStep['kind'], number>> = {
   source: 0,
   filter: 1,
   transform: 2,
-  schedule: 3,
-  destination: 4,
+  transcription: 3,
+  captions: 4,
+  schedule: 5,
+  destination: 6,
 };
+
+function validateWatchedFolderSettings(settings: WatchedFolderSourceSettings): void {
+  if (!['standard', 'obs_recording', 'obs_replay_buffer'].includes(settings.preset))
+    throw new Error('Unsupported watched-folder preset.');
+  if (!['file_stem', 'obs'].includes(settings.filenameMetadata))
+    throw new Error('Unsupported watched-folder filename metadata mode.');
+  if (!Number.isInteger(settings.settleMs) || settings.settleMs < 0 || settings.settleMs > 300_000)
+    throw new Error('Watched-folder settle time must be from 0 to 300000 milliseconds.');
+  if (typeof settings.sidecarMetadata !== 'boolean')
+    throw new Error('Watched-folder sidecar metadata must be enabled or disabled.');
+}
 
 /** Validates a workflow DAG independently of its UI representation. */
 export function validateWorkflowDefinition(definition: WorkflowDefinition): void {
@@ -1747,6 +1916,18 @@ export function validateWorkflowDefinition(definition: WorkflowDefinition): void
     }
     if (step.kind === 'schedule' && step.scheduleId.trim().length === 0)
       throw new Error('A workflow schedule step requires a schedule ID.');
+    if (step.kind === 'source') {
+      if (step.sourceType === 'remote' && step.watchedFolder !== undefined)
+        throw new Error('Remote workflow sources cannot use watched-folder settings.');
+      if (step.sourceType === 'watched_folder' && step.watchedFolder !== undefined)
+        validateWatchedFolderSettings(step.watchedFolder);
+    }
+    if (step.kind === 'transcription') {
+      if (step.providerId.trim().length === 0)
+        throw new Error('A workflow transcription step requires a provider ID.');
+      if (step.model.id.trim().length === 0 || step.model.version.trim().length === 0)
+        throw new Error('A workflow transcription step requires a model ID and version.');
+    }
     steps.set(step.id, step);
   }
   const sources = definition.steps.filter((step) => step.kind === 'source');
@@ -1790,6 +1971,14 @@ export function validateWorkflowDefinition(definition: WorkflowDefinition): void
   for (const step of definition.steps)
     if (step.kind === 'destination' && (outgoing.get(step.id)?.length ?? 0) !== 0)
       throw new Error('A workflow destination step cannot have outgoing edges.');
+  const transcriptionSteps = definition.steps.filter((step) => step.kind === 'transcription');
+  const captionSteps = definition.steps.filter((step) => step.kind === 'captions');
+  if (transcriptionSteps.length > 1)
+    throw new Error('A workflow supports one transcription step before destination fan-out.');
+  if (captionSteps.length > 1)
+    throw new Error('A workflow supports one caption step before destination fan-out.');
+  if (captionSteps.length > 0 && transcriptionSteps.length !== 1)
+    throw new Error('A workflow caption step requires a transcription step.');
 }
 
 /** Compiles a typed DAG into the only plan format accepted by execution services. */
@@ -2287,6 +2476,10 @@ export interface WorkflowDestinationJobResult extends EnqueueJobResult {
 export interface WorkflowExecutionResult {
   readonly destinations: readonly WorkflowDestinationJobResult[];
   readonly failurePolicy: WorkflowFailurePolicy;
+  readonly transcription?: {
+    readonly transcriptId: string;
+    readonly transcriptionJobId?: string;
+  };
   readonly workflowId: string;
 }
 
@@ -2487,6 +2680,7 @@ export class WorkflowService {
     private readonly jobs: JobService,
     private readonly now: () => Date = () => new Date(),
     private readonly transforms?: WorkflowTransformService,
+    private readonly transcriptions?: WorkflowTranscriptionService,
   ) {}
 
   public create(input: WorkflowInput): Workflow {
@@ -2514,10 +2708,26 @@ export class WorkflowService {
   public executeWatchedMedia(
     workflowId: string,
     media: MediaAsset,
+    metadata?: WatchedMediaMetadata,
   ): WorkflowExecutionResult | undefined {
     const workflow = this.workflows.findById(workflowId);
     if (workflow === undefined || !workflow.enabled) return undefined;
-    return this.executeMedia(workflow.plan, media);
+    return this.executeMedia(
+      workflow.plan,
+      media,
+      metadata === undefined
+        ? undefined
+        : {
+            externalId: metadata.externalId ?? media.fingerprint,
+            metadata: {
+              ...(metadata.title === undefined ? {} : { title: metadata.title }),
+              ...(metadata.description === undefined ? {} : { description: metadata.description }),
+            },
+            ...(metadata.publishedAt === undefined ? {} : { publishedAt: metadata.publishedAt }),
+            sourceConnectionId: `watched-folder:${workflow.id}`,
+            sourceItemId: media.id,
+          },
+    );
   }
 
   /** Executes an immutable remote-source plan through the normal destination job fan-out. */
@@ -2528,6 +2738,35 @@ export class WorkflowService {
     intents: readonly { readonly destinationKey: string; readonly idempotencyKey: string }[],
   ): WorkflowExecutionResult {
     return this.executeMedia(workflow, media, source, intents);
+  }
+
+  /** Resumes the immutable workflow snapshot after its durable transcription prerequisite. */
+  public resumeAfterTranscription(continuation: JsonValue): WorkflowExecutionResult {
+    if (continuation === null || typeof continuation !== 'object' || Array.isArray(continuation))
+      throw new Error('Workflow transcription continuation is invalid.');
+    const value = continuation as Readonly<Record<string, JsonValue>>;
+    if (
+      value.workflow === null ||
+      typeof value.workflow !== 'object' ||
+      Array.isArray(value.workflow) ||
+      value.media === null ||
+      typeof value.media !== 'object' ||
+      Array.isArray(value.media)
+    )
+      throw new Error('Workflow transcription continuation is invalid.');
+    return this.executeMedia(
+      value.workflow as unknown as WorkflowExecutionPlan,
+      value.media as unknown as MediaAsset,
+      value.source === undefined
+        ? undefined
+        : (value.source as SourceWorkflowExecutionSnapshot['source']),
+      value.intents === undefined
+        ? undefined
+        : (value.intents as unknown as readonly {
+            readonly destinationKey: string;
+            readonly idempotencyKey: string;
+          }[]),
+    );
   }
 
   private executeMedia(
@@ -2567,6 +2806,38 @@ export class WorkflowService {
           intents === undefined ||
           intents.some((intent) => intent.destinationKey === destinationKey),
       );
+    const transcriptionSteps = workflow.steps.filter(
+      (step): step is WorkflowTranscriptionStep => step.kind === 'transcription',
+    );
+    let transcript: Transcript | undefined;
+    if (transcriptionSteps.length === 1) {
+      if (this.transcriptions === undefined)
+        throw new Error('A transcription provider is required for workflow transcription steps.');
+      const prepared = this.transcriptions.prepare({
+        media,
+        step: transcriptionSteps[0]!,
+        continuation: {
+          workflow,
+          media,
+          ...(source === undefined ? {} : { source }),
+          ...(intents === undefined ? {} : { intents }),
+        } as unknown as JsonValue,
+      });
+      if (prepared.transcriptionJobId !== undefined)
+        return {
+          workflowId: workflow.id,
+          failurePolicy: workflow.failurePolicy,
+          destinations: [],
+          transcription: {
+            transcriptId: prepared.transcript.id,
+            transcriptionJobId: prepared.transcriptionJobId,
+          },
+        };
+      transcript = prepared.transcript;
+    }
+    const captionSteps = workflow.steps.filter(
+      (step): step is WorkflowCaptionStep => step.kind === 'captions',
+    );
     const transformPlans = workflow.steps
       .filter((step): step is WorkflowTransformStep => step.kind === 'transform')
       .flatMap((step) => (step.plan === undefined ? [] : [step.plan]));
@@ -2574,14 +2845,38 @@ export class WorkflowService {
       throw new Error(
         'A workflow execution supports one transform recipe before destination fan-out.',
       );
+    const captionPlan =
+      captionSteps.length === 0
+        ? undefined
+        : transcript === undefined
+          ? (() => {
+              throw new Error('A workflow caption step requires a completed transcription.');
+            })()
+          : ({
+              user: {
+                ...(transformPlans[0]?.user ?? {}),
+                steps: [
+                  ...(transformPlans[0]?.user.steps ?? []),
+                  createCaptionRenderStep(
+                    transcript,
+                    captionSteps[0]!.mode,
+                    captionSteps[0]!.theme,
+                  ),
+                ],
+              },
+              ...(transformPlans[0]?.destination === undefined
+                ? {}
+                : { destination: transformPlans[0].destination }),
+            } satisfies TransformPlanInput);
+    const effectiveTransformPlan = captionPlan ?? transformPlans[0];
     const prepared: { readonly mediaId: string; readonly prerequisiteJobId?: string } =
-      transformPlans.length === 0
+      effectiveTransformPlan === undefined
         ? { mediaId: media.id }
         : this.transforms === undefined
           ? (() => {
               throw new Error('FFmpeg and ffprobe are required for workflow transforms.');
             })()
-          : this.transforms.prepare(media, transformPlans[0]!);
+          : this.transforms.prepare(media, effectiveTransformPlan);
     const destinations = destinationPlans.map(
       ({ destination, destinationKey }): WorkflowDestinationJobResult => {
         const common = {
@@ -2701,7 +2996,12 @@ export class WorkflowService {
         return { destinationId: destination.destinationId, destinationKey, ...result };
       },
     );
-    return { workflowId: workflow.id, failurePolicy: workflow.failurePolicy, destinations };
+    return {
+      workflowId: workflow.id,
+      failurePolicy: workflow.failurePolicy,
+      destinations,
+      ...(transcript === undefined ? {} : { transcription: { transcriptId: transcript.id } }),
+    };
   }
 
   private destinationIdempotencyKey(

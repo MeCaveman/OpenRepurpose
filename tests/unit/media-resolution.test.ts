@@ -2,6 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  ExternalDownloaderError,
+  ExternalDownloaderMediaResolver,
+  ExternalDownloaderRegistry,
   MediaImportService,
   MediaResolutionError,
   MediaResolutionService,
@@ -188,6 +191,121 @@ describe('media resolution and managed temporary storage', () => {
     expect(app.resolutions.find('item-1', 'execution-1')).toMatchObject({
       status: 'failed',
       errorCode: 'MEDIA_RESOLVER_UNAVAILABLE',
+    });
+  });
+
+  it('operates without any external downloader configured', async () => {
+    temporary = createTemporaryDatabase();
+    const sourceItem = seedSourceAndExecution(temporary);
+    const resolver = new ExternalDownloaderMediaResolver(new ExternalDownloaderRegistry());
+    const app = services(temporary, [resolver]);
+
+    await expect(
+      app.resolution.resolve({
+        ...resolveInput({
+          ...sourceItem,
+          media: {
+            availability: 'available',
+            externalDownload: { locator: 'https://media.example.test/items/remote-1' },
+            resolutionStrategies: ['external_downloader'],
+            rightsRequirement: 'explicit_confirmation',
+          },
+        }),
+        rightsConfirmed: true,
+      }),
+    ).rejects.toMatchObject({ code: 'MEDIA_RESOLVER_UNAVAILABLE', retryable: false });
+  });
+
+  it('injects an external downloader through the generic registry', async () => {
+    temporary = createTemporaryDatabase();
+    const sourceItem = seedSourceAndExecution(temporary);
+    const download = vi.fn(async (_request, context: { readonly destinationPath: string }) => {
+      writeFileSync(context.destinationPath, 'downloaded-media');
+      return { destinationPath: context.destinationPath, version: 'test-version' };
+    });
+    const registry = new ExternalDownloaderRegistry([
+      {
+        id: 'fake-downloader',
+        capabilities: async () => ({
+          availability: 'available',
+          operations: ['download'],
+          version: 'test-version',
+        }),
+        supports: ({ locator }) => locator.startsWith('https://media.example.test/'),
+        download,
+      },
+    ]);
+    const app = services(temporary, [new ExternalDownloaderMediaResolver(registry)]);
+
+    const result = await app.resolution.resolve({
+      ...resolveInput({
+        ...sourceItem,
+        media: {
+          availability: 'available',
+          externalDownload: { locator: 'https://media.example.test/items/remote-1' },
+          resolutionStrategies: ['external_downloader'],
+          rightsRequirement: 'explicit_confirmation',
+        },
+      }),
+      rightsConfirmed: true,
+    });
+
+    expect(download).toHaveBeenCalledOnce();
+    expect(readFileSync(result.media.path, 'utf8')).toBe('downloaded-media');
+    expect(app.resolutions.find('item-1', 'execution-1')).toMatchObject({
+      resolverId: 'external-downloader',
+      status: 'ready',
+    });
+  });
+
+  it('contains structured external-downloader failures and preserves the rights gate', async () => {
+    temporary = createTemporaryDatabase();
+    const sourceItem = seedSourceAndExecution(temporary);
+    const download = vi.fn(async () => {
+      throw new ExternalDownloaderError('rate_limited', true, 'private implementation detail');
+    });
+    const app = services(temporary, [
+      new ExternalDownloaderMediaResolver(
+        new ExternalDownloaderRegistry([
+          {
+            id: 'failing-downloader',
+            capabilities: async () => ({
+              availability: 'available',
+              operations: ['download'],
+            }),
+            supports: () => true,
+            download,
+          },
+        ]),
+      ),
+    ]);
+    const externalItem: RemoteSourceItem = {
+      ...sourceItem,
+      media: {
+        availability: 'available',
+        externalDownload: { locator: 'https://media.example.test/items/remote-1' },
+        resolutionStrategies: ['external_downloader'],
+        rightsRequirement: 'explicit_confirmation',
+      },
+    };
+
+    await expect(app.resolution.resolve(resolveInput(externalItem))).rejects.toMatchObject({
+      code: 'MEDIA_RIGHTS_CONFIRMATION_REQUIRED',
+      retryable: false,
+    });
+    expect(download).not.toHaveBeenCalled();
+
+    await expect(
+      app.resolution.resolve({ ...resolveInput(externalItem), rightsConfirmed: true }),
+    ).rejects.toMatchObject({
+      code: 'MEDIA_EXTERNAL_DOWNLOADER_RATE_LIMITED',
+      message: 'The external downloader is temporarily rate-limited.',
+      retryable: true,
+    });
+    expect(app.resolutions.find('item-1', 'execution-1')).toMatchObject({
+      errorCode: 'MEDIA_EXTERNAL_DOWNLOADER_RATE_LIMITED',
+      errorMessage: 'The external downloader is temporarily rate-limited.',
+      status: 'failed',
     });
   });
 

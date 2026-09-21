@@ -19,10 +19,18 @@ Media import cannot persist probe metadata until `ffprobe` is available.
 ## A watched-folder file is not imported
 
 The folder runner uses periodic scans. A supported file must keep the same size and modification
-time for `WATCH_SETTLE_MS`; this avoids importing partially-written OBS or render output. Keep the
-file in the configured folder, wait for the settling period, and check the next scan. The first
-scan records the candidate; the following settled scan imports it. The durable source cursor makes
-restarts idempotent.
+time for the workflow's settle window; this avoids importing partially-written OBS or render
+output. Standard folders use `WATCH_SETTLE_MS`. The OBS recording preset waits 10 seconds, and the
+OBS Replay Buffer preset waits 5 seconds. Keep the file in the configured folder, wait for the
+settling period, and check the next scan. The first scan records the candidate; a later settled scan
+imports it. Durable filesystem identity preserves that state when OBS renames a file and prevents a
+second import after restart.
+
+OBS presets do not require a plugin. Configure the watched path to match OBS Settings → Output →
+Recording. Common OBS timestamp filenames are parsed for metadata. An optional same-name JSON file
+beside the video, such as `Replay 2026-09-21 14-35-42.json`, may provide string values for `title`,
+`description`, `publishedAt` (or `recordedAt`), and `externalId`. Invalid, unreadable, or larger than
+64 KiB sidecars are ignored; the video still imports using filename metadata.
 
 ## A YouTube upload is waiting or failed
 

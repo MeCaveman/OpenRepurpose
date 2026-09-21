@@ -463,6 +463,12 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
           steps: readonly {
             id: string;
             kind: string;
+            watchedFolder?: {
+              filenameMetadata: string;
+              preset: string;
+              settleMs: number;
+              sidecarMetadata: boolean;
+            };
             plan?: {
               user: {
                 steps: readonly {
@@ -524,6 +530,8 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
   await expect(page.locator('details')).not.toHaveAttribute('open', '');
 
   await page.getByLabel('Workflow name').fill('Workshop uploads');
+  await page.getByLabel('Folder preset').selectOption('obs_replay_buffer');
+  await expect(page.getByText('No OBS plugin is required')).toBeVisible();
   await page.getByLabel('Watched folder').fill('C:\\Media\\watched');
   await optionalStages.click();
   await page.getByLabel('Transform media for destinations').check();
@@ -552,6 +560,14 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
     'transform',
     'destination',
   ]);
+  expect(submitted?.definition.steps.find((step) => step.kind === 'source')?.watchedFolder).toEqual(
+    {
+      filenameMetadata: 'obs',
+      preset: 'obs_replay_buffer',
+      settleMs: 5_000,
+      sidecarMetadata: true,
+    },
+  );
   expect(submitted?.definition.steps.find((step) => step.kind === 'transform')?.plan).toEqual({
     schemaVersion: 1,
     user: {
@@ -578,6 +594,8 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
   ]) {
     await page.setViewportSize(viewport);
     await expect(page.getByRole('heading', { name: 'Route preview' })).toBeVisible();
+    await expect(page.getByLabel('Folder preset')).toBeVisible();
+    await expect(page.getByText('No OBS plugin is required')).toBeVisible();
     await expect(page.getByLabel('Output preset')).toBeVisible();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

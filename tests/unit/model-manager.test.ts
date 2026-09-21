@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -110,6 +110,25 @@ describe('local whisper model manager', () => {
     expect((await manager.list()).models[0]).toMatchObject({
       status: 'failed',
       integrity: 'failed',
+    });
+  });
+
+  it('reports an already-installed corrupt model during explicit verification', async () => {
+    const root = await directory();
+    const manager = new LocalWhisperModelManager(catalog, root, {
+      diskReserveBytes: 0,
+      freeSpace: async () => 10_000,
+    });
+    const modelDirectory = join(root, 'fixture', catalog[0]!.version);
+    await mkdir(modelDirectory, { recursive: true });
+    await writeFile(join(modelDirectory, 'ggml-model.bin'), 'corrupt model bytes');
+
+    await expect(manager.verify('fixture')).rejects.toMatchObject({
+      code: 'MODEL_CHECKSUM_MISMATCH',
+    });
+    expect((await manager.list()).models[0]).toMatchObject({
+      status: 'installed',
+      integrity: 'unverified',
     });
   });
 

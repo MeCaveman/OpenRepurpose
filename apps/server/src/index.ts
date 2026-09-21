@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import {
   JobRunner,
   JobService,
+  ExternalDownloaderMediaResolver,
+  ExternalDownloaderRegistry,
   MediaImportService,
   MediaResolutionService,
   RegisteredLocalOriginalMatcher,
@@ -18,6 +20,9 @@ import {
   DerivativeAwareMediaRepository,
   TransformService,
   TranscriptService,
+  TranscriptionProviderRegistry,
+  WorkflowTranscriptionJobHandler,
+  WorkflowTranscriptionService,
   WorkflowTransformService,
   WorkflowService,
   type JobHandler,
@@ -53,6 +58,10 @@ import {
   TransformRecoveryService,
   WatchedFolderRunner,
   WHISPER_CPP_MODEL_CATALOG,
+  discoverWhisperCppExecutable,
+  LocalWhisperCppModelLocator,
+  WhisperCppTranscriptionProvider,
+  resolveWhisperCppPaths,
 } from '@openrepurpose/media';
 import { loadApplicationConfig } from '@openrepurpose/shared';
 import { createRedactingLogger, redactLogText, SourceRegistry } from '@openrepurpose/platform-sdk';
@@ -82,7 +91,8 @@ export async function startServer(): Promise<void> {
     WHISPER_CPP_MODEL_CATALOG,
     config.paths.transcriptionModelDirectory,
   );
-  const transcriptService = new TranscriptService(new SqliteTranscriptRepository(database));
+  const transcriptRepository = new SqliteTranscriptRepository(database);
+  const transcriptService = new TranscriptService(transcriptRepository);
   const jobRepository = new SqliteJobRepository(database);
   const secretStore = new EncryptedFileSecretStore(
     config.paths.secretVaultPath,
@@ -118,6 +128,9 @@ export async function startServer(): Promise<void> {
           mediaRepository,
         );
   const sourceExecutionRepository = new SqliteSourceWorkflowExecutionRepository(database);
+  // External downloaders are optional infrastructure adapters. No implementation ships today;
+  // future enabled/configured adapters register here without changing media-resolution logic.
+  const externalDownloaders = new ExternalDownloaderRegistry();
   const managedTemporaryStorage = new LocalManagedTemporaryStorage(config.paths.dataDirectory);
   const transformDerivativeRepository = new SqliteTransformDerivativeRepository(database);
   const transformMediaRepository = new DerivativeAwareMediaRepository(
@@ -138,11 +151,31 @@ export async function startServer(): Promise<void> {
     jobService,
     transformTool,
   );
+  const whisperPaths = resolveWhisperCppPaths(config.paths.dataDirectory);
+  const whisperExecutable = await discoverWhisperCppExecutable({
+    managedInstallationRoot: whisperPaths.installationRoot,
+  });
+  const transcriptionProviders = new TranscriptionProviderRegistry(
+    whisperExecutable === undefined
+      ? []
+      : [
+          new WhisperCppTranscriptionProvider({
+            executable: whisperExecutable,
+            modelLocator: new LocalWhisperCppModelLocator(config.paths.transcriptionModelDirectory),
+            temporaryDirectory: config.paths.dataDirectory,
+          }),
+        ],
+  );
+  const workflowTranscriptionService =
+    transcriptionProviders.list().length === 0
+      ? undefined
+      : new WorkflowTranscriptionService(transcriptRepository, jobService);
   const workflowService = new WorkflowService(
     new SqliteWorkflowRepository(database),
     jobService,
     undefined,
     workflowTransformService,
+    workflowTranscriptionService,
   );
   const transformOutputStorage = new LocalTransformOutputStorage(config.paths.dataDirectory);
   const transformProcessRunner = new FfmpegProcessRunner(config.transformRunner);
@@ -159,7 +192,7 @@ export async function startServer(): Promise<void> {
           new MediaResolutionService(
             new SqliteSourceMediaResolutionRepository(database),
             new RegisteredLocalOriginalMatcher(mediaRepository),
-            [],
+            [new ExternalDownloaderMediaResolver(externalDownloaders)],
             managedTemporaryStorage,
             mediaImportService,
             mediaRepository,
@@ -231,6 +264,19 @@ export async function startServer(): Promise<void> {
         transformProcessRunner,
         new FfprobeMediaProbe(executables.ffprobe),
         executables.ffmpeg,
+      ),
+    );
+  if (transcriptionProviders.list().length > 0)
+    jobHandlers.push(
+      new WorkflowTranscriptionJobHandler(
+        mediaRepository,
+        transcriptRepository,
+        transcriptionProviders,
+        {
+          onCompleted: (continuation) => {
+            workflowService.resumeAfterTranscription(continuation);
+          },
+        },
       ),
     );
   const jobRunner = new JobRunner(jobRepository, jobHandlers, {

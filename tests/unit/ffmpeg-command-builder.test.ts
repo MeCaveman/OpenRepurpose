@@ -1,10 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compileTransformCommand, FfprobeMediaProbe } from '@openrepurpose/media';
+import {
+  compileTransformCommand,
+  escapeFfmpegFilterPath,
+  FfprobeMediaProbe,
+} from '@openrepurpose/media';
 
 describe('FFmpeg transform command builder', () => {
   it('compiles normalized trim, crop, audio, and encode intent to a stable argument vector', () => {
@@ -113,6 +117,63 @@ describe('FFmpeg transform command builder', () => {
     const mapIndex = command.args.indexOf('-map');
     expect(command.args[mapIndex + 1]).toBe('0:v:0');
     expect(command.args).not.toContain('[0:v:0]');
+  });
+
+  it('burns an immutable UTF-8 subtitle snapshot through an escaped managed path', () => {
+    const subtitlePath = "C:\\Caption Files\\quote's: [safe]; مرحبا.srt";
+    const command = compileTransformCommand({
+      inputPath: 'source.mp4',
+      outputPath: 'output.mp4',
+      captionPaths: { 'transcript-1': subtitlePath },
+      plan: {
+        user: {
+          steps: [
+            {
+              type: 'captions',
+              source: 'transcript-1',
+              revision: 4,
+              mode: 'burn-in',
+              theme: 'large-centered',
+              subtitle: '1\n00:00:00,000 --> 00:00:01,000\nمرحبا',
+            },
+          ],
+        },
+      },
+    });
+    const graph = command.args[command.args.indexOf('-filter_complex') + 1];
+    expect(graph).toContain(`filename='${escapeFfmpegFilterPath(subtitlePath)}'`);
+    expect(graph).toContain('charenc=UTF-8');
+    expect(graph).toContain('Alignment=5');
+    expect(command.args).not.toContain(subtitlePath);
+  });
+
+  it('leaves font selection to the platform fallback while accepting Linux paths', () => {
+    const subtitlePath = "/srv/openrepurpose/captions l'été.srt";
+    const command = compileTransformCommand({
+      inputPath: '/srv/media/日本語 source.mp4',
+      outputPath: '/srv/derivatives/captioned.mp4',
+      captionPaths: { transcript: subtitlePath },
+      plan: {
+        user: {
+          steps: [
+            {
+              type: 'captions',
+              source: 'transcript',
+              revision: 1,
+              mode: 'burn-in',
+              theme: 'clean-bottom',
+              subtitle: 'snapshot',
+            },
+          ],
+        },
+      },
+    });
+    const graph = command.args[command.args.indexOf('-filter_complex') + 1];
+    expect(graph).toContain(`filename='${escapeFfmpegFilterPath(subtitlePath)}'`);
+    expect(graph).toContain('charenc=UTF-8');
+    expect(graph).toContain('Alignment=2');
+    expect(graph).not.toContain('FontName=');
+    expect(graph).not.toContain('Arial');
   });
 
   it('keeps preserve, normalize, gain, and remove-audio semantics deterministic', () => {
@@ -334,6 +395,53 @@ describe('FFmpeg transform command integration', () => {
       height: 120,
       videoCodec: 'h264',
       width: 160,
+    });
+  });
+
+  integration('burns a UTF-8 SRT sidecar into a valid derivative', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'openrepurpose-caption-'));
+    directories.push(directory);
+    const source = join(directory, 'source.mp4');
+    const subtitle = join(directory, 'captions مرحبا.srt');
+    const output = join(directory, 'burned.mp4');
+    runFfmpeg([
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=160x120:rate=24',
+      '-t',
+      '1',
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      source,
+    ]);
+    writeFileSync(subtitle, '1\n00:00:00,000 --> 00:00:00,800\nHello مرحبا\n', 'utf8');
+    const command = compileTransformCommand({
+      inputPath: source,
+      outputPath: output,
+      sourceHasAudio: false,
+      captionPaths: { transcript: subtitle },
+      plan: {
+        user: {
+          steps: [
+            {
+              type: 'captions',
+              source: 'transcript',
+              revision: 0,
+              mode: 'burn-in',
+              subtitle: 'snapshot',
+            },
+          ],
+        },
+      },
+    });
+    runFfmpeg(command.args);
+    await expect(new FfprobeMediaProbe('ffprobe').probe(output)).resolves.toMatchObject({
+      videoCodec: 'h264',
+      width: 160,
+      height: 120,
     });
   });
 });

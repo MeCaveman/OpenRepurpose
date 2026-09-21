@@ -22,6 +22,8 @@ export type SourceMediaResolutionStrategy =
 
 export interface SourceMediaDescriptor {
   readonly availability: 'available' | 'unavailable' | 'unknown';
+  /** Generic handoff data only; source accounts and downloader configuration remain separate. */
+  readonly externalDownload?: { readonly locator: string };
   readonly resolutionStrategies: readonly SourceMediaResolutionStrategy[];
   /** External downloaders always require an explicit acknowledgement for authorized content. */
   readonly rightsRequirement: 'connection_authorization' | 'explicit_confirmation';
@@ -87,6 +89,16 @@ export function validateSourcePollResult(result: SourcePollResult): void {
       throw new Error('A source event ID must be omitted or non-empty.');
     if (item.publishedAt !== undefined && !Number.isFinite(Date.parse(item.publishedAt)))
       throw new Error(`Invalid source publishedAt timestamp for ${item.externalId}.`);
+    const externalDownload = item.media?.externalDownload;
+    if (externalDownload !== undefined && externalDownload.locator.trim().length === 0)
+      throw new Error(`External download locator must be non-empty for ${item.externalId}.`);
+    if (
+      item.media?.resolutionStrategies.includes('external_downloader') === true &&
+      externalDownload === undefined
+    )
+      throw new Error(
+        `External downloader resolution requires a generic locator for ${item.externalId}.`,
+      );
   }
 }
 

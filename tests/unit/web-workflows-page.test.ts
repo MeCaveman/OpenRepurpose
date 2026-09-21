@@ -34,12 +34,66 @@ describe('web workflows page', () => {
     expect(markup).toContain('Create a workflow');
     expect(markup).toContain('name="workflow-name"');
     expect(markup).toContain('name="workflow-source-directory"');
+    expect(markup).toContain('name="workflow-watched-folder-preset"');
+    expect(markup).toContain('OBS recording folder');
+    expect(markup).toContain('OBS Replay Buffer folder');
     expect(markup).toContain('<details');
     expect(markup).not.toContain('<details open');
     expect(markup).toContain('Optional route stages');
     expect(markup).toContain('Route preview');
     expect(markup).toContain('aria-label="Workflow route"');
     expect(markup).not.toMatch(/(?:slate|cyan|emerald|rose|amber)-/);
+  });
+
+  it('shows persisted OBS source behavior in saved workflow routes', () => {
+    const markup = renderToStaticMarkup(
+      createElement(
+        WorkflowsPage,
+        workflowsProps({
+          workflows: [
+            {
+              definition: {
+                edges: [{ from: 'source', to: 'destination-1' }],
+                schemaVersion: 1,
+                steps: [
+                  {
+                    id: 'source',
+                    kind: 'source',
+                    sourceType: 'watched_folder',
+                    watchedFolder: {
+                      filenameMetadata: 'obs',
+                      preset: 'obs_replay_buffer',
+                      settleMs: 5_000,
+                      sidecarMetadata: true,
+                    },
+                  },
+                  {
+                    id: 'destination-1',
+                    kind: 'destination',
+                    destination: {
+                      accountId: 'account-1',
+                      destinationId: 'youtube',
+                      privacy: 'private',
+                    },
+                  },
+                ],
+              },
+              destinations: [
+                { accountId: 'account-1', destinationId: 'youtube', privacy: 'private' },
+              ],
+              enabled: true,
+              id: 'workflow-obs',
+              name: 'Replay saves',
+              sourceDirectory: 'C:\\OBS\\Replay Buffer',
+              titleTemplate: '{{source.title}}',
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(markup).toContain('OBS Replay Buffer folder');
+    expect(markup).toContain('C:\\OBS\\Replay Buffer');
   });
 
   it('renders saved definitions as source-to-stage-to-destination routes', () => {

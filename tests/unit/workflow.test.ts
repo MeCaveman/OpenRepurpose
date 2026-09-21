@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   JobService,
   MediaImportService,
   TransformService,
   WorkflowTransformService,
+  WorkflowTranscriptionJobHandler,
+  WorkflowTranscriptionService,
+  TranscriptionProviderRegistry,
   WorkflowService,
   renderTemplate,
   sourceItemMatchesWorkflowFilters,
@@ -18,8 +21,13 @@ import {
   SqliteSourceCursorRepository,
   SqliteWorkflowRepository,
   SqliteTransformDerivativeRepository,
+  SqliteTranscriptRepository,
 } from '@openrepurpose/db';
-import { LocalMediaFileInspector, WatchedFolderRunner } from '@openrepurpose/media';
+import {
+  LocalMediaFileInspector,
+  WatchedFolderRunner,
+  parseObsFilename,
+} from '@openrepurpose/media';
 import { createTemporaryDatabase } from '@openrepurpose/testkit';
 import type { TemporaryDatabase } from '@openrepurpose/testkit';
 
@@ -63,6 +71,13 @@ describe('watched-folder workflows', () => {
         },
       ),
     ).toBe(true);
+    expect(parseObsFilename('C:\\OBS\\Replay 2026-09-21 14-35-42 final round.mkv')).toEqual({
+      publishedAt: '2026-09-21T14:35:42',
+      title: 'final round',
+    });
+    expect(parseObsFilename('/recordings/custom replay name.webm')).toEqual({
+      title: 'custom replay name',
+    });
   });
   it('settles a growing file, imports once, and snapshots workflow metadata into the existing upload job', async () => {
     temporary = createTemporaryDatabase();
@@ -138,6 +153,145 @@ describe('watched-folder workflows', () => {
     expect(job?.input).toMatchObject({
       metadata: { title: 'episode one / Daily upload', privacy: 'unlisted' },
     });
+  });
+
+  it('keeps OBS settle state across a rename and imports optional sidecar metadata once', async () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    new SqliteAccountRepository(database).upsert({
+      id: 'account-obs',
+      provider: 'youtube',
+      externalId: 'obs-channel',
+      displayName: 'OBS Channel',
+      status: 'connected',
+      capabilities: ['youtube.video.upload'],
+      connectedAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    let now = 1_000;
+    const jobs = new JobService(new SqliteJobRepository(database), () => new Date(now));
+    const workflows = new WorkflowService(
+      new SqliteWorkflowRepository(database),
+      jobs,
+      () => new Date(now),
+    );
+    const directory = join(temporary.directory, 'OBS Replay Buffer');
+    mkdirSync(directory);
+    const growing = join(directory, 'Replay 2026-09-21 14-35-42.mkv');
+    const finalized = join(directory, 'Replay 2026-09-21 14-35-42 final moment.mkv');
+    writeFileSync(growing, 'first bytes');
+    const destination = {
+      destinationId: 'youtube' as const,
+      accountId: 'account-obs',
+      privacy: 'unlisted' as const,
+    };
+    const workflow = workflows.create({
+      name: 'OBS replay ingest',
+      sourceDirectory: directory,
+      titleTemplate: '{{source.title}}',
+      descriptionTemplate: '{{source.description}} · {{source.publishedAt}}',
+      destinations: [destination],
+      definition: {
+        schemaVersion: 1,
+        steps: [
+          {
+            id: 'source',
+            kind: 'source',
+            sourceType: 'watched_folder',
+            watchedFolder: {
+              filenameMetadata: 'obs',
+              preset: 'obs_replay_buffer',
+              settleMs: 5_000,
+              sidecarMetadata: true,
+            },
+          },
+          { id: 'destination-1', kind: 'destination', destination },
+        ],
+        edges: [{ from: 'source', to: 'destination-1' }],
+      },
+    });
+    const runner = new WatchedFolderRunner(
+      workflows,
+      new SqliteSourceCursorRepository(database),
+      new MediaImportService(
+        new LocalMediaFileInspector(),
+        { probe: async () => ({ hasAudio: true, durationSeconds: 18 }) },
+        new SqliteMediaRepository(database),
+      ),
+      { now: () => new Date(now), pollIntervalMs: 100, settleMs: 100 },
+    );
+
+    await runner.scan();
+    now = 2_000;
+    writeFileSync(growing, 'recording grew before save');
+    await runner.scan();
+    now = 5_000;
+    renameSync(growing, finalized);
+    writeFileSync(
+      join(directory, 'Replay 2026-09-21 14-35-42 final moment.json'),
+      JSON.stringify({
+        title: 'Final round comeback',
+        description: 'Saved from the stream deck',
+        publishedAt: '2026-09-21T14:35:42+03:00',
+        externalId: 'obs-replay-42',
+      }),
+    );
+    await runner.scan();
+    expect(jobs.list()).toHaveLength(0);
+
+    now = 7_001;
+    await runner.scan();
+    expect(jobs.list()).toHaveLength(1);
+    expect(jobs.list()[0]?.input).toMatchObject({
+      workflow: { id: workflow.id, name: 'OBS replay ingest' },
+      metadata: {
+        title: 'Final round comeback',
+        description: 'Saved from the stream deck · 2026-09-21T14:35:42+03:00',
+      },
+    });
+    await runner.scan();
+    expect(jobs.list()).toHaveLength(1);
+  });
+
+  it('rejects invalid watched-folder preset timing at the application boundary', () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    const destination = {
+      destinationId: 'youtube' as const,
+      accountId: 'account-1',
+      privacy: 'private' as const,
+    };
+    const workflows = new WorkflowService(
+      new SqliteWorkflowRepository(database),
+      new JobService(new SqliteJobRepository(database)),
+    );
+
+    expect(() =>
+      workflows.create({
+        name: 'Invalid OBS watcher',
+        sourceDirectory: 'C:\\OBS',
+        titleTemplate: '{{file.stem}}',
+        destinations: [destination],
+        definition: {
+          schemaVersion: 1,
+          steps: [
+            {
+              id: 'source',
+              kind: 'source',
+              sourceType: 'watched_folder',
+              watchedFolder: {
+                filenameMetadata: 'obs',
+                preset: 'obs_recording',
+                settleMs: -1,
+                sidecarMetadata: true,
+              },
+            },
+            { id: 'destination-1', kind: 'destination', destination },
+          ],
+          edges: [{ from: 'source', to: 'destination-1' }],
+        },
+      }),
+    ).toThrow('Watched-folder settle time');
   });
 
   it('persists destination configuration and creates one idempotent job per destination', () => {
@@ -366,6 +520,113 @@ describe('watched-folder workflows', () => {
     expect(new Set(publishes.map((job) => (job.input as { mediaId: string }).mediaId)).size).toBe(
       1,
     );
+  });
+
+  it('resumes a caption workflow from a reusable transcript cache without overwriting edits', async () => {
+    temporary = createTemporaryDatabase();
+    const database = temporary.database;
+    const media = new SqliteMediaRepository(database);
+    const asset = {
+      id: 'media-captioned',
+      path: 'C:\\Media\\captioned.mp4',
+      fingerprint: 'sha256:captioned',
+      sizeBytes: 10,
+      modifiedAt: new Date(0),
+      createdAt: new Date(0),
+      state: 'available' as const,
+      metadata: { hasAudio: true },
+    };
+    media.create(asset);
+    const jobs = new JobService(new SqliteJobRepository(database), () => new Date(1_000));
+    const transcripts = new SqliteTranscriptRepository(database);
+    const transcription = new WorkflowTranscriptionService(
+      transcripts,
+      jobs,
+      () => new Date(1_000),
+    );
+    const transforms = new WorkflowTransformService(
+      new SqliteTransformDerivativeRepository(database),
+      jobs,
+      { encoder: 'libx264', ffmpegVersion: 'test-ffmpeg' },
+      () => new Date(1_000),
+    );
+    const workflows = new WorkflowService(
+      new SqliteWorkflowRepository(database),
+      jobs,
+      () => new Date(1_000),
+      transforms,
+      transcription,
+    );
+    const workflow = workflows.create({
+      name: 'Captioned',
+      sourceDirectory: 'C:\\Media',
+      titleTemplate: '{{file.stem}}',
+      destinations: [{ destinationId: 'youtube', accountId: 'youtube-1', privacy: 'private' }],
+      definition: {
+        schemaVersion: 1,
+        steps: [
+          { id: 'source', kind: 'source', sourceType: 'watched_folder' },
+          {
+            id: 'speech',
+            kind: 'transcription',
+            providerId: 'fixture',
+            model: { id: 'base', version: '1' },
+          },
+          { id: 'captions', kind: 'captions', mode: 'sidecar' },
+          {
+            id: 'youtube',
+            kind: 'destination',
+            destination: { destinationId: 'youtube', accountId: 'youtube-1', privacy: 'private' },
+          },
+        ],
+        edges: [
+          { from: 'source', to: 'speech' },
+          { from: 'speech', to: 'captions' },
+          { from: 'captions', to: 'youtube' },
+        ],
+      },
+    });
+    const queued = workflows.executeWatchedMedia(workflow.id, asset);
+    expect(queued).toMatchObject({
+      destinations: [],
+      transcription: { transcriptionJobId: expect.any(String) },
+    });
+    const provider = new TranscriptionProviderRegistry([
+      {
+        id: 'fixture',
+        displayName: 'Fixture',
+        capabilities: async () => ({ cancellation: true, wordTimestamps: false }),
+        transcribe: async () => ({ cues: [{ startMs: 0, endMs: 500, text: 'Hello captions' }] }),
+      },
+    ]);
+    const transcriptionJob = jobs.list().find((job) => job.type === 'workflow.transcribe')!;
+    await new WorkflowTranscriptionJobHandler(media, transcripts, provider, {
+      now: () => new Date(2_000),
+      onCompleted: (continuation) => {
+        workflows.resumeAfterTranscription(continuation);
+      },
+    }).execute(transcriptionJob.input, {
+      attemptNumber: 1,
+      jobId: transcriptionJob.id,
+      signal: new AbortController().signal,
+    });
+    expect(transcripts.listByMediaId(asset.id)[0]).toMatchObject({
+      generatedAt: new Date(2_000),
+      cues: [{ text: 'Hello captions' }],
+    });
+    expect(jobs.list().find((job) => job.type === 'media.transform')?.input).toMatchObject({
+      derivativeId: expect.any(String),
+    });
+    const firstTranscript = transcripts.listByMediaId(asset.id)[0]!;
+    transcripts.replaceUserEditedCues(
+      firstTranscript.id,
+      firstTranscript.revision,
+      [{ startMs: 0, endMs: 500, text: 'Edited' }],
+      new Date(3_000),
+    );
+    const reused = workflows.executeWatchedMedia(workflow.id, asset);
+    expect(reused?.transcription).toEqual({ transcriptId: firstTranscript.id });
+    expect(transcripts.listByMediaId(asset.id)[0]?.cues[0]?.text).toBe('Edited');
   });
 
   it('uses the shared transform service for direct runs, inspection, and pending cancellation', () => {

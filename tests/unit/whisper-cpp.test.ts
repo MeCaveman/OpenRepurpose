@@ -229,6 +229,38 @@ process.stdout.write('whisper_print_progress_callback: progress = 100%\\n');
     expect(progress).toEqual([25, 100]);
   });
 
+  it('honors cancellation before touching local audio or model files', async () => {
+    const directory = temporaryDirectory();
+    const controller = new AbortController();
+    controller.abort();
+    const provider = new WhisperCppTranscriptionProvider({
+      executable: {
+        argsPrefix: [],
+        path: process.execPath,
+        source: 'configured',
+        version: process.version,
+      },
+      modelLocator: {
+        locate: async () => {
+          throw new Error('model lookup should not run after cancellation');
+        },
+      },
+      temporaryDirectory: join(directory, 'temp'),
+    });
+
+    await expect(
+      provider.transcribe(
+        {
+          audioPath: join(directory, 'missing audio.wav'),
+          language: 'en',
+          model: { id: 'fixture', version: 'v1' },
+          options: {},
+        },
+        { signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ code: 'WHISPER_CPP_CANCELLED' });
+  });
+
   it('cancels a live child and bounds application shutdown', async () => {
     const directory = temporaryDirectory();
     const scriptPath = join(directory, 'hang.mjs');

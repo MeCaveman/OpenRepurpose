@@ -67,8 +67,15 @@ function toWorkflowRouteData(workflow: WorkflowView): WorkflowRouteData {
     workflow.remoteSource?.connectionId.trim() ||
     'Remote source';
   const nodeState = workflow.enabled ? ('default' as const) : ('disabled' as const);
+  const sourceStep = workflow.definition?.steps.find((step) => step.kind === 'source');
+  const watchedFolderDetail =
+    sourceStep?.kind === 'source' && sourceStep.watchedFolder?.preset === 'obs_recording'
+      ? 'OBS recording folder'
+      : sourceStep?.kind === 'source' && sourceStep.watchedFolder?.preset === 'obs_replay_buffer'
+        ? 'OBS Replay Buffer folder'
+        : 'Watched folder';
   const source: WorkflowRouteNodeData = {
-    detail: workflow.remoteSource === undefined ? 'Watched folder' : 'Remote source',
+    detail: workflow.remoteSource === undefined ? watchedFolderDetail : 'Remote source',
     kind: 'source',
     label: sourceLabel,
     state: nodeState,

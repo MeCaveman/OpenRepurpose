@@ -1,6 +1,16 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, lstat, mkdir, readdir, realpath, rename, rm, statfs } from 'node:fs/promises';
+import {
+  access,
+  lstat,
+  mkdir,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  statfs,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import {
   JobExecutionError,
@@ -310,6 +320,8 @@ function pathInside(root: string, candidate: string): boolean {
 export interface TransformOutputPaths {
   readonly finalPath: string;
   readonly partialPath: string;
+  readonly sidecarFinalPath: string;
+  readonly sidecarPartialPath: string;
 }
 
 export interface TransformOutputStorage {
@@ -343,6 +355,8 @@ export class LocalTransformOutputStorage implements TransformOutputStorage {
     await Promise.all([
       rm(paths.partialPath, { force: true }),
       rm(paths.finalPath, { force: true }),
+      rm(paths.sidecarPartialPath, { force: true }),
+      rm(paths.sidecarFinalPath, { force: true }),
     ]);
     try {
       const fileSystem = await statfs(directory);
@@ -425,6 +439,8 @@ export class LocalTransformOutputStorage implements TransformOutputStorage {
     return {
       finalPath: resolve(directory, 'output.mp4'),
       partialPath: resolve(directory, 'output.partial.mp4'),
+      sidecarFinalPath: resolve(directory, 'captions.srt'),
+      sidecarPartialPath: resolve(directory, 'captions.partial.srt'),
     };
   }
 
@@ -642,6 +658,28 @@ export class TransformJobHandler implements JobHandler {
           'The transform source is missing or has changed.',
         );
       const paths = await this.storage.prepare(derivative.id, source.sizeBytes);
+      const captionSteps = [
+        ...derivative.provenance.normalizedPlan.user.steps,
+        ...(derivative.provenance.normalizedPlan.destination?.recipe.steps ?? []),
+      ].filter(
+        (step): step is Extract<typeof step, { type: 'captions' }> => step.type === 'captions',
+      );
+      const captionPaths: Record<string, string> = {};
+      if (captionSteps.length > 0) {
+        const sourceIds = new Set(captionSteps.map((step) => step.source));
+        if (sourceIds.size !== 1)
+          throw new JobExecutionError(
+            'CAPTION_SOURCE_INVALID',
+            false,
+            'A transform can render captions from only one transcript.',
+          );
+        const caption = captionSteps[0]!;
+        await writeFile(paths.sidecarPartialPath, caption.subtitle, {
+          encoding: 'utf8',
+          flag: 'wx',
+        });
+        captionPaths[caption.source] = paths.sidecarPartialPath;
+      }
       const command = compileTransformCommand({
         executable: this.executable,
         inputPath: source.path,
@@ -649,6 +687,7 @@ export class TransformJobHandler implements JobHandler {
         plan: derivative.provenance.normalizedPlan,
         sourceHasAudio: source.metadata.hasAudio,
         watermarkPaths: resolveWatermarkPaths(derivative.provenance.normalizedPlan, this.media),
+        captionPaths,
       });
       const expectedDuration = expectedDurationMillis(derivative, source.metadata.durationSeconds);
       await this.processes.run(command, {
@@ -680,6 +719,14 @@ export class TransformJobHandler implements JobHandler {
       if (context.signal.aborted)
         throw new TransformProcessError('TRANSFORM_CANCELLED', 'Transform was cancelled.', false);
       const finalized = await this.storage.finalize(paths);
+      const sidecar = captionSteps.find((step) => step.mode === 'sidecar');
+      let sidecarCaptions:
+        { readonly format: 'srt'; readonly path: string; readonly sizeBytes: number } | undefined;
+      if (sidecar !== undefined) {
+        const details = await lstat(paths.sidecarPartialPath);
+        await rename(paths.sidecarPartialPath, paths.sidecarFinalPath);
+        sidecarCaptions = { format: 'srt', path: paths.sidecarFinalPath, sizeBytes: details.size };
+      } else await rm(paths.sidecarPartialPath, { force: true });
       const output: TransformDerivativeOutput = {
         path: finalized.path,
         sizeBytes: finalized.sizeBytes,
@@ -692,6 +739,7 @@ export class TransformJobHandler implements JobHandler {
           ...(metadata.audioCodec === undefined ? {} : { audioCodec: metadata.audioCodec }),
           ...(metadata.frameRate === undefined ? {} : { frameRate: metadata.frameRate }),
         },
+        ...(sidecarCaptions === undefined ? {} : { sidecarCaptions }),
       };
       if (context.signal.aborted)
         throw new TransformProcessError('TRANSFORM_CANCELLED', 'Transform was cancelled.', false);

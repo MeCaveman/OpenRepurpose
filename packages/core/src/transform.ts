@@ -112,11 +112,33 @@ export const watermarkTransformSchema = z
   })
   .strict();
 
+const captionThemeSchema = z.enum(['clean-bottom', 'large-centered']);
+const captionModeSchema = z.enum(['burn-in', 'sidecar']);
+/**
+ * `subtitle` is an immutable, generated SRT snapshot. It is deliberately stored with the
+ * transform recipe: a queued render must not change when its editable transcript changes.
+ */
+export const captionsTransformSchema = z
+  .object({
+    type: z.literal('captions'),
+    source: nonEmptyIdentifier,
+    revision: z.number().int().nonnegative(),
+    mode: captionModeSchema,
+    theme: captionThemeSchema.default('clean-bottom'),
+    subtitle: z
+      .string()
+      .min(1)
+      .max(4_000_000)
+      .refine((value) => !value.includes('\u0000')),
+  })
+  .strict();
+
 export const transformStepSchema = z.union([
   trimTransformSchema,
   fitTransformSchema,
   audioTransformSchema,
   watermarkTransformSchema,
+  captionsTransformSchema,
 ]);
 
 export const transformOutputSchema = z
@@ -162,6 +184,7 @@ export type TrimTransform = z.output<typeof trimTransformSchema>;
 export type FitTransform = z.output<typeof fitTransformSchema>;
 export type AudioTransform = z.output<typeof audioTransformSchema>;
 export type WatermarkTransform = z.output<typeof watermarkTransformSchema>;
+export type CaptionsTransform = z.output<typeof captionsTransformSchema>;
 export type TransformStep = z.output<typeof transformStepSchema>;
 export type TransformOutput = z.output<typeof transformOutputSchema>;
 export type TransformRecipe = z.output<typeof transformRecipeSchema>;
@@ -266,6 +289,11 @@ export interface TransformDerivativeOutput {
   };
   readonly path: string;
   readonly sizeBytes: number;
+  readonly sidecarCaptions?: {
+    readonly format: 'srt';
+    readonly path: string;
+    readonly sizeBytes: number;
+  };
 }
 
 /** A durable, transport-neutral snapshot parsed from FFmpeg's key/value progress protocol. */

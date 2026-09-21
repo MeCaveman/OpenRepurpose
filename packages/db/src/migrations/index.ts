@@ -19,6 +19,7 @@ import { transformDerivativesMigration } from './0018_transform_derivatives.js';
 import { transformProgressMigration } from './0019_transform_progress.js';
 import { jobDependenciesMigration } from './0020_job_dependencies.js';
 import { transcriptsMigration } from './0021_transcripts.js';
+import { transformCaptionSidecarsMigration } from './0022_transform_caption_sidecars.js';
 import type { Migration } from './types.js';
 
 /** Ordered, immutable migration ledger. Never alter a released migration's SQL. */
@@ -44,5 +45,6 @@ export const migrations: readonly Migration[] = [
   transformProgressMigration,
   jobDependenciesMigration,
   transcriptsMigration,
+  transformCaptionSidecarsMigration,
 ];
 export type { Migration } from './types.js';

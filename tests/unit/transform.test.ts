@@ -189,6 +189,44 @@ describe('transform recipes', () => {
       ),
     ).toBe(true);
   });
+
+  it('includes immutable caption snapshots in normalized provenance and cache identity', () => {
+    const baseline = {
+      sourceFingerprint: 'sha256:source-a',
+      outputProfileVersion: 'common-mp4-v1',
+      tool: { ffmpegVersion: '8.0.1', encoder: 'libx264' },
+      plan: {
+        user: {
+          steps: [
+            {
+              type: 'captions' as const,
+              source: 'transcript-a',
+              revision: 1,
+              mode: 'sidecar' as const,
+              subtitle: '1\n00:00:00,000 --> 00:00:01,000\nHello',
+            },
+          ],
+        },
+      },
+    };
+    const changed = {
+      ...baseline,
+      plan: {
+        user: {
+          steps: [
+            {
+              ...baseline.plan.user.steps[0],
+              revision: 2,
+              subtitle: '1\n00:00:00,000 --> 00:00:01,000\nEdited',
+            },
+          ],
+        },
+      },
+    };
+    expect(createTransformCacheIdentity(baseline).cacheKey).not.toBe(
+      createTransformCacheIdentity(changed).cacheKey,
+    );
+  });
 });
 
 describe('transform derivative schema', () => {

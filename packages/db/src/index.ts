@@ -288,6 +288,8 @@ interface RawTransformDerivativeRow {
   readonly output_size_bytes: number | null;
   readonly output_video_codec: string | null;
   readonly output_width: number | null;
+  readonly sidecar_caption_path: string | null;
+  readonly sidecar_caption_size_bytes: number | null;
   readonly progress_json: string | null;
   readonly progress_updated_at: number | null;
   readonly recipe_hash: string;
@@ -322,6 +324,14 @@ function transformDerivativeFromRow(row: RawTransformDerivativeRow): TransformDe
               : { frameRate: row.output_frame_rate_milli / 1000 }),
           },
         };
+  const sidecarCaptions =
+    row.sidecar_caption_path === null || row.sidecar_caption_size_bytes === null
+      ? undefined
+      : {
+          format: 'srt' as const,
+          path: row.sidecar_caption_path,
+          sizeBytes: row.sidecar_caption_size_bytes,
+        };
   return {
     cacheKey: row.cache_key,
     createdAt: new Date(row.created_at),
@@ -340,7 +350,9 @@ function transformDerivativeFromRow(row: RawTransformDerivativeRow): TransformDe
     ...(row.completed_at === null ? {} : { completedAt: new Date(row.completed_at) }),
     ...(row.error_code === null ? {} : { errorCode: row.error_code }),
     ...(row.error_message === null ? {} : { errorMessage: row.error_message }),
-    ...(output === undefined ? {} : { output }),
+    ...(output === undefined
+      ? {}
+      : { output: { ...output, ...(sidecarCaptions === undefined ? {} : { sidecarCaptions }) } }),
     ...(row.progress_json === null
       ? {}
       : { progress: JSON.parse(row.progress_json) as TransformProgress }),
@@ -433,7 +445,7 @@ export class SqliteTransformDerivativeRepository implements TransformDerivativeR
          SET status = 'succeeded', output_path = ?, output_size_bytes = ?,
              output_duration_millis = ?, output_video_codec = ?, output_audio_codec = ?,
              output_width = ?, output_height = ?, output_frame_rate_milli = ?,
-             output_has_audio = ?, progress_json = NULL, progress_updated_at = NULL,
+             output_has_audio = ?, sidecar_caption_path = ?, sidecar_caption_size_bytes = ?, progress_json = NULL, progress_updated_at = NULL,
              updated_at = ?, completed_at = ?
          WHERE id = ? AND status = 'running'`,
       )
@@ -449,6 +461,8 @@ export class SqliteTransformDerivativeRepository implements TransformDerivativeR
           ? null
           : Math.round(output.metadata.frameRate * 1000),
         output.metadata.hasAudio ? 1 : 0,
+        output.sidecarCaptions?.path ?? null,
+        output.sidecarCaptions?.sizeBytes ?? null,
         now.getTime(),
         now.getTime(),
         id,
@@ -1140,6 +1154,15 @@ function cursorFromRow(row: RawSourceCursorRow): SourceCursor {
 /** Cursor rows retain observed signatures across a restart, enabling settling and dedupe. */
 export class SqliteSourceCursorRepository implements SourceCursorRepository {
   public constructor(private readonly database: OpenRepurposeDatabase) {}
+  public delete(workflowId: string, sourceKey: string): boolean {
+    return (
+      Number(
+        this.database.client
+          .prepare('DELETE FROM source_cursors WHERE workflow_id = ? AND source_key = ?')
+          .run(workflowId, sourceKey).changes,
+      ) === 1
+    );
+  }
   public find(workflowId: string, sourceKey: string): SourceCursor | undefined {
     const row = this.database.client
       .prepare('SELECT * FROM source_cursors WHERE workflow_id = ? AND source_key = ?')

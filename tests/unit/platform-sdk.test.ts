@@ -150,6 +150,21 @@ describe('source adapter contract', () => {
         ],
       },
       { cursor: null, hasMore: true, items: [] },
+      {
+        cursor: null,
+        hasMore: false,
+        items: [
+          {
+            externalId: 'missing-locator',
+            media: {
+              availability: 'available',
+              resolutionStrategies: ['external_downloader'],
+              rightsRequirement: 'explicit_confirmation',
+            },
+            metadata: {},
+          },
+        ],
+      },
     ];
 
     for (const page of invalidPages) expect(() => validateSourcePollResult(page)).toThrow();

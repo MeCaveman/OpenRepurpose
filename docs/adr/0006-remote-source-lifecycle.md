@@ -55,7 +55,9 @@ source item. Reordered pages and cursor rollback are therefore safe.
 
 The generic source contract uses JSON-serializable metadata, opaque cursors, RFC 3339 publication
 timestamps, and rejects blank or duplicate external IDs within a page. Media resolution is not part
-of this contract and remains behind the later `MediaResolver` boundary.
+of this contract and remains behind the later `MediaResolver` boundary. ADR 0009 further separates
+optional external-downloader infrastructure beneath that resolver boundary; source adapters only
+provide a generic locator when advertising that resolution strategy.
 
 ### Observed state is not completed state
 

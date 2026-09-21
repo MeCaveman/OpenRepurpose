@@ -52,6 +52,8 @@ export const transformDerivatives = sqliteTable(
     outputHeight: integer('output_height'),
     outputFrameRateMilli: integer('output_frame_rate_milli'),
     outputHasAudio: integer('output_has_audio', { mode: 'boolean' }),
+    sidecarCaptionPath: text('sidecar_caption_path'),
+    sidecarCaptionSizeBytes: integer('sidecar_caption_size_bytes'),
     progressJson: text('progress_json'),
     progressUpdatedAt: integer('progress_updated_at', { mode: 'timestamp_ms' }),
     errorCode: text('error_code'),
