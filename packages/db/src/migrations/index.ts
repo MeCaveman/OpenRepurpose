@@ -18,6 +18,7 @@ import { workflowExecutionPlansMigration } from './0017_workflow_execution_plans
 import { transformDerivativesMigration } from './0018_transform_derivatives.js';
 import { transformProgressMigration } from './0019_transform_progress.js';
 import { jobDependenciesMigration } from './0020_job_dependencies.js';
+import { transcriptsMigration } from './0021_transcripts.js';
 import type { Migration } from './types.js';
 
 /** Ordered, immutable migration ledger. Never alter a released migration's SQL. */
@@ -42,5 +43,6 @@ export const migrations: readonly Migration[] = [
   transformDerivativesMigration,
   transformProgressMigration,
   jobDependenciesMigration,
+  transcriptsMigration,
 ];
 export type { Migration } from './types.js';

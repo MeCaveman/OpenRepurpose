@@ -123,6 +123,67 @@ export const transformDerivatives = sqliteTable(
   ],
 );
 
+export const transcripts = sqliteTable(
+  'transcripts',
+  {
+    id: text('id').primaryKey(),
+    mediaId: text('media_id').references(() => mediaAssets.id, { onDelete: 'restrict' }),
+    derivativeId: text('derivative_id').references(() => transformDerivatives.id, {
+      onDelete: 'restrict',
+    }),
+    sourceAudioFingerprint: text('source_audio_fingerprint').notNull(),
+    cacheKey: text('cache_key').notNull(),
+    providerId: text('provider_id').notNull(),
+    modelId: text('model_id').notNull(),
+    modelVersion: text('model_version').notNull(),
+    language: text('language'),
+    optionsJson: text('options_json').notNull(),
+    hasUserEdits: integer('has_user_edits', { mode: 'boolean' }).notNull().default(false),
+    revision: integer('revision').notNull().default(0),
+    generatedAt: integer('generated_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('transcripts_cache_key_idx').on(table.cacheKey),
+    index('transcripts_media_created_idx').on(table.mediaId, table.createdAt),
+    index('transcripts_derivative_created_idx').on(table.derivativeId, table.createdAt),
+    check(
+      'transcripts_source_check',
+      sql`(${table.mediaId} IS NULL) <> (${table.derivativeId} IS NULL)`,
+    ),
+    check('transcripts_options_json_check', sql`json_valid(${table.optionsJson})`),
+    check('transcripts_revision_check', sql`${table.revision} >= 0`),
+  ],
+);
+
+export const transcriptCues = sqliteTable(
+  'transcript_cues',
+  {
+    transcriptId: text('transcript_id')
+      .notNull()
+      .references(() => transcripts.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    startMillis: integer('start_millis').notNull(),
+    endMillis: integer('end_millis').notNull(),
+    text: text('text').notNull(),
+    wordsJson: text('words_json'),
+  },
+  (table) => [
+    uniqueIndex('transcript_cues_transcript_position_idx').on(table.transcriptId, table.position),
+    check('transcript_cues_position_check', sql`${table.position} >= 0`),
+    check(
+      'transcript_cues_time_check',
+      sql`${table.startMillis} >= 0 AND ${table.endMillis} > ${table.startMillis}`,
+    ),
+    check('transcript_cues_text_check', sql`length(trim(${table.text})) > 0`),
+    check(
+      'transcript_cues_words_json_check',
+      sql`${table.wordsJson} IS NULL OR json_valid(${table.wordsJson})`,
+    ),
+  ],
+);
+
 export const jobs = sqliteTable(
   'jobs',
   {

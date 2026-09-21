@@ -25,6 +25,7 @@ export type {
   SourceMediaResolutionStrategy,
 } from '@openrepurpose/platform-sdk';
 export * from './schedule.js';
+export * from './transcription.js';
 export * from './transform.js';
 
 export type MediaAssetState = 'available' | 'missing';

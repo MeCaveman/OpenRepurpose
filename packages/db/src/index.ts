@@ -7,6 +7,7 @@ import { drizzle } from 'drizzle-orm/node-sqlite';
 import {
   compileWorkflowExecutionPlan,
   serializeNormalizedTransformPlan,
+  transcriptCueSchema,
   transformPlanSchema,
 } from '@openrepurpose/core';
 import type {
@@ -72,6 +73,13 @@ import type {
   TransformDerivativeRepository,
   TransformDerivativeStatus,
   TransformProgress,
+  Transcript,
+  TranscriptCue,
+  TranscriptRepository,
+  TranscriptSource,
+  TranscriptionOptionValue,
+  ReserveTranscriptInput,
+  ReserveTranscriptResult,
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
 import type { Migration } from './migrations/types.js';
@@ -99,6 +107,8 @@ export {
   sourceMediaResolutions,
   sourceWorkflowExecutions,
   transformDerivatives,
+  transcripts,
+  transcriptCues,
   workflowRemoteSources,
   workflows,
   workflowDestinations,
@@ -547,6 +557,204 @@ export class SqliteTransformDerivativeRepository implements TransformDerivativeR
     const derivative = this.findById(id);
     if (derivative === undefined) throw new Error('Transform derivative does not exist.');
     return derivative;
+  }
+}
+
+interface RawTranscriptRow {
+  readonly cache_key: string;
+  readonly created_at: number;
+  readonly derivative_id: string | null;
+  readonly generated_at: number | null;
+  readonly has_user_edits: number;
+  readonly id: string;
+  readonly language: string | null;
+  readonly media_id: string | null;
+  readonly model_id: string;
+  readonly model_version: string;
+  readonly options_json: string;
+  readonly provider_id: string;
+  readonly revision: number;
+  readonly source_audio_fingerprint: string;
+  readonly updated_at: number;
+}
+
+interface RawTranscriptCueRow {
+  readonly end_millis: number;
+  readonly position: number;
+  readonly start_millis: number;
+  readonly text: string;
+  readonly words_json: string | null;
+}
+
+function transcriptFromRows(
+  row: RawTranscriptRow,
+  cues: readonly RawTranscriptCueRow[],
+): Transcript {
+  const source: TranscriptSource =
+    row.media_id === null
+      ? { kind: 'derivative', derivativeId: requiredValue(row.derivative_id, 'derivative ID') }
+      : { kind: 'media', mediaId: row.media_id };
+  return {
+    cacheKey: row.cache_key,
+    createdAt: new Date(row.created_at),
+    cues: cues.map((cue) =>
+      transcriptCueSchema.parse({
+        endMs: cue.end_millis,
+        startMs: cue.start_millis,
+        text: cue.text,
+        ...(cue.words_json === null ? {} : { words: JSON.parse(cue.words_json) }),
+      }),
+    ),
+    ...(row.generated_at === null ? {} : { generatedAt: new Date(row.generated_at) }),
+    hasUserEdits: row.has_user_edits === 1,
+    id: row.id,
+    ...(row.language === null ? {} : { language: row.language }),
+    model: { id: row.model_id, version: row.model_version },
+    options: JSON.parse(row.options_json) as Readonly<Record<string, TranscriptionOptionValue>>,
+    providerId: row.provider_id,
+    revision: row.revision,
+    source,
+    sourceAudioFingerprint: row.source_audio_fingerprint,
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+function requiredValue(value: string | null, label: string): string {
+  if (value === null) throw new Error(`Transcript is missing its ${label}.`);
+  return value;
+}
+
+/** Atomic SQLite transcript cache reservation and cue-edit persistence. */
+export class SqliteTranscriptRepository implements TranscriptRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public reserve(input: ReserveTranscriptInput): ReserveTranscriptResult {
+    const source =
+      input.source.kind === 'media'
+        ? { mediaId: input.source.mediaId, derivativeId: null }
+        : { mediaId: null, derivativeId: input.source.derivativeId };
+    const result = this.database.client
+      .prepare(
+        `INSERT OR IGNORE INTO transcripts (
+          id, media_id, derivative_id, source_audio_fingerprint, cache_key, provider_id,
+          model_id, model_version, language, options_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.id,
+        source.mediaId,
+        source.derivativeId,
+        input.identity.sourceAudioFingerprint,
+        input.identity.cacheKey,
+        input.identity.providerId,
+        input.identity.model.id,
+        input.identity.model.version,
+        input.identity.language ?? null,
+        JSON.stringify(input.identity.normalizedOptions),
+        input.now.getTime(),
+        input.now.getTime(),
+      );
+    const transcript = this.findByCacheKey(input.identity.cacheKey);
+    if (transcript === undefined) throw new Error('Transcript reservation failed.');
+    return { created: Number(result.changes) === 1, transcript };
+  }
+
+  public findById(id: string): Transcript | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM transcripts WHERE id = ?')
+      .get(id) as unknown as RawTranscriptRow | undefined;
+    return row === undefined ? undefined : this.withCues(row);
+  }
+
+  public findByCacheKey(cacheKey: string): Transcript | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM transcripts WHERE cache_key = ?')
+      .get(cacheKey) as unknown as RawTranscriptRow | undefined;
+    return row === undefined ? undefined : this.withCues(row);
+  }
+
+  public replaceGeneratedCues(id: string, cues: readonly TranscriptCue[], now: Date): Transcript {
+    const normalized = cues.map((cue) => transcriptCueSchema.parse(cue));
+    this.database.client.exec('BEGIN IMMEDIATE;');
+    try {
+      const update = this.database.client
+        .prepare(
+          `UPDATE transcripts
+           SET generated_at = ?, updated_at = ?, revision = revision + 1
+           WHERE id = ? AND has_user_edits = 0`,
+        )
+        .run(now.getTime(), now.getTime(), id);
+      if (Number(update.changes) !== 1)
+        throw new Error('Generated cues cannot overwrite a user-edited or missing transcript.');
+      this.database.client.prepare('DELETE FROM transcript_cues WHERE transcript_id = ?').run(id);
+      const insert = this.database.client.prepare(
+        `INSERT INTO transcript_cues (
+          transcript_id, position, start_millis, end_millis, text, words_json
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      normalized.forEach((cue, position) =>
+        insert.run(
+          id,
+          position,
+          cue.startMs,
+          cue.endMs,
+          cue.text,
+          cue.words === undefined ? null : JSON.stringify(cue.words),
+        ),
+      );
+      this.database.client.exec('COMMIT;');
+    } catch (error) {
+      this.database.client.exec('ROLLBACK;');
+      throw error;
+    }
+    return this.required(id);
+  }
+
+  public updateCue(id: string, position: number, cue: TranscriptCue, now: Date): Transcript {
+    const normalized = transcriptCueSchema.parse(cue);
+    this.database.client.exec('BEGIN IMMEDIATE;');
+    try {
+      const cueUpdate = this.database.client
+        .prepare(
+          `UPDATE transcript_cues
+           SET start_millis = ?, end_millis = ?, text = ?, words_json = ?
+           WHERE transcript_id = ? AND position = ?`,
+        )
+        .run(
+          normalized.startMs,
+          normalized.endMs,
+          normalized.text,
+          normalized.words === undefined ? null : JSON.stringify(normalized.words),
+          id,
+          position,
+        );
+      if (Number(cueUpdate.changes) !== 1) throw new Error('Transcript cue does not exist.');
+      this.database.client
+        .prepare(
+          `UPDATE transcripts
+           SET has_user_edits = 1, revision = revision + 1, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(now.getTime(), id);
+      this.database.client.exec('COMMIT;');
+    } catch (error) {
+      this.database.client.exec('ROLLBACK;');
+      throw error;
+    }
+    return this.required(id);
+  }
+
+  private withCues(row: RawTranscriptRow): Transcript {
+    const cues = this.database.client
+      .prepare('SELECT * FROM transcript_cues WHERE transcript_id = ? ORDER BY position')
+      .all(row.id) as unknown as RawTranscriptCueRow[];
+    return transcriptFromRows(row, cues);
+  }
+
+  private required(id: string): Transcript {
+    const transcript = this.findById(id);
+    if (transcript === undefined) throw new Error('Transcript does not exist.');
+    return transcript;
   }
 }
 
