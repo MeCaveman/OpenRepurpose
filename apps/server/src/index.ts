@@ -436,4 +436,11 @@ if (isExecutedDirectly())
   });
 export { assertLocalOnly, buildServer } from './app.js';
 export { createApiV1OpenApiDocument } from './api-v1.js';
+export {
+  createMcpServer,
+  McpServer,
+  serveMcpStdio,
+  type McpRequest,
+  type McpServiceOptions,
+} from './mcp.js';
 export { loadOrCreateSessionKey } from './session-key.js';
