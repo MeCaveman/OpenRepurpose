@@ -41,6 +41,63 @@ export const apiIdempotencyRecords = sqliteTable(
   ],
 );
 
+export const webhookDestinations = sqliteTable(
+  'webhook_destinations',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    url: text('url').notNull(),
+    eventsJson: text('events_json').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    check('webhook_destinations_events_json_check', sql`json_valid(${table.eventsJson})`),
+  ],
+);
+
+export const webhookDeliveries = sqliteTable(
+  'webhook_deliveries',
+  {
+    id: text('id').primaryKey(),
+    destinationId: text('destination_id')
+      .notNull()
+      .references(() => webhookDestinations.id, { onDelete: 'restrict' }),
+    jobId: text('job_id').references(() => jobs.id, { onDelete: 'restrict' }),
+    eventId: text('event_id').notNull(),
+    eventType: text('event_type', {
+      enum: [
+        'job.failed',
+        'job.succeeded',
+        'workflow.execution.completed',
+        'workflow.execution.started',
+      ],
+    }).notNull(),
+    url: text('url').notNull(),
+    payload: text('payload').notNull(),
+    status: text('status', {
+      enum: ['pending', 'running', 'retrying', 'succeeded', 'failed'],
+    }).notNull(),
+    lastResponseStatus: integer('last_response_status'),
+    lastErrorCode: text('last_error_code'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('webhook_deliveries_job_id_idx').on(table.jobId),
+    uniqueIndex('webhook_deliveries_destination_event_idx').on(table.destinationId, table.eventId),
+    index('webhook_deliveries_status_created_idx').on(table.status, table.createdAt),
+    check('webhook_deliveries_payload_json_check', sql`json_valid(${table.payload})`),
+    check(
+      'webhook_deliveries_completion_check',
+      sql`(${table.status} IN ('succeeded', 'failed') AND ${table.completedAt} IS NOT NULL)
+        OR (${table.status} IN ('pending', 'running', 'retrying') AND ${table.completedAt} IS NULL)`,
+    ),
+  ],
+);
+
 export const mediaAssets = sqliteTable('media_assets', {
   id: text('id').primaryKey(),
   path: text('path').notNull(),

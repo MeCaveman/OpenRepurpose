@@ -53,6 +53,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0023_twitch_oauth' },
       { id: '0024_kick_oauth' },
       { id: '0025_api_v1' },
+      { id: '0026_webhooks' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -73,13 +74,21 @@ describe('SQLite migrations and repositories', () => {
       expect(
         database.client
           .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('api_tokens', 'api_idempotency_records') ORDER BY name",
+            `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
+              'api_tokens', 'api_idempotency_records', 'webhook_destinations',
+              'webhook_deliveries'
+            ) ORDER BY name`,
           )
           .all(),
-      ).toEqual([{ name: 'api_idempotency_records' }, { name: 'api_tokens' }]);
+      ).toEqual([
+        { name: 'api_idempotency_records' },
+        { name: 'api_tokens' },
+        { name: 'webhook_deliveries' },
+        { name: 'webhook_destinations' },
+      ]);
       expect(
         database.client.prepare('SELECT id FROM __openrepurpose_migrations ORDER BY id DESC').get(),
-      ).toEqual({ id: '0025_api_v1' });
+      ).toEqual({ id: '0026_webhooks' });
     } finally {
       database.close();
       rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
@@ -160,7 +169,7 @@ describe('SQLite migrations and repositories', () => {
 
     expect(
       fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toHaveLength(25);
+    ).toHaveLength(26);
     expect(
       fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
     ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);

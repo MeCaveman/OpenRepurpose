@@ -13,6 +13,7 @@ import {
   renderTemplate,
   sourceItemMatchesWorkflowFilters,
   validateTemplate,
+  type WebhookEvent,
 } from '@openrepurpose/core';
 import {
   SqliteAccountRepository,
@@ -94,10 +95,14 @@ describe('watched-folder workflows', () => {
     });
     let now = 1_000;
     const jobs = new JobService(new SqliteJobRepository(database), () => new Date(now));
+    const events: WebhookEvent[] = [];
     const workflows = new WorkflowService(
       new SqliteWorkflowRepository(database),
       jobs,
       () => new Date(now),
+      undefined,
+      undefined,
+      { publish: (event) => events.push(event) },
     );
     const directory = join(temporary.directory, 'OBS renders');
     mkdirSync(directory);
@@ -139,6 +144,16 @@ describe('watched-folder workflows', () => {
         privacy: 'unlisted',
       },
       workflow: { id: workflow.id, name: 'Daily upload' },
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      'workflow.execution.started',
+      'workflow.execution.completed',
+    ]);
+    expect(JSON.stringify(events)).not.toContain(directory);
+    expect(events[1]?.data).toMatchObject({
+      destinationCount: 1,
+      jobIds: [job?.id],
+      workflowId: workflow.id,
     });
     await runner.scan();
     expect(jobs.list()).toHaveLength(1);

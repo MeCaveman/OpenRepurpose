@@ -32,6 +32,7 @@ import {
   type WorkflowTranscriptionService,
 } from './transcription.js';
 import type { CaptionsTransform } from './transform.js';
+import type { ApplicationEventPublisher, WebhookEvent } from './webhooks.js';
 export type {
   SourceItemObservation,
   SourceJsonValue,
@@ -44,6 +45,7 @@ export * from './transcription.js';
 export * from './transform.js';
 export * from './workflow-presets.js';
 export * from './api-access.js';
+export * from './webhooks.js';
 
 export type MediaAssetState = 'available' | 'missing';
 
@@ -2731,6 +2733,7 @@ export class WorkflowService {
     private readonly now: () => Date = () => new Date(),
     private readonly transforms?: WorkflowTransformService,
     private readonly transcriptions?: WorkflowTranscriptionService,
+    private readonly events?: ApplicationEventPublisher,
   ) {}
 
   public create(input: WorkflowInput): Workflow {
@@ -2826,6 +2829,33 @@ export class WorkflowService {
     intents?: readonly { readonly destinationKey: string; readonly idempotencyKey: string }[],
   ): WorkflowExecutionResult {
     validateWorkflowExecutionPlan(workflow);
+    const executionId = randomUUID();
+    this.publishEvent({
+      data: { executionId, workflowId: workflow.id },
+      id: randomUUID(),
+      occurredAt: this.now(),
+      type: 'workflow.execution.started',
+    });
+    const completed = (result: WorkflowExecutionResult): WorkflowExecutionResult => {
+      const jobIds = [
+        ...result.destinations.map((destination) => destination.job.id),
+        ...(result.transcription?.transcriptionJobId === undefined
+          ? []
+          : [result.transcription.transcriptionJobId]),
+      ];
+      this.publishEvent({
+        data: {
+          destinationCount: result.destinations.length,
+          executionId,
+          jobIds,
+          workflowId: workflow.id,
+        },
+        id: randomUUID(),
+        occurredAt: this.now(),
+        type: 'workflow.execution.completed',
+      });
+      return result;
+    };
     const name = media.path.replace(/^.*[\\/]/, '');
     const stem = name.replace(/\.[^.]*$/, '');
     const duration =
@@ -2874,7 +2904,7 @@ export class WorkflowService {
         } as unknown as JsonValue,
       });
       if (prepared.transcriptionJobId !== undefined)
-        return {
+        return completed({
           workflowId: workflow.id,
           failurePolicy: workflow.failurePolicy,
           destinations: [],
@@ -2882,7 +2912,7 @@ export class WorkflowService {
             transcriptId: prepared.transcript.id,
             transcriptionJobId: prepared.transcriptionJobId,
           },
-        };
+        });
       transcript = prepared.transcript;
     }
     const captionSteps = workflow.steps.filter(
@@ -3046,12 +3076,20 @@ export class WorkflowService {
         return { destinationId: destination.destinationId, destinationKey, ...result };
       },
     );
-    return {
+    return completed({
       workflowId: workflow.id,
       failurePolicy: workflow.failurePolicy,
       destinations,
       ...(transcript === undefined ? {} : { transcription: { transcriptId: transcript.id } }),
-    };
+    });
+  }
+
+  private publishEvent(event: WebhookEvent): void {
+    try {
+      this.events?.publish(event);
+    } catch {
+      // Outbound notifications cannot change an already-valid workflow dispatch.
+    }
   }
 
   private destinationIdempotencyKey(

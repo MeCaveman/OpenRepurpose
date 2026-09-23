@@ -28,6 +28,9 @@ import {
   WorkflowTransformService,
   WorkflowService,
   WorkflowPresetService,
+  WebhookDeliveryJobHandler,
+  WebhookService,
+  webhookEventForSettledJob,
   type JobHandler,
 } from '@openrepurpose/core';
 import {
@@ -49,6 +52,7 @@ import {
   SqliteTranscriptRepository,
   SqliteScheduleRepository,
   SqliteWorkflowRepository,
+  SqliteWebhookRepository,
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
@@ -91,6 +95,7 @@ import {
 } from '@openrepurpose/meta';
 import { assertLocalOnly, buildServer } from './app.js';
 import { loadOrCreateSessionKey } from './session-key.js';
+import { NodeWebhookTransport, WebhookNetworkPolicy } from './webhooks.js';
 
 export async function startServer(): Promise<void> {
   const config = loadApplicationConfig();
@@ -151,6 +156,16 @@ export async function startServer(): Promise<void> {
     config.appUrl,
   );
   const jobService = new JobService(jobRepository);
+  const webhookRepository = new SqliteWebhookRepository(database);
+  const webhookNetworkPolicy = new WebhookNetworkPolicy();
+  const webhookService = new WebhookService(
+    webhookRepository,
+    jobService,
+    secretStore,
+    webhookNetworkPolicy,
+    config.webhooks.maxAttempts,
+  );
+  await webhookService.configure(config.webhooks.destinations);
   const mediaImportService =
     executables.ffprobe === undefined
       ? undefined
@@ -208,6 +223,7 @@ export async function startServer(): Promise<void> {
     undefined,
     workflowTransformService,
     workflowTranscriptionService,
+    webhookService,
   );
   const transformOutputStorage = new LocalTransformOutputStorage(config.paths.dataDirectory);
   const transformProcessRunner = new FfmpegProcessRunner(config.transformRunner);
@@ -272,6 +288,16 @@ export async function startServer(): Promise<void> {
   );
   const schedulerLoop = new SchedulerLoop(scheduleService);
   const jobHandlers: JobHandler[] = [
+    new WebhookDeliveryJobHandler(
+      webhookRepository,
+      secretStore,
+      new NodeWebhookTransport(webhookNetworkPolicy, config.webhooks),
+      {
+        maxAttempts: config.webhooks.maxAttempts,
+        retryBaseMs: config.webhooks.retryBaseMs,
+        retryMaxMs: config.webhooks.retryMaxMs,
+      },
+    ),
     new YouTubeUploadJobHandler(
       transformMediaRepository,
       new SqliteDestinationJobRepository(database),
@@ -328,9 +354,14 @@ export async function startServer(): Promise<void> {
     );
   const jobRunner = new JobRunner(jobRepository, jobHandlers, {
     ...config.jobRunner,
-    ...(sourceCoordinator === undefined ? {} : { onJobSettled: () => sourceCoordinator.recover() }),
+    onJobSettled: (job) => {
+      sourceCoordinator?.recover();
+      const event = webhookEventForSettledJob(job);
+      if (event !== undefined) webhookService.publish(event);
+    },
   });
   sourceCoordinator?.recover();
+  webhookService.recover();
   jobRunner.start();
   sourcePollingRunner.start();
   schedulerLoop.start();

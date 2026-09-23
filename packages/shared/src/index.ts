@@ -45,6 +45,27 @@ export interface ApplicationConfig {
     readonly stallTimeoutMs: number;
     readonly timeoutMs: number;
   };
+  readonly webhooks: {
+    readonly connectTimeoutMs: number;
+    readonly destinations: readonly {
+      readonly events: readonly (
+        | 'job.failed'
+        | 'job.succeeded'
+        | 'workflow.execution.completed'
+        | 'workflow.execution.started'
+      )[];
+      readonly id: string;
+      readonly name: string;
+      /** Startup bootstrap value copied into SecretStore by server composition. */
+      readonly secret: string;
+      readonly url: URL;
+    }[];
+    readonly maxAttempts: number;
+    readonly maxResponseBytes: number;
+    readonly retryBaseMs: number;
+    readonly retryMaxMs: number;
+    readonly timeoutMs: number;
+  };
   readonly watchedFolder?: { readonly pollIntervalMs: number; readonly settleMs: number };
   readonly paths: ApplicationPaths;
   readonly port: number;
@@ -96,6 +117,66 @@ function obsWebSocketUrlSchema() {
           code: 'custom',
           message: 'must use wss for a non-loopback OBS endpoint',
         });
+    });
+}
+
+const webhookEventSchema = z.enum([
+  'job.failed',
+  'job.succeeded',
+  'workflow.execution.completed',
+  'workflow.execution.started',
+]);
+
+const webhookDestinationSchema = z
+  .object({
+    events: z.array(webhookEventSchema).min(1).max(4),
+    id: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+    name: z.string().trim().min(1).max(120),
+    secret: z.string().min(16).max(4_096),
+    url: z
+      .string()
+      .trim()
+      .url()
+      .superRefine((value, context) => {
+        const url = new URL(value);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:')
+          context.addIssue({ code: 'custom', message: 'must use http or https' });
+        if (url.username.length > 0 || url.password.length > 0)
+          context.addIssue({ code: 'custom', message: 'must not embed credentials' });
+        if (url.hash.length > 0)
+          context.addIssue({ code: 'custom', message: 'must not include a fragment' });
+      }),
+  })
+  .strict();
+
+function webhookDestinationsSchema() {
+  return z
+    .string()
+    .default('[]')
+    .transform((value, context) => {
+      try {
+        return JSON.parse(value) as unknown;
+      } catch {
+        context.addIssue({ code: 'custom', message: 'must be valid JSON' });
+        return z.NEVER;
+      }
+    })
+    .pipe(z.array(webhookDestinationSchema).max(20))
+    .superRefine((destinations, context) => {
+      const ids = new Set<string>();
+      for (const [index, destination] of destinations.entries()) {
+        if (ids.has(destination.id))
+          context.addIssue({
+            code: 'custom',
+            message: 'destination IDs must be unique',
+            path: [index, 'id'],
+          });
+        ids.add(destination.id);
+      }
     });
 }
 
@@ -172,6 +253,13 @@ export function loadApplicationConfig(
       OBS_WEBSOCKET_URL: obsWebSocketUrlSchema().optional(),
       OBS_WEBSOCKET_PASSWORD: z.string().max(4_096).optional(),
       OBS_WEBSOCKET_RECONNECT_MS: z.coerce.number().int().min(1_000).max(300_000).default(5_000),
+      WEBHOOK_DESTINATIONS_JSON: webhookDestinationsSchema(),
+      WEBHOOK_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(2_000),
+      WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
+      WEBHOOK_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1_024).max(1_048_576).default(65_536),
+      WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(4),
+      WEBHOOK_RETRY_BASE_MS: z.coerce.number().int().min(0).max(3_600_000).default(1_000),
+      WEBHOOK_RETRY_MAX_MS: z.coerce.number().int().min(0).max(86_400_000).default(60_000),
     })
     .refine((values) => values.JOB_RETRY_MAX_MS >= values.JOB_RETRY_BASE_MS, {
       message: 'must be greater than or equal to JOB_RETRY_BASE_MS',
@@ -182,6 +270,14 @@ export function loadApplicationConfig(
         values.OBS_WEBSOCKET_URL !== undefined || values.OBS_WEBSOCKET_PASSWORD === undefined,
       { message: 'requires OBS_WEBSOCKET_URL', path: ['OBS_WEBSOCKET_PASSWORD'] },
     )
+    .refine((values) => values.WEBHOOK_CONNECT_TIMEOUT_MS <= values.WEBHOOK_TIMEOUT_MS, {
+      message: 'must be less than or equal to WEBHOOK_TIMEOUT_MS',
+      path: ['WEBHOOK_CONNECT_TIMEOUT_MS'],
+    })
+    .refine((values) => values.WEBHOOK_RETRY_MAX_MS >= values.WEBHOOK_RETRY_BASE_MS, {
+      message: 'must be greater than or equal to WEBHOOK_RETRY_BASE_MS',
+      path: ['WEBHOOK_RETRY_MAX_MS'],
+    })
     .parse(environment);
   const defaults = resolveApplicationPaths(environment, runtime);
   const paths: ApplicationPaths = {
@@ -234,6 +330,19 @@ export function loadApplicationConfig(
       killGraceMs: parsed.TRANSFORM_KILL_GRACE_MS,
       stallTimeoutMs: parsed.TRANSFORM_STALL_TIMEOUT_MS,
       timeoutMs: parsed.TRANSFORM_TIMEOUT_MS,
+    },
+    webhooks: {
+      connectTimeoutMs: parsed.WEBHOOK_CONNECT_TIMEOUT_MS,
+      destinations: parsed.WEBHOOK_DESTINATIONS_JSON.map((destination) => ({
+        ...destination,
+        events: [...new Set(destination.events)],
+        url: new URL(destination.url),
+      })),
+      maxAttempts: parsed.WEBHOOK_MAX_ATTEMPTS,
+      maxResponseBytes: parsed.WEBHOOK_MAX_RESPONSE_BYTES,
+      retryBaseMs: parsed.WEBHOOK_RETRY_BASE_MS,
+      retryMaxMs: parsed.WEBHOOK_RETRY_MAX_MS,
+      timeoutMs: parsed.WEBHOOK_TIMEOUT_MS,
     },
     watchedFolder: {
       pollIntervalMs: parsed.WATCH_POLL_INTERVAL_MS,

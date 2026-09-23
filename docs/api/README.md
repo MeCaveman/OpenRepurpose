@@ -1,5 +1,27 @@
 # Local API v1
 
+## Outbound event webhooks
+
+Outbound webhooks are configured by `WEBHOOK_DESTINATIONS_JSON`; an empty or absent array disables
+all destinations. Every entry is an explicit allowlist record, including localhost and private
+network targets. Source metadata and workflow templates cannot select or override the URL.
+
+Supported subscriptions are `job.succeeded`, `job.failed`, `workflow.execution.started`, and
+`workflow.execution.completed`. The configured secret is copied into `SecretStore` at startup and
+is never written to SQLite. Deliveries include:
+
+- `X-OpenRepurpose-Delivery`: durable delivery ID;
+- `X-OpenRepurpose-Event`: event type;
+- `X-OpenRepurpose-Timestamp`: Unix timestamp in seconds;
+- `X-OpenRepurpose-Signature`: `v1=` plus the hexadecimal HMAC-SHA256 of
+  `<timestamp>.<delivery-id>.<exact-body>`.
+
+Delivery uses the persistent job runner and its attempt history. Redirects are not followed. DNS is
+resolved and pinned on every attempt, the connected peer is revalidated, and unspecified,
+link-local, multicast, reserved/documentation, carrier-grade NAT, and known metadata targets are
+always rejected. Response bodies, timeouts, attempts, and retry delays are bounded by the
+`WEBHOOK_*` settings in `.env.example`.
+
 OpenRepurpose exposes its versioned local API at `/api/v1`. The generated OpenAPI 3.1 document is
 available without authentication at:
 

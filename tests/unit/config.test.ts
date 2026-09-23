@@ -122,6 +122,65 @@ describe('application configuration', () => {
     expect(config.obsWebSocket?.url.toString()).toBe('ws://127.0.0.1:4455/');
   });
 
+  it('loads an explicit webhook allowlist with bounded delivery settings', () => {
+    const config = loadApplicationConfig(
+      {
+        WEBHOOK_DESTINATIONS_JSON: JSON.stringify([
+          {
+            id: 'local-automation',
+            name: 'Local automation',
+            url: 'http://127.0.0.1:8787/events',
+            events: ['job.succeeded', 'job.succeeded', 'job.failed'],
+            secret: 'a-long-random-secret',
+          },
+        ]),
+        WEBHOOK_CONNECT_TIMEOUT_MS: '1500',
+        WEBHOOK_TIMEOUT_MS: '4000',
+        WEBHOOK_MAX_ATTEMPTS: '5',
+      },
+      linuxRuntime,
+    );
+    expect(config.webhooks).toMatchObject({
+      connectTimeoutMs: 1_500,
+      maxAttempts: 5,
+      timeoutMs: 4_000,
+    });
+    expect(config.webhooks.destinations[0]).toMatchObject({
+      events: ['job.succeeded', 'job.failed'],
+      id: 'local-automation',
+      secret: 'a-long-random-secret',
+    });
+    expect(config.webhooks.destinations[0]?.url.toString()).toBe('http://127.0.0.1:8787/events');
+  });
+
+  it('rejects malformed or unsafe webhook bootstrap configuration', () => {
+    expect(() =>
+      loadApplicationConfig({ WEBHOOK_DESTINATIONS_JSON: 'not-json' }, linuxRuntime),
+    ).toThrow('must be valid JSON');
+    expect(() =>
+      loadApplicationConfig(
+        {
+          WEBHOOK_DESTINATIONS_JSON: JSON.stringify([
+            {
+              id: 'hook',
+              name: 'Hook',
+              url: 'https://user:password@example.test/events',
+              events: ['job.failed'],
+              secret: 'a-long-random-secret',
+            },
+          ]),
+        },
+        linuxRuntime,
+      ),
+    ).toThrow('must not embed credentials');
+    expect(() =>
+      loadApplicationConfig(
+        { WEBHOOK_CONNECT_TIMEOUT_MS: '5000', WEBHOOK_TIMEOUT_MS: '1000' },
+        linuxRuntime,
+      ),
+    ).toThrow('must be less than or equal to WEBHOOK_TIMEOUT_MS');
+  });
+
   it('rejects relative path overrides', () => {
     expect(() => loadApplicationConfig({ APP_DATA_DIR: 'relative-data' }, linuxRuntime)).toThrow(
       'must be an absolute path',

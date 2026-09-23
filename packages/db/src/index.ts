@@ -86,6 +86,12 @@ import type {
   TranscriptionOptionValue,
   ReserveTranscriptInput,
   ReserveTranscriptResult,
+  CreateWebhookDeliveryInput,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  WebhookDestination,
+  WebhookEventType,
+  WebhookRepository,
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
 import type { Migration } from './migrations/types.js';
@@ -120,6 +126,8 @@ export {
   workflowRemoteSources,
   workflows,
   workflowDestinations,
+  webhookDeliveries,
+  webhookDestinations,
 } from './schema.js';
 
 interface RawApiTokenRow {
@@ -3009,6 +3017,225 @@ export class SqliteDestinationJobRepository implements DestinationJobRepository 
         record.updatedAt.getTime(),
       );
     return record;
+  }
+}
+
+interface RawWebhookDestinationRow {
+  readonly created_at: number;
+  readonly enabled: number;
+  readonly events_json: string;
+  readonly id: string;
+  readonly name: string;
+  readonly updated_at: number;
+  readonly url: string;
+}
+
+interface RawWebhookDeliveryRow {
+  readonly completed_at: number | null;
+  readonly created_at: number;
+  readonly destination_id: string;
+  readonly event_id: string;
+  readonly event_type: WebhookEventType;
+  readonly id: string;
+  readonly job_id: string | null;
+  readonly last_error_code: string | null;
+  readonly last_response_status: number | null;
+  readonly payload: string;
+  readonly status: WebhookDeliveryStatus;
+  readonly updated_at: number;
+  readonly url: string;
+}
+
+function webhookDestinationFromRow(row: RawWebhookDestinationRow): WebhookDestination {
+  return {
+    createdAt: new Date(row.created_at),
+    enabled: row.enabled === 1,
+    events: JSON.parse(row.events_json) as WebhookEventType[],
+    id: row.id,
+    name: row.name,
+    updatedAt: new Date(row.updated_at),
+    url: row.url,
+  };
+}
+
+function webhookDeliveryFromRow(row: RawWebhookDeliveryRow): WebhookDelivery {
+  return {
+    createdAt: new Date(row.created_at),
+    destinationId: row.destination_id,
+    eventId: row.event_id,
+    eventType: row.event_type,
+    id: row.id,
+    payload: row.payload,
+    status: row.status,
+    updatedAt: new Date(row.updated_at),
+    url: row.url,
+    ...(row.job_id === null ? {} : { jobId: row.job_id }),
+    ...(row.last_error_code === null ? {} : { lastErrorCode: row.last_error_code }),
+    ...(row.last_response_status === null ? {} : { lastResponseStatus: row.last_response_status }),
+    ...(row.completed_at === null ? {} : { completedAt: new Date(row.completed_at) }),
+  };
+}
+
+/** SQLite-backed explicit destination allowlist and safe delivery checkpoint history. */
+export class SqliteWebhookRepository implements WebhookRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+
+  public reconcileDestinations(
+    destinations: readonly {
+      readonly events: readonly WebhookEventType[];
+      readonly id: string;
+      readonly name: string;
+      readonly url: URL;
+    }[],
+    now: Date,
+  ): readonly WebhookDestination[] {
+    const client = this.database.client;
+    client.exec('BEGIN IMMEDIATE;');
+    try {
+      client
+        .prepare('UPDATE webhook_destinations SET enabled = 0, updated_at = ? WHERE enabled = 1')
+        .run(now.getTime());
+      const upsert = client.prepare(
+        `INSERT INTO webhook_destinations (
+          id, name, url, events_json, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url,
+          events_json = excluded.events_json, enabled = 1, updated_at = excluded.updated_at`,
+      );
+      for (const destination of destinations)
+        upsert.run(
+          destination.id,
+          destination.name,
+          destination.url.toString(),
+          JSON.stringify([...new Set(destination.events)]),
+          now.getTime(),
+          now.getTime(),
+        );
+      client.exec('COMMIT;');
+      return this.listDestinations();
+    } catch (error) {
+      client.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  public listDestinations(): readonly WebhookDestination[] {
+    const rows = this.database.client
+      .prepare('SELECT * FROM webhook_destinations ORDER BY created_at ASC, id ASC')
+      .all() as unknown as RawWebhookDestinationRow[];
+    return rows.map(webhookDestinationFromRow);
+  }
+
+  public findDestination(id: string): WebhookDestination | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM webhook_destinations WHERE id = ?')
+      .get(id) as unknown as RawWebhookDestinationRow | undefined;
+    return row === undefined ? undefined : webhookDestinationFromRow(row);
+  }
+
+  public createDelivery(input: CreateWebhookDeliveryInput): WebhookDelivery {
+    this.database.client
+      .prepare(
+        `INSERT INTO webhook_deliveries (
+          id, destination_id, job_id, event_id, event_type, url, payload, status,
+          last_response_status, last_error_code, created_at, updated_at, completed_at
+        ) VALUES (?, ?, NULL, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?, NULL)
+        ON CONFLICT(destination_id, event_id) DO NOTHING`,
+      )
+      .run(
+        input.id,
+        input.destinationId,
+        input.eventId,
+        input.eventType,
+        input.url,
+        input.payload,
+        input.createdAt.getTime(),
+        input.createdAt.getTime(),
+      );
+    const row = this.database.client
+      .prepare('SELECT * FROM webhook_deliveries WHERE destination_id = ? AND event_id = ?')
+      .get(input.destinationId, input.eventId) as unknown as RawWebhookDeliveryRow | undefined;
+    if (row === undefined) throw new Error('Webhook delivery persistence failed.');
+    return webhookDeliveryFromRow(row);
+  }
+
+  public attachJob(deliveryId: string, jobId: string, now: Date): WebhookDelivery {
+    this.database.client
+      .prepare(
+        `UPDATE webhook_deliveries SET job_id = ?, updated_at = ?
+         WHERE id = ? AND (job_id IS NULL OR job_id = ?)`,
+      )
+      .run(jobId, now.getTime(), deliveryId, jobId);
+    return this.requiredDelivery(deliveryId);
+  }
+
+  public findDelivery(id: string): WebhookDelivery | undefined {
+    const row = this.database.client
+      .prepare('SELECT * FROM webhook_deliveries WHERE id = ?')
+      .get(id) as unknown as RawWebhookDeliveryRow | undefined;
+    return row === undefined ? undefined : webhookDeliveryFromRow(row);
+  }
+
+  public listDeliveries(): readonly WebhookDelivery[] {
+    const rows = this.database.client
+      .prepare('SELECT * FROM webhook_deliveries ORDER BY created_at DESC, id DESC')
+      .all() as unknown as RawWebhookDeliveryRow[];
+    return rows.map(webhookDeliveryFromRow);
+  }
+
+  public listUnqueuedDeliveries(): readonly WebhookDelivery[] {
+    const rows = this.database.client
+      .prepare(
+        `SELECT * FROM webhook_deliveries
+         WHERE job_id IS NULL AND status = 'pending' ORDER BY created_at ASC`,
+      )
+      .all() as unknown as RawWebhookDeliveryRow[];
+    return rows.map(webhookDeliveryFromRow);
+  }
+
+  public recordAttemptStarted(deliveryId: string, now: Date): WebhookDelivery {
+    this.database.client
+      .prepare(
+        `UPDATE webhook_deliveries SET status = 'running', last_response_status = NULL,
+          last_error_code = NULL, updated_at = ?, completed_at = NULL
+         WHERE id = ? AND status IN ('pending', 'retrying', 'running')`,
+      )
+      .run(now.getTime(), deliveryId);
+    return this.requiredDelivery(deliveryId);
+  }
+
+  public recordAttemptResult(
+    deliveryId: string,
+    result:
+      | { readonly status: 'succeeded'; readonly statusCode: number }
+      | {
+          readonly errorCode: string;
+          readonly status: 'failed' | 'retrying';
+          readonly statusCode?: number;
+        },
+    now: Date,
+  ): WebhookDelivery {
+    const terminal = result.status === 'succeeded' || result.status === 'failed';
+    this.database.client
+      .prepare(
+        `UPDATE webhook_deliveries SET status = ?, last_response_status = ?,
+          last_error_code = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
+      )
+      .run(
+        result.status,
+        result.statusCode ?? null,
+        result.status === 'succeeded' ? null : result.errorCode,
+        now.getTime(),
+        terminal ? now.getTime() : null,
+        deliveryId,
+      );
+    return this.requiredDelivery(deliveryId);
+  }
+
+  private requiredDelivery(id: string): WebhookDelivery {
+    const delivery = this.findDelivery(id);
+    if (delivery === undefined) throw new Error('Webhook delivery was not found.');
+    return delivery;
   }
 }
 
