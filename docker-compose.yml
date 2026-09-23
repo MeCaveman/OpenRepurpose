@@ -1,0 +1,39 @@
+services:
+  openrepurpose:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openrepurpose:local
+    restart: unless-stopped
+    environment:
+      APP_URL: http://127.0.0.1:3000
+      LAN_ENABLED: 'true'
+      # Required because the container listens on 0.0.0.0. Keep this value outside source control.
+      LAN_ACCESS_TOKEN: ${LAN_ACCESS_TOKEN:?Set LAN_ACCESS_TOKEN to a random value of at least 32 characters}
+    ports:
+      - '127.0.0.1:3000:3000'
+    volumes:
+      - openrepurpose-config:/etc/openrepurpose
+      - openrepurpose-data:/var/lib/openrepurpose/data
+      - openrepurpose-models:/var/lib/openrepurpose/models
+      - openrepurpose-tmp:/var/lib/openrepurpose/tmp
+      # Media is intentionally explicit and read-only. Change the source path as needed.
+      - ./media:/media:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/api/health').then((response) =>
+          process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  openrepurpose-config:
+  openrepurpose-data:
+  openrepurpose-models:
+  openrepurpose-tmp:

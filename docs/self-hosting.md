@@ -77,5 +77,43 @@ WantedBy=multi-user.target
 
 Store the environment file with restrictive permissions and keep it out of source control. On
 Windows, use Task Scheduler to run `openrepurpose start --headless` at system startup under a
-dedicated account. A native Windows service wrapper is intentionally not bundled yet. Docker and
-Compose are owned by v0.9 Packet 6 and are not required for headless operation.
+dedicated account. A native Windows service wrapper is intentionally not bundled yet.
+
+## Optional Docker Compose deployment
+
+The repository includes an optional [`Dockerfile`](../Dockerfile) and
+[`docker-compose.yml`](../docker-compose.yml). The image is built from `node:24-bookworm-slim`,
+installs FFmpeg and ffprobe from Debian, serves the production web bundle from the server, and runs
+as the unprivileged `node` user. It is not required for normal Windows/Linux installation.
+
+Compose binds the published port to `127.0.0.1` on the host, but the process inside the container
+must listen on `0.0.0.0`. Therefore Compose enables the existing authenticated LAN mode and requires
+an operator-provided token; no token, OAuth credential, API token, webhook secret, or `.env` file is
+copied into the image or committed to the repository:
+
+```powershell
+$env:LAN_ACCESS_TOKEN = (New-Guid).Guid + (New-Guid).Guid
+New-Item -ItemType Directory -Force media | Out-Null
+docker compose up --build -d
+```
+
+Use a secret manager or an untracked environment file for long-lived deployments. If the service
+must be reachable beyond the local host, change the host port binding deliberately and follow the
+LAN/TLS and reverse-proxy guidance above.
+
+The Compose mounts are intentional:
+
+| Mount                           | Purpose                                                               | Persistence/permission                                              |
+| ------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `/etc/openrepurpose`            | Session key, encrypted secret-vault key, and other config-owned files | Named writable volume; back up as sensitive data                    |
+| `/var/lib/openrepurpose/data`   | SQLite database, imported metadata, derivatives, and application data | Named writable volume; back up while the service is stopped         |
+| `/var/lib/openrepurpose/models` | Explicitly downloaded Whisper model files                             | Named writable volume; models are not downloaded during image build |
+| `/var/lib/openrepurpose/tmp`    | Managed temporary files                                               | Named writable volume; safe to recreate after shutdown              |
+| `/media`                        | User-owned source media supplied to workflows                         | Explicit host bind mount, read-only by default                      |
+
+The image includes FFmpeg/ffprobe, but does not include whisper.cpp or any model. Local
+transcription remains unavailable until a compatible whisper.cpp executable is supplied through the
+normal executable-discovery configuration and the requested model is explicitly downloaded into the
+model volume. The image does not grant the application access to arbitrary host paths: add only the
+media directories that the deployment is authorized to read, and use a read-write mount only when a
+specific workflow requires it.
