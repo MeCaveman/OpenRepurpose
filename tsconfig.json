@@ -4,6 +4,7 @@
   "references": [
     { "path": "./integrations/youtube" },
     { "path": "./integrations/twitch" },
+    { "path": "./integrations/kick" },
     { "path": "./integrations/meta" },
     { "path": "./apps/cli" },
     { "path": "./apps/server" },

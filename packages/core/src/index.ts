@@ -89,7 +89,7 @@ export interface MediaRepository {
   list(): readonly MediaAsset[];
 }
 
-export type AccountProvider = 'meta' | 'tiktok' | 'twitch' | 'youtube';
+export type AccountProvider = 'kick' | 'meta' | 'tiktok' | 'twitch' | 'youtube';
 export type AccountStatus = 'connected' | 'reauthorization_required';
 export type AccountCapability =
   | 'tiktok.identity.read'
@@ -99,7 +99,9 @@ export type AccountCapability =
   | 'youtube.identity.read'
   | 'youtube.video.upload'
   | 'twitch.identity.read'
-  | 'twitch.clip.download';
+  | 'twitch.clip.download'
+  | 'kick.identity.read'
+  | 'kick.channel.read';
 
 /** Browser-safe account metadata. OAuth credentials and tokens live only in SecretStore. */
 export interface ConnectedAccount {
@@ -1099,6 +1101,24 @@ export class SourceService {
         ...(editorId === undefined || editorId.length === 0 ? {} : { editorId }),
       },
       displayName: input.displayName?.trim() || `Twitch ${input.kind} for ${broadcasterId}`,
+      externalSourceId: broadcasterId,
+      now: this.now(),
+    });
+  }
+
+  public addKick(input: {
+    readonly accountId: string;
+    readonly broadcasterId: string;
+    readonly displayName?: string;
+  }): SourceConnection {
+    const accountId = input.accountId.trim();
+    const broadcasterId = input.broadcasterId.trim();
+    if (accountId.length === 0 || broadcasterId.length === 0)
+      throw new Error('A connected Kick account and broadcaster ID are required.');
+    return this.repository.createConnection({
+      adapterId: 'kick',
+      configuration: { accountId, broadcasterId },
+      displayName: input.displayName?.trim() || `Kick active livestream for ${broadcasterId}`,
       externalSourceId: broadcasterId,
       now: this.now(),
     });

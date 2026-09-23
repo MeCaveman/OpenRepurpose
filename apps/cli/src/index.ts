@@ -878,6 +878,27 @@ export function createCli(options: CreateCliOptions = {}): Command {
         }
       },
     );
+  addSource
+    .command('kick')
+    .requiredOption('--account <account-id>', 'Connected Kick account ID')
+    .requiredOption('--broadcaster <broadcaster-id>', 'Kick broadcaster ID to poll')
+    .option('--name <display-name>', 'Local display name')
+    .option('--json', 'write JSON')
+    .action((options: { account: string; broadcaster: string; name?: string; json?: boolean }) => {
+      const context = sourceContext(environment);
+      try {
+        const source = context.service.addKick({
+          accountId: options.account,
+          broadcasterId: options.broadcaster,
+          ...(options.name === undefined ? {} : { displayName: options.name }),
+        });
+        write(
+          options.json ? `${JSON.stringify(source)}\n` : `${source.id}\t${source.displayName}\n`,
+        );
+      } finally {
+        context.database.close();
+      }
+    });
   for (const action of ['poll', 'pause', 'resume'] as const)
     sources
       .command(`${action} <id>`)

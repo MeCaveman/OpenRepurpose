@@ -15,6 +15,7 @@
     { "path": "../../packages/platform-sdk" },
     { "path": "../../packages/local-secrets" },
     { "path": "../../integrations/tiktok" },
+    { "path": "../../integrations/kick" },
     { "path": "../../integrations/meta" },
     { "path": "../../integrations/youtube" }
   ]

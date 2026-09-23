@@ -4,4 +4,4 @@
 - [TikTok OAuth and Direct Post setup](tiktok.md)
 - [Meta Facebook and Instagram Reels setup](meta.md)
 
-Setup guides for Twitch and Kick will be added in their owning roadmap versions.
+See [Kick source setup](kick.md) for the official metadata-only Kick integration.

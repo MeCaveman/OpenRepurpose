@@ -23,6 +23,9 @@ export default defineConfig({
       '@openrepurpose/twitch': fileURLToPath(
         new URL('./integrations/twitch/src/index.ts', import.meta.url),
       ),
+      '@openrepurpose/kick': fileURLToPath(
+        new URL('./integrations/kick/src/index.ts', import.meta.url),
+      ),
       '@openrepurpose/youtube': fileURLToPath(
         new URL('./integrations/youtube/src/index.ts', import.meta.url),
       ),

@@ -76,6 +76,7 @@ import {
   TwitchOAuthService,
   TwitchSourceAdapter,
 } from '@openrepurpose/twitch';
+import { KickOAuthService, KickSourceAdapter } from '@openrepurpose/kick';
 import { TikTokDirectPostJobHandler, TikTokOAuthService } from '@openrepurpose/tiktok';
 import {
   FacebookReelsJobHandler,
@@ -118,6 +119,12 @@ export async function startServer(): Promise<void> {
     config.appUrl,
   );
   const twitchOAuthService = new TwitchOAuthService(
+    accountRepository,
+    authorizationRequestRepository,
+    secretStore,
+    config.appUrl,
+  );
+  const kickOAuthService = new KickOAuthService(
     accountRepository,
     authorizationRequestRepository,
     secretStore,
@@ -226,6 +233,7 @@ export async function startServer(): Promise<void> {
     new SourceRegistry([
       new YouTubeSourceAdapter(youtubeOAuthService),
       new TwitchSourceAdapter(twitchOAuthService),
+      new KickSourceAdapter(kickOAuthService),
     ]),
     jobService,
     {
@@ -328,6 +336,7 @@ export async function startServer(): Promise<void> {
     ...(sourceCoordinator === undefined ? {} : { sourceWorkflowCoordinator: sourceCoordinator }),
     tiktokOAuthService,
     twitchOAuthService,
+    kickOAuthService,
     transformService,
     transcriptService,
     metaOAuthService,

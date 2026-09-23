@@ -9,6 +9,7 @@ import { ModelManagerError, type TranscriptionModelManager } from '@openrepurpos
 import { isPlatformError, REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
 import type { YouTubeOAuthService } from '@openrepurpose/youtube';
 import type { TwitchOAuthService } from '@openrepurpose/twitch';
+import type { KickOAuthService } from '@openrepurpose/kick';
 import type { TikTokOAuthService } from '@openrepurpose/tiktok';
 import type { MetaOAuthService } from '@openrepurpose/meta';
 import type {
@@ -57,6 +58,7 @@ export interface BuildServerOptions {
   readonly staticRoot?: false | string;
   readonly tiktokOAuthService?: TikTokOAuthService;
   readonly twitchOAuthService?: TwitchOAuthService;
+  readonly kickOAuthService?: KickOAuthService;
   readonly transformService?: TransformService;
   readonly transcriptService?: TranscriptService;
   readonly youtubeOAuthService?: YouTubeOAuthService;
@@ -364,11 +366,13 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     options.youtubeOAuthService !== undefined ||
     options.tiktokOAuthService !== undefined ||
     options.twitchOAuthService !== undefined ||
+    options.kickOAuthService !== undefined ||
     options.metaOAuthService !== undefined
   ) {
     const youtube = options.youtubeOAuthService;
     const tiktok = options.tiktokOAuthService;
     const twitch = options.twitchOAuthService;
+    const kick = options.kickOAuthService;
     const meta = options.metaOAuthService;
     const accounts = youtube ?? tiktok;
     const safePlatformFailure = (error: unknown, reply: FastifyReply) => {
@@ -385,6 +389,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       youtube: await youtube?.credentialStatus(),
       tiktok: await tiktok?.credentialStatus(),
       twitch: await twitch?.credentialStatus(),
+      kick: await kick?.credentialStatus(),
       meta: await meta?.credentialStatus(),
       metaCredentials: meta?.listCredentials() ?? [],
       metaTargets: meta?.listTargets() ?? [],
@@ -393,6 +398,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       youtube: await youtube?.credentialStatus(),
       tiktok: await tiktok?.credentialStatus(),
       twitch: await twitch?.credentialStatus(),
+      kick: await kick?.credentialStatus(),
       meta: await meta?.credentialStatus(),
     }));
     if (youtube !== undefined) {
@@ -590,6 +596,64 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
             destination.searchParams.set(
               'code',
               isPlatformError(error) ? error.code : 'TWITCH_OAUTH_CALLBACK_FAILED',
+            );
+          }
+          return reply.redirect(destination.toString());
+        },
+      );
+    }
+    if (kick !== undefined) {
+      server.post<{ Body: { clientId?: unknown; clientSecret?: unknown } }>(
+        '/api/accounts/kick/credentials',
+        async (request, reply) => {
+          if (
+            typeof request.body?.clientId !== 'string' ||
+            typeof request.body.clientSecret !== 'string'
+          )
+            return reply.code(400).send({
+              error: 'A Kick client ID and client secret are required.',
+              code: 'INVALID_KICK_CREDENTIALS',
+            });
+          try {
+            await kick.configureCredentials({
+              clientId: request.body.clientId,
+              clientSecret: request.body.clientSecret,
+            });
+            return { kick: await kick.credentialStatus() };
+          } catch (error) {
+            return safePlatformFailure(error, reply);
+          }
+        },
+      );
+      server.post('/api/accounts/kick/oauth/start', async (request, reply) => {
+        try {
+          const browserBinding = request.session.get('csrfToken');
+          if (typeof browserBinding !== 'string')
+            return reply.code(403).send({
+              error: 'A local browser session is required.',
+              code: 'KICK_OAUTH_SESSION_REQUIRED',
+            });
+          return await kick.beginAuthorization(browserBinding);
+        } catch (error) {
+          return safePlatformFailure(error, reply);
+        }
+      });
+      server.get<{ Querystring: { code?: string; error?: string; state?: string } }>(
+        '/api/accounts/kick/oauth/callback',
+        async (request, reply) => {
+          const destination = new URL('/accounts', options.config.appUrl);
+          try {
+            const browserBinding = request.session.get('csrfToken');
+            await kick.completeAuthorization({
+              ...request.query,
+              ...(typeof browserBinding === 'string' ? { browserBinding } : {}),
+            });
+            destination.searchParams.set('kick', 'connected');
+          } catch (error) {
+            destination.searchParams.set('kick', 'error');
+            destination.searchParams.set(
+              'code',
+              isPlatformError(error) ? error.code : 'KICK_OAUTH_CALLBACK_FAILED',
             );
           }
           return reply.redirect(destination.toString());
@@ -1089,6 +1153,30 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       } catch (error) {
         return reply.code(400).send({
           error: error instanceof Error ? error.message : 'Invalid Twitch source.',
+          code: 'INVALID_SOURCE',
+        });
+      }
+    });
+    server.post<{ Body: unknown }>('/api/sources/kick', async (request, reply) => {
+      const value = request.body;
+      if (typeof value !== 'object' || value === null)
+        return reply.code(400).send({ error: 'Invalid Kick source.', code: 'INVALID_SOURCE' });
+      const body = value as Record<string, unknown>;
+      if (typeof body.accountId !== 'string' || typeof body.broadcasterId !== 'string')
+        return reply
+          .code(400)
+          .send({ error: 'An account and broadcaster ID are required.', code: 'INVALID_SOURCE' });
+      try {
+        return reply.code(201).send({
+          source: sources.addKick({
+            accountId: body.accountId,
+            broadcasterId: body.broadcasterId,
+            ...(typeof body.displayName === 'string' ? { displayName: body.displayName } : {}),
+          }),
+        });
+      } catch (error) {
+        return reply.code(400).send({
+          error: error instanceof Error ? error.message : 'Invalid Kick source.',
           code: 'INVALID_SOURCE',
         });
       }
