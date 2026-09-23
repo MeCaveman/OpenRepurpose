@@ -14,6 +14,8 @@ import type { TikTokOAuthService } from '@openrepurpose/tiktok';
 import type { MetaOAuthService } from '@openrepurpose/meta';
 import type {
   JobService,
+  ApiIdempotencyService,
+  ApiTokenService,
   JobRunner,
   JobStatus,
   DestinationJobRepository,
@@ -24,11 +26,13 @@ import type {
   StreamerWorkflowPresetId,
   WorkflowService,
   SourceService,
+  ScheduleService,
   SourceWorkflowCoordinator,
   TransformService,
   TranscriptService,
 } from '@openrepurpose/core';
 import { TranscriptServiceError, transcriptEditRequestSchema } from '@openrepurpose/core';
+import { registerApiV1Routes } from './api-v1.js';
 
 declare module '@fastify/secure-session' {
   interface SessionData {
@@ -45,6 +49,8 @@ export interface LoggerDestination {
 
 export interface BuildServerOptions {
   readonly config: ApplicationConfig;
+  readonly apiIdempotencyService?: ApiIdempotencyService;
+  readonly apiTokenService?: ApiTokenService;
   readonly jobService?: JobService;
   readonly jobRunner?: Pick<JobRunner, 'drain'>;
   readonly destinationJobRepository?: DestinationJobRepository;
@@ -56,6 +62,7 @@ export interface BuildServerOptions {
   readonly modelManager?: TranscriptionModelManager;
   readonly sessionKey: Buffer;
   readonly sourceService?: SourceService;
+  readonly scheduleService?: ScheduleService;
   readonly sourceWorkflowCoordinator?: Pick<SourceWorkflowCoordinator, 'retryFailedDestinations'>;
   readonly staticRoot?: false | string;
   readonly tiktokOAuthService?: TikTokOAuthService;
@@ -88,7 +95,11 @@ function csrfTokensMatch(expected: string, actual: string): boolean {
 }
 
 function isApiMutation(request: FastifyRequest): boolean {
-  return request.url.startsWith('/api/') && stateChangingMethods.has(request.method);
+  return (
+    request.url.startsWith('/api/') &&
+    stateChangingMethods.has(request.method) &&
+    !(request.url.startsWith('/api/v1/') && request.headers.authorization !== undefined)
+  );
 }
 
 export function assertLocalOnly(config: ApplicationConfig): void {
@@ -223,6 +234,37 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     ) {
       return forbidden(reply, 'CSRF_TOKEN_INVALID');
     }
+  });
+
+  registerApiV1Routes(server, {
+    ...((options.youtubeOAuthService ?? options.tiktokOAuthService) === undefined
+      ? {}
+      : { accountService: options.youtubeOAuthService ?? options.tiktokOAuthService! }),
+    ...(options.destinationJobRepository === undefined
+      ? {}
+      : { destinationJobRepository: options.destinationJobRepository }),
+    ...(options.apiIdempotencyService === undefined
+      ? {}
+      : { idempotencyService: options.apiIdempotencyService }),
+    ...(options.jobRunner === undefined ? {} : { jobRunner: options.jobRunner }),
+    ...(options.jobService === undefined ? {} : { jobService: options.jobService }),
+    ...(options.mediaImportService === undefined
+      ? {}
+      : { mediaImportService: options.mediaImportService }),
+    ...(options.mediaRepository === undefined ? {} : { mediaRepository: options.mediaRepository }),
+    ...(options.scheduleService === undefined ? {} : { scheduleService: options.scheduleService }),
+    ...(options.sourceService === undefined ? {} : { sourceService: options.sourceService }),
+    ...(options.tiktokOAuthService === undefined
+      ? {}
+      : { tiktokOAuthService: options.tiktokOAuthService }),
+    ...(options.apiTokenService === undefined ? {} : { tokenService: options.apiTokenService }),
+    ...(options.transcriptService === undefined
+      ? {}
+      : { transcriptService: options.transcriptService }),
+    ...(options.transformService === undefined
+      ? {}
+      : { transformService: options.transformService }),
+    ...(options.workflowService === undefined ? {} : { workflowService: options.workflowService }),
   });
 
   server.get(
@@ -1244,11 +1286,33 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     server.register(fastifyStatic, { root: staticRoot });
     server.setNotFoundHandler(async (request, reply) => {
       if (request.url.startsWith('/api/')) {
+        if (request.url.startsWith('/api/v1/'))
+          return reply.code(404).send({
+            error: {
+              code: 'API_ROUTE_NOT_FOUND',
+              message: 'API route not found.',
+              requestId: request.id,
+            },
+          });
         return reply.code(404).send({ error: 'Not Found', code: 'API_ROUTE_NOT_FOUND' });
       }
       if (request.method === 'GET' && request.headers.accept?.includes('text/html')) {
         return reply.sendFile('index.html');
       }
+      return reply.code(404).send({ error: 'Not Found', code: 'ROUTE_NOT_FOUND' });
+    });
+  } else {
+    server.setNotFoundHandler(async (request, reply) => {
+      if (request.url.startsWith('/api/v1/'))
+        return reply.code(404).send({
+          error: {
+            code: 'API_ROUTE_NOT_FOUND',
+            message: 'API route not found.',
+            requestId: request.id,
+          },
+        });
+      if (request.url.startsWith('/api/'))
+        return reply.code(404).send({ error: 'Not Found', code: 'API_ROUTE_NOT_FOUND' });
       return reply.code(404).send({ error: 'Not Found', code: 'ROUTE_NOT_FOUND' });
     });
   }
@@ -1262,6 +1326,14 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       typeof candidateStatus === 'number' && candidateStatus < 500 ? candidateStatus : 500;
     const errorType = error instanceof Error ? error.name : 'UnknownError';
     request.log.error({ errorType, statusCode }, 'Request failed');
+    if (request.url.startsWith('/api/v1/'))
+      return reply.code(statusCode).send({
+        error: {
+          code: statusCode === 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR',
+          message: statusCode === 500 ? 'Internal server error.' : 'Request failed.',
+          requestId: request.id,
+        },
+      });
     return reply.code(statusCode).send({
       error: statusCode === 500 ? 'Internal Server Error' : 'Request Failed',
       code: statusCode === 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR',

@@ -8,6 +8,39 @@ export const settings = sqliteTable('settings', {
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
+export const apiTokens = sqliteTable(
+  'api_tokens',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    verifier: text('verifier').notNull(),
+    permissionsJson: text('permissions_json').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+    revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [index('api_tokens_created_at_idx').on(table.createdAt)],
+);
+
+export const apiIdempotencyRecords = sqliteTable(
+  'api_idempotency_records',
+  {
+    subject: text('subject').notNull(),
+    operation: text('operation').notNull(),
+    key: text('key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    status: text('status', { enum: ['pending', 'completed'] }).notNull(),
+    statusCode: integer('status_code'),
+    responseJson: text('response_json'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('api_idempotency_records_pk').on(table.subject, table.operation, table.key),
+    index('api_idempotency_updated_at_idx').on(table.updatedAt),
+  ],
+);
+
 export const mediaAssets = sqliteTable('media_assets', {
   id: text('id').primaryKey(),
   path: text('path').notNull(),

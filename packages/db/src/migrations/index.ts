@@ -22,6 +22,7 @@ import { transcriptsMigration } from './0021_transcripts.js';
 import { transformCaptionSidecarsMigration } from './0022_transform_caption_sidecars.js';
 import { twitchOAuthMigration } from './0023_twitch_oauth.js';
 import { kickOAuthMigration } from './0024_kick_oauth.js';
+import { apiV1Migration } from './0025_api_v1.js';
 import type { Migration } from './types.js';
 
 /** Ordered, immutable migration ledger. Never alter a released migration's SQL. */
@@ -50,5 +51,6 @@ export const migrations: readonly Migration[] = [
   transformCaptionSidecarsMigration,
   twitchOAuthMigration,
   kickOAuthMigration,
+  apiV1Migration,
 ];
 export type { Migration } from './types.js';

@@ -52,6 +52,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0022_transform_caption_sidecars' },
       { id: '0023_twitch_oauth' },
       { id: '0024_kick_oauth' },
+      { id: '0025_api_v1' },
     ]);
   });
   it('rejects a modified migration after it has been applied', () => {
@@ -61,6 +62,28 @@ describe('SQLite migrations and repositories', () => {
         { id: '0001_initial_settings', sql: 'CREATE TABLE settings (key TEXT PRIMARY KEY);' },
       ]),
     ).toThrow('does not match its recorded checksum');
+  });
+  it('upgrades the v0.8 migration ledger with API v1 security tables', () => {
+    temporaryDatabase = undefined;
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-v08-api-'));
+    const database = openDatabase(join(directory, 'openrepurpose.sqlite'));
+    try {
+      runMigrations(database, migrations.slice(0, 24));
+      runMigrations(database);
+      expect(
+        database.client
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('api_tokens', 'api_idempotency_records') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([{ name: 'api_idempotency_records' }, { name: 'api_tokens' }]);
+      expect(
+        database.client.prepare('SELECT id FROM __openrepurpose_migrations ORDER BY id DESC').get(),
+      ).toEqual({ id: '0025_api_v1' });
+    } finally {
+      database.close();
+      rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
+    }
   });
   it('upgrades a populated v0.1 schema and preserves YouTube workflow references', () => {
     const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-v01-migration-'));
@@ -137,7 +160,7 @@ describe('SQLite migrations and repositories', () => {
 
     expect(
       fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toHaveLength(24);
+    ).toHaveLength(25);
     expect(
       fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
     ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);

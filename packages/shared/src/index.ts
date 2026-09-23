@@ -2,6 +2,9 @@ import { homedir, tmpdir } from 'node:os';
 import * as hostPath from 'node:path';
 import { z } from 'zod';
 
+export { z } from 'zod';
+export type { ZodType } from 'zod';
+
 export interface Environment {
   readonly [name: string]: string | undefined;
 }

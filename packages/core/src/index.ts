@@ -43,6 +43,7 @@ export * from './external-downloader.js';
 export * from './transcription.js';
 export * from './transform.js';
 export * from './workflow-presets.js';
+export * from './api-access.js';
 
 export type MediaAssetState = 'available' | 'missing';
 

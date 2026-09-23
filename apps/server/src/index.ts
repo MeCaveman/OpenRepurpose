@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import {
   JobRunner,
   JobService,
+  ApiIdempotencyService,
+  ApiTokenService,
   ExternalDownloaderMediaResolver,
   ExternalDownloaderRegistry,
   MediaImportService,
@@ -32,6 +34,8 @@ import {
   openDatabase,
   runMigrations,
   SqliteAccountRepository,
+  SqliteApiIdempotencyRepository,
+  SqliteApiTokenRepository,
   SqliteDestinationJobRepository,
   SqliteJobRepository,
   SqliteMediaRepository,
@@ -262,9 +266,11 @@ export async function startServer(): Promise<void> {
       },
     },
   );
-  const schedulerLoop = new SchedulerLoop(
-    new ScheduleService(new SqliteScheduleRepository(database), sourceRepository),
+  const scheduleService = new ScheduleService(
+    new SqliteScheduleRepository(database),
+    sourceRepository,
   );
+  const schedulerLoop = new SchedulerLoop(scheduleService);
   const jobHandlers: JobHandler[] = [
     new YouTubeUploadJobHandler(
       transformMediaRepository,
@@ -361,6 +367,8 @@ export async function startServer(): Promise<void> {
         });
   obsWebSocketTrigger?.start();
   const server = buildServer({
+    apiIdempotencyService: new ApiIdempotencyService(new SqliteApiIdempotencyRepository(database)),
+    apiTokenService: new ApiTokenService(new SqliteApiTokenRepository(database)),
     config,
     jobService,
     jobRunner,
@@ -372,6 +380,7 @@ export async function startServer(): Promise<void> {
     workflowService,
     workflowPresetService,
     sourceService: new SourceService(sourceRepository),
+    scheduleService,
     ...(sourceCoordinator === undefined ? {} : { sourceWorkflowCoordinator: sourceCoordinator }),
     tiktokOAuthService,
     twitchOAuthService,
@@ -426,4 +435,5 @@ if (isExecutedDirectly())
     process.exitCode = 1;
   });
 export { assertLocalOnly, buildServer } from './app.js';
+export { createApiV1OpenApiDocument } from './api-v1.js';
 export { loadOrCreateSessionKey } from './session-key.js';

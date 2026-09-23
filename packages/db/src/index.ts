@@ -12,6 +12,11 @@ import {
   transformPlanSchema,
 } from '@openrepurpose/core';
 import type {
+  ApiIdempotencyRecord,
+  ApiIdempotencyRepository,
+  ApiPermission,
+  ApiTokenRecord,
+  ApiTokenRepository,
   AccountCapability,
   AccountProvider,
   AccountRepository,
@@ -89,6 +94,8 @@ import { mediaAssets, metaCredentials, metaPublishTargets, settings } from './sc
 export { migrations } from './migrations/index.js';
 export type { Migration } from './migrations/index.js';
 export {
+  apiIdempotencyRecords,
+  apiTokens,
   accounts,
   destinationJobRecords,
   jobAttempts,
@@ -114,6 +121,160 @@ export {
   workflows,
   workflowDestinations,
 } from './schema.js';
+
+interface RawApiTokenRow {
+  readonly created_at: number;
+  readonly id: string;
+  readonly last_used_at: number | null;
+  readonly name: string;
+  readonly permissions_json: string;
+  readonly revoked_at: number | null;
+  readonly verifier: string;
+}
+
+function apiTokenFromRow(row: RawApiTokenRow): ApiTokenRecord {
+  return {
+    createdAt: new Date(row.created_at),
+    id: row.id,
+    ...(row.last_used_at === null ? {} : { lastUsedAt: new Date(row.last_used_at) }),
+    name: row.name,
+    permissions: JSON.parse(row.permissions_json) as ApiPermission[],
+    ...(row.revoked_at === null ? {} : { revokedAt: new Date(row.revoked_at) }),
+    verifier: row.verifier,
+  };
+}
+
+export class SqliteApiTokenRepository implements ApiTokenRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+  public create(record: ApiTokenRecord): ApiTokenRecord {
+    this.database.client
+      .prepare(
+        `INSERT INTO api_tokens
+         (id, name, verifier, permissions_json, created_at, last_used_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
+      )
+      .run(
+        record.id,
+        record.name,
+        record.verifier,
+        JSON.stringify(record.permissions),
+        record.createdAt.getTime(),
+      );
+    return record;
+  }
+  public find(id: string): ApiTokenRecord | undefined {
+    const row = this.database.client.prepare('SELECT * FROM api_tokens WHERE id = ?').get(id) as
+      RawApiTokenRow | undefined;
+    return row === undefined ? undefined : apiTokenFromRow(row);
+  }
+  public list(): readonly ApiTokenRecord[] {
+    return (
+      this.database.client
+        .prepare('SELECT * FROM api_tokens ORDER BY created_at DESC, id DESC')
+        .all() as unknown as RawApiTokenRow[]
+    ).map(apiTokenFromRow);
+  }
+  public markUsed(id: string, usedAt: Date): void {
+    this.database.client
+      .prepare('UPDATE api_tokens SET last_used_at = ? WHERE id = ? AND revoked_at IS NULL')
+      .run(usedAt.getTime(), id);
+  }
+  public revoke(id: string, revokedAt: Date): ApiTokenRecord | undefined {
+    this.database.client
+      .prepare('UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
+      .run(revokedAt.getTime(), id);
+    return this.find(id);
+  }
+}
+
+interface RawApiIdempotencyRow {
+  readonly created_at: number;
+  readonly key: string;
+  readonly operation: string;
+  readonly request_hash: string;
+  readonly response_json: string | null;
+  readonly status: 'completed' | 'pending';
+  readonly status_code: number | null;
+  readonly subject: string;
+  readonly updated_at: number;
+}
+
+function apiIdempotencyFromRow(row: RawApiIdempotencyRow): ApiIdempotencyRecord {
+  return {
+    createdAt: new Date(row.created_at),
+    key: row.key,
+    operation: row.operation,
+    requestHash: row.request_hash,
+    ...(row.response_json === null ? {} : { response: JSON.parse(row.response_json) as unknown }),
+    status: row.status,
+    ...(row.status_code === null ? {} : { statusCode: row.status_code }),
+    subject: row.subject,
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+export class SqliteApiIdempotencyRepository implements ApiIdempotencyRepository {
+  public constructor(private readonly database: OpenRepurposeDatabase) {}
+  public begin(
+    record: ApiIdempotencyRecord,
+  ):
+    | { readonly kind: 'acquired' }
+    | { readonly kind: 'existing'; readonly record: ApiIdempotencyRecord } {
+    const result = this.database.client
+      .prepare(
+        `INSERT OR IGNORE INTO api_idempotency_records
+         (subject, operation, key, request_hash, status, status_code, response_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)`,
+      )
+      .run(
+        record.subject,
+        record.operation,
+        record.key,
+        record.requestHash,
+        record.createdAt.getTime(),
+        record.updatedAt.getTime(),
+      );
+    if (Number(result.changes) === 1) return { kind: 'acquired' };
+    const existing = this.database.client
+      .prepare(
+        `SELECT * FROM api_idempotency_records
+         WHERE subject = ? AND operation = ? AND key = ?`,
+      )
+      .get(record.subject, record.operation, record.key) as unknown as RawApiIdempotencyRow;
+    return { kind: 'existing', record: apiIdempotencyFromRow(existing) };
+  }
+  public complete(input: {
+    readonly key: string;
+    readonly operation: string;
+    readonly response: unknown;
+    readonly statusCode: number;
+    readonly subject: string;
+    readonly updatedAt: Date;
+  }): void {
+    this.database.client
+      .prepare(
+        `UPDATE api_idempotency_records
+         SET status = 'completed', status_code = ?, response_json = ?, updated_at = ?
+         WHERE subject = ? AND operation = ? AND key = ? AND status = 'pending'`,
+      )
+      .run(
+        input.statusCode,
+        JSON.stringify(input.response),
+        input.updatedAt.getTime(),
+        input.subject,
+        input.operation,
+        input.key,
+      );
+  }
+  public release(subject: string, operation: string, key: string): void {
+    this.database.client
+      .prepare(
+        `DELETE FROM api_idempotency_records
+         WHERE subject = ? AND operation = ? AND key = ? AND status = 'pending'`,
+      )
+      .run(subject, operation, key);
+  }
+}
 
 export interface OpenDatabaseOptions {
   readonly createParentDirectory?: boolean;
