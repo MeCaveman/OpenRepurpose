@@ -37,6 +37,7 @@ import {
 export * from './transform-runner.js';
 export * from './model-manager.js';
 export * from './whisper-cpp.js';
+export * from './obs-websocket.js';
 
 export interface FfmpegCommand {
   /** Executable path/name to pass directly to child_process.spawn. */

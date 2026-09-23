@@ -14,7 +14,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openrepurpose/core": "workspace:*"
+    "@openrepurpose/core": "workspace:*",
+    "obs-websocket-js": "5.0.8"
   },
   "devDependencies": {
     "@types/node": "24.13.5"

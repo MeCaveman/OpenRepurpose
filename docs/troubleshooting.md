@@ -32,6 +32,16 @@ beside the video, such as `Replay 2026-09-21 14-35-42.json`, may provide string 
 `description`, `publishedAt` (or `recordedAt`), and `externalId`. Invalid, unreadable, or larger than
 64 KiB sidecars are ignored; the video still imports using filename metadata.
 
+## OBS WebSocket is disconnected
+
+OBS WebSocket is optional. Folder scans still discover and settle recordings/replays when OBS is
+closed or its WebSocket service is unavailable. To request an immediate scan when OBS saves a replay
+or stops recording, set `OBS_WEBSOCKET_URL` (normally `ws://127.0.0.1:4455`) and, if enabled in
+OBS, `OBS_WEBSOCKET_PASSWORD`. The password is stored in the local encrypted vault at startup and
+never exposed to the browser. A non-loopback endpoint must use `wss://`; do not put credentials in
+the URL. Authentication/session-invalidated failures deliberately do not retry—correct the local
+configuration and restart OpenRepurpose.
+
 ## A YouTube upload is waiting or failed
 
 Open the job detail to see the safe error code and attempt history. `retrying` jobs are waiting for

@@ -98,6 +98,28 @@ describe('application configuration', () => {
     expect(() =>
       loadApplicationConfig({ JOB_RETRY_BASE_MS: '1000', JOB_RETRY_MAX_MS: '999' }, linuxRuntime),
     ).toThrow('must be greater than or equal to JOB_RETRY_BASE_MS');
+    expect(() =>
+      loadApplicationConfig({ OBS_WEBSOCKET_URL: 'ws://obs.example.test:4455' }, linuxRuntime),
+    ).toThrow('must use wss for a non-loopback OBS endpoint');
+    expect(() => loadApplicationConfig({ OBS_WEBSOCKET_PASSWORD: 'secret' }, linuxRuntime)).toThrow(
+      'requires OBS_WEBSOCKET_URL',
+    );
+  });
+
+  it('loads an optional local OBS WebSocket hint without making folder watches depend on it', () => {
+    const config = loadApplicationConfig(
+      {
+        OBS_WEBSOCKET_URL: 'ws://127.0.0.1:4455',
+        OBS_WEBSOCKET_PASSWORD: 'local-only-password',
+        OBS_WEBSOCKET_RECONNECT_MS: '7500',
+      },
+      linuxRuntime,
+    );
+    expect(config.obsWebSocket).toMatchObject({
+      password: 'local-only-password',
+      reconnectDelayMs: 7_500,
+    });
+    expect(config.obsWebSocket?.url.toString()).toBe('ws://127.0.0.1:4455/');
   });
 
   it('rejects relative path overrides', () => {

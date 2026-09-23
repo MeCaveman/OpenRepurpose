@@ -21,6 +21,12 @@ export interface ApplicationConfig {
   readonly appUrl: URL;
   readonly bindHost: string;
   readonly developmentServerUrl?: URL;
+  /** Password is a startup bootstrap value; server composition copies it into SecretStore. */
+  readonly obsWebSocket?: {
+    readonly password?: string;
+    readonly reconnectDelayMs: number;
+    readonly url: URL;
+  };
   readonly jobRunner: {
     readonly accountConcurrency: number;
     readonly authFailureThreshold: number;
@@ -64,6 +70,30 @@ function httpUrlSchema() {
     const protocol = new URL(value).protocol;
     return protocol === 'http:' || protocol === 'https:';
   }, 'must use http or https');
+}
+
+function obsWebSocketUrlSchema() {
+  return z
+    .string()
+    .trim()
+    .url()
+    .superRefine((value, context) => {
+      const url = new URL(value);
+      if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+        context.addIssue({ code: 'custom', message: 'must use ws or wss' });
+        return;
+      }
+      if (url.username.length > 0 || url.password.length > 0)
+        context.addIssue({ code: 'custom', message: 'must not embed credentials' });
+      if (
+        url.protocol === 'ws:' &&
+        !new Set(['127.0.0.1', '::1', 'localhost']).has(url.hostname.toLowerCase())
+      )
+        context.addIssue({
+          code: 'custom',
+          message: 'must use wss for a non-loopback OBS endpoint',
+        });
+    });
 }
 
 /**
@@ -136,11 +166,19 @@ export function loadApplicationConfig(
       TRANSFORM_KILL_GRACE_MS: z.coerce.number().int().min(0).default(5_000),
       WATCH_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(2_000),
       WATCH_SETTLE_MS: z.coerce.number().int().min(0).default(10_000),
+      OBS_WEBSOCKET_URL: obsWebSocketUrlSchema().optional(),
+      OBS_WEBSOCKET_PASSWORD: z.string().max(4_096).optional(),
+      OBS_WEBSOCKET_RECONNECT_MS: z.coerce.number().int().min(1_000).max(300_000).default(5_000),
     })
     .refine((values) => values.JOB_RETRY_MAX_MS >= values.JOB_RETRY_BASE_MS, {
       message: 'must be greater than or equal to JOB_RETRY_BASE_MS',
       path: ['JOB_RETRY_MAX_MS'],
     })
+    .refine(
+      (values) =>
+        values.OBS_WEBSOCKET_URL !== undefined || values.OBS_WEBSOCKET_PASSWORD === undefined,
+      { message: 'requires OBS_WEBSOCKET_URL', path: ['OBS_WEBSOCKET_PASSWORD'] },
+    )
     .parse(environment);
   const defaults = resolveApplicationPaths(environment, runtime);
   const paths: ApplicationPaths = {
@@ -168,6 +206,17 @@ export function loadApplicationConfig(
     ...(parsed.DEV_SERVER_URL === undefined
       ? {}
       : { developmentServerUrl: new URL(parsed.DEV_SERVER_URL) }),
+    ...(parsed.OBS_WEBSOCKET_URL === undefined
+      ? {}
+      : {
+          obsWebSocket: {
+            ...(parsed.OBS_WEBSOCKET_PASSWORD === undefined
+              ? {}
+              : { password: parsed.OBS_WEBSOCKET_PASSWORD }),
+            reconnectDelayMs: parsed.OBS_WEBSOCKET_RECONNECT_MS,
+            url: new URL(parsed.OBS_WEBSOCKET_URL),
+          },
+        }),
     jobRunner: {
       accountConcurrency: parsed.JOB_ACCOUNT_CONCURRENCY,
       authFailureThreshold: parsed.JOB_AUTH_FAILURE_THRESHOLD,

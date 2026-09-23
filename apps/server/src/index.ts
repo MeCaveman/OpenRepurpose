@@ -55,6 +55,7 @@ import {
   LocalWhisperModelManager,
   LocalTransformOutputStorage,
   FfmpegProcessRunner,
+  ObsWebSocketFolderScanTrigger,
   TransformJobHandler,
   TransformRecoveryService,
   WatchedFolderRunner,
@@ -105,6 +106,13 @@ export async function startServer(): Promise<void> {
     config.paths.secretVaultPath,
     config.paths.secretKeyPath,
   );
+  const obsWebSocketPasswordReference = {
+    name: 'password',
+    ownerId: 'obs-websocket',
+    scope: 'application',
+  } as const;
+  if (config.obsWebSocket?.password !== undefined)
+    await secretStore.set(obsWebSocketPasswordReference, config.obsWebSocket.password);
   const accountRepository = new SqliteAccountRepository(database);
   const authorizationRequestRepository = new SqliteOAuthAuthorizationRequestRepository(database);
   const youtubeOAuthService = new YouTubeOAuthService(
@@ -330,6 +338,28 @@ export async function startServer(): Promise<void> {
           config.watchedFolder,
         );
   watchedFolderRunner?.start();
+  const obsWebSocketPassword =
+    config.obsWebSocket === undefined
+      ? undefined
+      : await secretStore.get(obsWebSocketPasswordReference);
+  const obsWebSocketTrigger =
+    config.obsWebSocket === undefined || watchedFolderRunner === undefined
+      ? undefined
+      : new ObsWebSocketFolderScanTrigger({
+          endpoint: config.obsWebSocket.url,
+          onConnectionFailure: () =>
+            process.stderr.write(
+              `${JSON.stringify({
+                level: 'warn',
+                subsystem: 'obs-websocket',
+                event: 'connection.failed',
+              })}\n`,
+            ),
+          onScan: () => watchedFolderRunner.scan(),
+          ...(obsWebSocketPassword === undefined ? {} : { password: obsWebSocketPassword }),
+          reconnectDelayMs: config.obsWebSocket.reconnectDelayMs,
+        });
+  obsWebSocketTrigger?.start();
   const server = buildServer({
     config,
     jobService,
@@ -359,6 +389,7 @@ export async function startServer(): Promise<void> {
       await jobRunner.stop();
       await sourcePollingRunner.stop();
       schedulerLoop.stop();
+      await obsWebSocketTrigger?.stop();
       watchedFolderRunner?.stop();
       await server.close();
       database.close();
@@ -374,6 +405,7 @@ export async function startServer(): Promise<void> {
     await jobRunner.stop();
     await sourcePollingRunner.stop();
     schedulerLoop.stop();
+    await obsWebSocketTrigger?.stop();
     watchedFolderRunner?.stop();
     database.close();
     throw error;
