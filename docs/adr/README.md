@@ -15,3 +15,4 @@ Use sequential, descriptive filenames, for example:
 - `0009-optional-external-downloader-boundary.md`
 - `0010-twitch-source-and-media-resolution.md`
 - `0011-kick-source-and-media-boundary.md`
+- `0012-external-control-security-threat-model.md`
