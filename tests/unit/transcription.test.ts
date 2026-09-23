@@ -166,7 +166,7 @@ describe('transcript persistence', () => {
       ).toEqual({ name: 'transcripts' });
       expect(
         database.client.prepare('SELECT id FROM __openrepurpose_migrations ORDER BY id DESC').get(),
-      ).toEqual({ id: '0022_transform_caption_sidecars' });
+      ).toEqual({ id: '0023_twitch_oauth' });
     } finally {
       database.close();
       rmSync(directory, { recursive: true, force: true, maxRetries: 3 });

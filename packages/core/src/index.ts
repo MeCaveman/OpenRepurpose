@@ -89,7 +89,7 @@ export interface MediaRepository {
   list(): readonly MediaAsset[];
 }
 
-export type AccountProvider = 'meta' | 'tiktok' | 'youtube';
+export type AccountProvider = 'meta' | 'tiktok' | 'twitch' | 'youtube';
 export type AccountStatus = 'connected' | 'reauthorization_required';
 export type AccountCapability =
   | 'tiktok.identity.read'
@@ -97,7 +97,9 @@ export type AccountCapability =
   | 'meta.identity.read'
   | 'meta.pages.read'
   | 'youtube.identity.read'
-  | 'youtube.video.upload';
+  | 'youtube.video.upload'
+  | 'twitch.identity.read'
+  | 'twitch.clip.download';
 
 /** Browser-safe account metadata. OAuth credentials and tokens live only in SecretStore. */
 export interface ConnectedAccount {
@@ -1072,6 +1074,32 @@ export class SourceService {
       configuration: { accountId },
       displayName: input.displayName?.trim() || `YouTube channel ${channelId}`,
       externalSourceId: channelId,
+      now: this.now(),
+    });
+  }
+
+  public addTwitch(input: {
+    readonly accountId: string;
+    readonly broadcasterId: string;
+    readonly displayName?: string;
+    readonly editorId?: string;
+    readonly kind: 'clips' | 'vods';
+  }): SourceConnection {
+    const accountId = input.accountId.trim();
+    const broadcasterId = input.broadcasterId.trim();
+    const editorId = input.editorId?.trim();
+    if (accountId.length === 0 || broadcasterId.length === 0)
+      throw new Error('A connected Twitch account and broadcaster ID are required.');
+    return this.repository.createConnection({
+      adapterId: 'twitch',
+      configuration: {
+        accountId,
+        broadcasterId,
+        kind: input.kind,
+        ...(editorId === undefined || editorId.length === 0 ? {} : { editorId }),
+      },
+      displayName: input.displayName?.trim() || `Twitch ${input.kind} for ${broadcasterId}`,
+      externalSourceId: broadcasterId,
       now: this.now(),
     });
   }

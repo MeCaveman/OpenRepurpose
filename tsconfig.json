@@ -3,6 +3,7 @@
   "files": [],
   "references": [
     { "path": "./integrations/youtube" },
+    { "path": "./integrations/twitch" },
     { "path": "./integrations/meta" },
     { "path": "./apps/cli" },
     { "path": "./apps/server" },

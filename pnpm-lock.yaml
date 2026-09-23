@@ -254,6 +254,9 @@ importers:
       '@openrepurpose/tiktok':
         specifier: workspace:*
         version: link:../../integrations/tiktok
+      '@openrepurpose/twitch':
+        specifier: workspace:*
+        version: link:../../integrations/twitch
       '@openrepurpose/youtube':
         specifier: workspace:*
         version: link:../../integrations/youtube
@@ -319,6 +322,19 @@ importers:
         version: 24.13.5
 
   integrations/tiktok:
+    dependencies:
+      '@openrepurpose/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@openrepurpose/platform-sdk':
+        specifier: workspace:*
+        version: link:../../packages/platform-sdk
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.5
+        version: 24.13.5
+
+  integrations/twitch:
     dependencies:
       '@openrepurpose/core':
         specifier: workspace:*

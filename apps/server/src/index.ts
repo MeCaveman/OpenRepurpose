@@ -71,6 +71,11 @@ import {
   YouTubeSourceAdapter,
   YouTubeUploadJobHandler,
 } from '@openrepurpose/youtube';
+import {
+  TwitchClipMediaResolver,
+  TwitchOAuthService,
+  TwitchSourceAdapter,
+} from '@openrepurpose/twitch';
 import { TikTokDirectPostJobHandler, TikTokOAuthService } from '@openrepurpose/tiktok';
 import {
   FacebookReelsJobHandler,
@@ -107,6 +112,12 @@ export async function startServer(): Promise<void> {
     config.appUrl,
   );
   const tiktokOAuthService = new TikTokOAuthService(
+    accountRepository,
+    authorizationRequestRepository,
+    secretStore,
+    config.appUrl,
+  );
+  const twitchOAuthService = new TwitchOAuthService(
     accountRepository,
     authorizationRequestRepository,
     secretStore,
@@ -192,7 +203,10 @@ export async function startServer(): Promise<void> {
           new MediaResolutionService(
             new SqliteSourceMediaResolutionRepository(database),
             new RegisteredLocalOriginalMatcher(mediaRepository),
-            [new ExternalDownloaderMediaResolver(externalDownloaders)],
+            [
+              new ExternalDownloaderMediaResolver(externalDownloaders),
+              new TwitchClipMediaResolver(twitchOAuthService),
+            ],
             managedTemporaryStorage,
             mediaImportService,
             mediaRepository,
@@ -205,11 +219,14 @@ export async function startServer(): Promise<void> {
           ),
         );
   // The durable loop is intentionally server-owned, so polling continues with no browser session
-  // or web UI open. The YouTube adapter performs detection/metadata only.
+  // or web UI open. Twitch uses the same durable polling path; EventSub is not authoritative.
   const sourceRepository = new SqliteSourcePollingRepository(database);
   const sourcePollingRunner = new SourcePollingRunner(
     sourceRepository,
-    new SourceRegistry([new YouTubeSourceAdapter(youtubeOAuthService)]),
+    new SourceRegistry([
+      new YouTubeSourceAdapter(youtubeOAuthService),
+      new TwitchSourceAdapter(twitchOAuthService),
+    ]),
     jobService,
     {
       sourceContext: {
@@ -310,6 +327,7 @@ export async function startServer(): Promise<void> {
     sourceService: new SourceService(sourceRepository),
     ...(sourceCoordinator === undefined ? {} : { sourceWorkflowCoordinator: sourceCoordinator }),
     tiktokOAuthService,
+    twitchOAuthService,
     transformService,
     transcriptService,
     metaOAuthService,

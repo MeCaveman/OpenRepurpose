@@ -20,6 +20,9 @@ export default defineConfig({
       '@openrepurpose/tiktok': fileURLToPath(
         new URL('./integrations/tiktok/src/index.ts', import.meta.url),
       ),
+      '@openrepurpose/twitch': fileURLToPath(
+        new URL('./integrations/twitch/src/index.ts', import.meta.url),
+      ),
       '@openrepurpose/youtube': fileURLToPath(
         new URL('./integrations/youtube/src/index.ts', import.meta.url),
       ),

@@ -842,6 +842,42 @@ export function createCli(options: CreateCliOptions = {}): Command {
         context.database.close();
       }
     });
+  addSource
+    .command('twitch')
+    .requiredOption('--account <account-id>', 'Connected Twitch account ID')
+    .requiredOption('--broadcaster <broadcaster-id>', 'Twitch broadcaster ID to poll')
+    .requiredOption('--kind <clips|vods>', 'Source type')
+    .option('--editor <editor-id>', 'Connected editor ID for official clip download')
+    .option('--name <display-name>', 'Local display name')
+    .option('--json', 'write JSON')
+    .action(
+      (options: {
+        account: string;
+        broadcaster: string;
+        editor?: string;
+        kind: string;
+        name?: string;
+        json?: boolean;
+      }) => {
+        if (options.kind !== 'clips' && options.kind !== 'vods')
+          throw new Error('Twitch source kind must be clips or vods.');
+        const context = sourceContext(environment);
+        try {
+          const source = context.service.addTwitch({
+            accountId: options.account,
+            broadcasterId: options.broadcaster,
+            kind: options.kind,
+            ...(options.editor === undefined ? {} : { editorId: options.editor }),
+            ...(options.name === undefined ? {} : { displayName: options.name }),
+          });
+          write(
+            options.json ? `${JSON.stringify(source)}\n` : `${source.id}\t${source.displayName}\n`,
+          );
+        } finally {
+          context.database.close();
+        }
+      },
+    );
   for (const action of ['poll', 'pause', 'resume'] as const)
     sources
       .command(`${action} <id>`)

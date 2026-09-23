@@ -22,6 +22,7 @@
     "@openrepurpose/meta": "workspace:*",
     "@openrepurpose/platform-sdk": "workspace:*",
     "@openrepurpose/tiktok": "workspace:*",
+    "@openrepurpose/twitch": "workspace:*",
     "@openrepurpose/youtube": "workspace:*",
     "fastify": "5.12.5"
   },

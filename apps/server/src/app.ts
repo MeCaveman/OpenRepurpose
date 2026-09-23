@@ -8,6 +8,7 @@ import type { ApplicationConfig } from '@openrepurpose/shared';
 import { ModelManagerError, type TranscriptionModelManager } from '@openrepurpose/media';
 import { isPlatformError, REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
 import type { YouTubeOAuthService } from '@openrepurpose/youtube';
+import type { TwitchOAuthService } from '@openrepurpose/twitch';
 import type { TikTokOAuthService } from '@openrepurpose/tiktok';
 import type { MetaOAuthService } from '@openrepurpose/meta';
 import type {
@@ -55,6 +56,7 @@ export interface BuildServerOptions {
   readonly sourceWorkflowCoordinator?: Pick<SourceWorkflowCoordinator, 'retryFailedDestinations'>;
   readonly staticRoot?: false | string;
   readonly tiktokOAuthService?: TikTokOAuthService;
+  readonly twitchOAuthService?: TwitchOAuthService;
   readonly transformService?: TransformService;
   readonly transcriptService?: TranscriptService;
   readonly youtubeOAuthService?: YouTubeOAuthService;
@@ -361,10 +363,12 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
   if (
     options.youtubeOAuthService !== undefined ||
     options.tiktokOAuthService !== undefined ||
+    options.twitchOAuthService !== undefined ||
     options.metaOAuthService !== undefined
   ) {
     const youtube = options.youtubeOAuthService;
     const tiktok = options.tiktokOAuthService;
+    const twitch = options.twitchOAuthService;
     const meta = options.metaOAuthService;
     const accounts = youtube ?? tiktok;
     const safePlatformFailure = (error: unknown, reply: FastifyReply) => {
@@ -380,6 +384,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       accounts: accounts?.listAccounts() ?? [],
       youtube: await youtube?.credentialStatus(),
       tiktok: await tiktok?.credentialStatus(),
+      twitch: await twitch?.credentialStatus(),
       meta: await meta?.credentialStatus(),
       metaCredentials: meta?.listCredentials() ?? [],
       metaTargets: meta?.listTargets() ?? [],
@@ -387,6 +392,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     server.get('/api/setup', async () => ({
       youtube: await youtube?.credentialStatus(),
       tiktok: await tiktok?.credentialStatus(),
+      twitch: await twitch?.credentialStatus(),
       meta: await meta?.credentialStatus(),
     }));
     if (youtube !== undefined) {
@@ -514,6 +520,79 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
           } catch (error) {
             return safePlatformFailure(error, reply);
           }
+        },
+      );
+    }
+    if (twitch !== undefined) {
+      server.post<{ Body: { clientId?: unknown; clientSecret?: unknown } }>(
+        '/api/accounts/twitch/credentials',
+        async (request, reply) => {
+          if (
+            typeof request.body?.clientId !== 'string' ||
+            typeof request.body.clientSecret !== 'string'
+          )
+            return reply.code(400).send({
+              error: 'A Twitch client ID and client secret are required.',
+              code: 'INVALID_TWITCH_CREDENTIALS',
+            });
+          try {
+            await twitch.configureCredentials({
+              clientId: request.body.clientId,
+              clientSecret: request.body.clientSecret,
+            });
+            return { twitch: await twitch.credentialStatus() };
+          } catch (error) {
+            return safePlatformFailure(error, reply);
+          }
+        },
+      );
+      server.post<{ Body: { officialClipDownload?: unknown } }>(
+        '/api/accounts/twitch/oauth/start',
+        async (request, reply) => {
+          try {
+            const browserBinding = request.session.get('csrfToken');
+            if (typeof browserBinding !== 'string')
+              return reply.code(403).send({
+                error: 'A local browser session is required.',
+                code: 'TWITCH_OAUTH_SESSION_REQUIRED',
+              });
+            if (
+              request.body?.officialClipDownload !== undefined &&
+              typeof request.body.officialClipDownload !== 'boolean'
+            )
+              return reply.code(400).send({
+                error: 'officialClipDownload must be a boolean.',
+                code: 'INVALID_TWITCH_OAUTH_OPTIONS',
+              });
+            return await twitch.beginAuthorization(browserBinding, {
+              ...(request.body?.officialClipDownload === true
+                ? { officialClipDownload: true }
+                : {}),
+            });
+          } catch (error) {
+            return safePlatformFailure(error, reply);
+          }
+        },
+      );
+      server.get<{ Querystring: { code?: string; error?: string; state?: string } }>(
+        '/api/accounts/twitch/oauth/callback',
+        async (request, reply) => {
+          const destination = new URL('/accounts', options.config.appUrl);
+          try {
+            const browserBinding = request.session.get('csrfToken');
+            await twitch.completeAuthorization({
+              ...request.query,
+              ...(typeof browserBinding === 'string' ? { browserBinding } : {}),
+            });
+            destination.searchParams.set('twitch', 'connected');
+          } catch (error) {
+            destination.searchParams.set('twitch', 'error');
+            destination.searchParams.set(
+              'code',
+              isPlatformError(error) ? error.code : 'TWITCH_OAUTH_CALLBACK_FAILED',
+            );
+          }
+          return reply.redirect(destination.toString());
         },
       );
     }
@@ -978,6 +1057,38 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       } catch (error) {
         return reply.code(400).send({
           error: error instanceof Error ? error.message : 'Invalid YouTube source.',
+          code: 'INVALID_SOURCE',
+        });
+      }
+    });
+    server.post<{ Body: unknown }>('/api/sources/twitch', async (request, reply) => {
+      const value = request.body;
+      if (typeof value !== 'object' || value === null)
+        return reply.code(400).send({ error: 'Invalid Twitch source.', code: 'INVALID_SOURCE' });
+      const body = value as Record<string, unknown>;
+      if (
+        typeof body.accountId !== 'string' ||
+        typeof body.broadcasterId !== 'string' ||
+        (body.kind !== 'clips' && body.kind !== 'vods') ||
+        (body.editorId !== undefined && typeof body.editorId !== 'string')
+      )
+        return reply.code(400).send({
+          error: 'An account, broadcaster ID, and Twitch source type are required.',
+          code: 'INVALID_SOURCE',
+        });
+      try {
+        return reply.code(201).send({
+          source: sources.addTwitch({
+            accountId: body.accountId,
+            broadcasterId: body.broadcasterId,
+            kind: body.kind,
+            ...(typeof body.editorId === 'string' ? { editorId: body.editorId } : {}),
+            ...(typeof body.displayName === 'string' ? { displayName: body.displayName } : {}),
+          }),
+        });
+      } catch (error) {
+        return reply.code(400).send({
+          error: error instanceof Error ? error.message : 'Invalid Twitch source.',
           code: 'INVALID_SOURCE',
         });
       }
