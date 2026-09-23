@@ -25,6 +25,7 @@ import {
   WorkflowTranscriptionService,
   WorkflowTransformService,
   WorkflowService,
+  WorkflowPresetService,
   type JobHandler,
 } from '@openrepurpose/core';
 import {
@@ -130,8 +131,9 @@ export async function startServer(): Promise<void> {
     secretStore,
     config.appUrl,
   );
+  const metaCredentialRepository = new SqliteMetaCredentialRepository(database);
   const metaOAuthService = new MetaOAuthService(
-    new SqliteMetaCredentialRepository(database),
+    metaCredentialRepository,
     authorizationRequestRepository,
     secretStore,
     config.appUrl,
@@ -228,6 +230,12 @@ export async function startServer(): Promise<void> {
   // The durable loop is intentionally server-owned, so polling continues with no browser session
   // or web UI open. Twitch uses the same durable polling path; EventSub is not authoritative.
   const sourceRepository = new SqliteSourcePollingRepository(database);
+  const workflowPresetService = new WorkflowPresetService(
+    accountRepository,
+    metaCredentialRepository,
+    sourceRepository,
+    { transformAvailable: workflowTransformService !== undefined },
+  );
   const sourcePollingRunner = new SourcePollingRunner(
     sourceRepository,
     new SourceRegistry([
@@ -332,6 +340,7 @@ export async function startServer(): Promise<void> {
     mediaRepository,
     modelManager,
     workflowService,
+    workflowPresetService,
     sourceService: new SourceService(sourceRepository),
     ...(sourceCoordinator === undefined ? {} : { sourceWorkflowCoordinator: sourceCoordinator }),
     tiktokOAuthService,

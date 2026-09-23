@@ -455,6 +455,29 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
   await page.route('**/api/sources', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sources: [] }) }),
   );
+  await page.route('**/api/workflow-presets', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        presets: [
+          {
+            description: 'Watch an OBS Replay Buffer folder and publish vertical clips.',
+            destinationIds: ['youtube'],
+            id: 'obs-clip-short-form',
+            issues: [
+              {
+                code: 'DESTINATION_UNAVAILABLE',
+                message: 'Unavailable destinations will be omitted: tiktok, instagram.',
+                severity: 'warning',
+              },
+            ],
+            label: 'OBS clip → short-form',
+            status: 'partial',
+          },
+        ],
+      }),
+    }),
+  );
 
   let submitted:
     | {
@@ -518,6 +541,7 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
   await page.goto('/workflows');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Workflows');
   await expect(page.getByRole('heading', { name: 'Create a workflow' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Streamer presets' })).toBeVisible();
   await page.getByRole('button', { name: 'Save workflow' }).click();
   await expect(page.getByLabel('Workflow name')).toBeFocused();
   await expect(page.getByText('Give this workflow a name.').last()).toBeVisible();
@@ -601,4 +625,148 @@ test('workflow workbench preserves the v0.5 route payload and responsive layout'
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);
   }
+});
+
+test('streamer preset loads an editable normal workflow draft', async ({ page }) => {
+  await serveProductionAssets(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ csrfToken: 'csrf' }) }),
+  );
+  await page.route('**/api/accounts', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        accounts: [
+          {
+            capabilities: ['youtube.video.upload'],
+            displayName: 'Workshop Channel',
+            id: 'account-1',
+            provider: 'youtube',
+            status: 'connected',
+          },
+        ],
+        metaTargets: [],
+      }),
+    }),
+  );
+  await page.route('**/api/sources', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sources: [] }) }),
+  );
+  await page.route('**/api/workflow-presets', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        presets: [
+          {
+            description: 'Watch an OBS Replay Buffer folder and publish vertical clips.',
+            destinationIds: ['youtube'],
+            id: 'obs-clip-short-form',
+            issues: [],
+            label: 'OBS clip → short-form',
+            status: 'ready',
+          },
+        ],
+      }),
+    }),
+  );
+  await page.route('**/api/workflow-presets/obs-clip-short-form/draft', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        draft: {
+          workflow: {
+            name: 'OBS clip → short-form',
+            sourceDirectory: '',
+            titleTemplate: '{{source.title}}',
+            descriptionTemplate: '',
+            destinations: [
+              { destinationId: 'youtube', accountId: 'account-1', privacy: 'private' },
+            ],
+            definition: {
+              schemaVersion: 1,
+              steps: [
+                {
+                  id: 'source',
+                  kind: 'source',
+                  sourceType: 'watched_folder',
+                  watchedFolder: {
+                    filenameMetadata: 'obs',
+                    preset: 'obs_replay_buffer',
+                    settleMs: 5_000,
+                    sidecarMetadata: true,
+                  },
+                },
+                {
+                  id: 'transform',
+                  kind: 'transform',
+                  plan: {
+                    schemaVersion: 1,
+                    user: {
+                      schemaVersion: 1,
+                      steps: [
+                        {
+                          type: 'fit',
+                          mode: 'crop',
+                          width: 1080,
+                          height: 1920,
+                          anchor: 'center',
+                        },
+                      ],
+                      output: {},
+                    },
+                  },
+                },
+                {
+                  id: 'destination-1',
+                  kind: 'destination',
+                  destination: {
+                    destinationId: 'youtube',
+                    accountId: 'account-1',
+                    privacy: 'private',
+                  },
+                },
+              ],
+              edges: [
+                { from: 'source', to: 'transform' },
+                { from: 'transform', to: 'destination-1' },
+              ],
+            },
+            enabled: true,
+          },
+        },
+      }),
+    }),
+  );
+  let submitted: Record<string, unknown> | undefined;
+  await page.route('**/api/workflows', async (route) => {
+    if (route.request().method() === 'POST') {
+      submitted = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ workflow: { id: 'workflow-preset' } }),
+      });
+    }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workflows: [] }),
+    });
+  });
+
+  await page.goto('/workflows');
+  await page.getByRole('button', { name: 'Use preset' }).click();
+  await expect(page.getByLabel('Workflow name')).toBeFocused();
+  await expect(page.getByLabel('Workflow name')).toHaveValue('OBS clip → short-form');
+  await expect(page.getByLabel('Folder preset')).toHaveValue('obs_replay_buffer');
+  await expect(page.getByLabel('Output preset')).toHaveValue('vertical');
+  await expect(page.getByLabel('Destination 1')).toHaveValue('youtube:account-1');
+  await page.getByLabel('Workflow name').fill('Daily replay clips');
+  await page.getByLabel('Watched folder').fill('C:\\OBS\\Replay Buffer');
+  await page.getByRole('button', { name: 'Save workflow' }).click();
+
+  await expect.poll(() => submitted?.name).toBe('Daily replay clips');
+  expect(submitted).toMatchObject({
+    sourceDirectory: 'C:\\OBS\\Replay Buffer',
+    destinations: [{ destinationId: 'youtube', accountId: 'account-1' }],
+  });
 });

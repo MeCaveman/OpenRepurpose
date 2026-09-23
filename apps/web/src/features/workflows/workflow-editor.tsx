@@ -137,7 +137,13 @@ export type WorkflowEditorValue = {
   enabled: boolean;
 };
 
-type AccountOption = { id: string; displayName: string; provider: string; status: string };
+type AccountOption = {
+  id: string;
+  capabilities: readonly string[];
+  displayName: string;
+  provider: string;
+  status: string;
+};
 type TargetOption = {
   id: string;
   displayName: string;
@@ -181,35 +187,74 @@ function RouteStepHeader({
 
 export function WorkflowEditor({
   accounts,
+  initialValue,
   metaTargets,
   sources,
   onSubmit,
 }: {
   accounts: readonly AccountOption[];
+  initialValue?: WorkflowEditorValue;
   metaTargets: readonly TargetOption[];
   sources: readonly SourceOption[];
   onSubmit: (value: WorkflowEditorValue) => Promise<void>;
 }) {
-  const [name, setName] = useState('');
-  const [sourceDirectory, setSourceDirectory] = useState('');
-  const [watchedFolderPreset, setWatchedFolderPreset] = useState<WatchedFolderPreset>('standard');
-  const [remoteSourceId, setRemoteSourceId] = useState('');
-  const [retention, setRetention] = useState('delete_after_success');
-  const [retentionHours, setRetentionHours] = useState('24');
-  const [rightsConfirmed, setRightsConfirmed] = useState(false);
-  const [titleTemplate, setTitleTemplate] = useState('{{file.stem}}');
-  const [descriptionTemplate, setDescriptionTemplate] = useState('');
-  const [filterTitle, setFilterTitle] = useState('');
-  const [filterEnabled, setFilterEnabled] = useState(false);
-  const [transformEnabled, setTransformEnabled] = useState(false);
-  const [transformPreset, setTransformPreset] = useState<TransformPreset>('vertical');
-  const [transformWidth, setTransformWidth] = useState('1080');
-  const [transformHeight, setTransformHeight] = useState('1920');
-  const [transformFit, setTransformFit] = useState<TransformFitMode>('crop');
-  const [transformAnchor, setTransformAnchor] = useState<TransformAnchor>('center');
-  const [scheduleId, setScheduleId] = useState('');
-  const [scheduleEnabled, setScheduleEnabled] = useState(false);
-  const [destinations, setDestinations] = useState<WorkflowDestinationView[]>([]);
+  const initialSource = initialValue?.definition.steps.find((step) => step.kind === 'source');
+  const initialFilter = initialValue?.definition.steps.find((step) => step.kind === 'filter');
+  const initialTransform = initialValue?.definition.steps.find((step) => step.kind === 'transform');
+  const initialFit =
+    initialTransform?.kind === 'transform' ? initialTransform.plan?.user.steps[0] : undefined;
+  const initialSchedule = initialValue?.definition.steps.find((step) => step.kind === 'schedule');
+  const initialRetention = initialValue?.remoteSource?.retentionPolicy;
+  const [name, setName] = useState(initialValue?.name ?? '');
+  const [sourceDirectory, setSourceDirectory] = useState(initialValue?.sourceDirectory ?? '');
+  const [watchedFolderPreset, setWatchedFolderPreset] = useState<WatchedFolderPreset>(
+    initialSource?.kind === 'source'
+      ? (initialSource.watchedFolder?.preset ?? 'standard')
+      : 'standard',
+  );
+  const [remoteSourceId, setRemoteSourceId] = useState(
+    initialValue?.remoteSource?.connectionId ?? '',
+  );
+  const [retention, setRetention] = useState(initialRetention?.kind ?? 'delete_after_success');
+  const [retentionHours, setRetentionHours] = useState(
+    String((initialRetention?.durationSeconds ?? 86_400) / 3600),
+  );
+  const [rightsConfirmed, setRightsConfirmed] = useState(
+    initialValue?.remoteSource?.rightsConfirmed ?? false,
+  );
+  const [titleTemplate, setTitleTemplate] = useState(
+    initialValue?.titleTemplate ?? '{{file.stem}}',
+  );
+  const [descriptionTemplate, setDescriptionTemplate] = useState(
+    initialValue?.descriptionTemplate ?? '',
+  );
+  const [filterTitle, setFilterTitle] = useState(
+    initialFilter?.kind === 'filter' && typeof initialFilter.filters.titleContains === 'string'
+      ? initialFilter.filters.titleContains
+      : '',
+  );
+  const [filterEnabled, setFilterEnabled] = useState(initialFilter?.kind === 'filter');
+  const [transformEnabled, setTransformEnabled] = useState(initialTransform?.kind === 'transform');
+  const initialPreset =
+    initialFit === undefined
+      ? 'vertical'
+      : ((Object.entries(transformPresets).find(
+          ([, preset]) => preset.width === initialFit.width && preset.height === initialFit.height,
+        )?.[0] as TransformPreset | undefined) ?? 'custom');
+  const [transformPreset, setTransformPreset] = useState<TransformPreset>(initialPreset);
+  const [transformWidth, setTransformWidth] = useState(String(initialFit?.width ?? 1080));
+  const [transformHeight, setTransformHeight] = useState(String(initialFit?.height ?? 1920));
+  const [transformFit, setTransformFit] = useState<TransformFitMode>(initialFit?.mode ?? 'crop');
+  const [transformAnchor, setTransformAnchor] = useState<TransformAnchor>(
+    initialFit !== undefined && initialFit.mode !== 'stretch' ? initialFit.anchor : 'center',
+  );
+  const [scheduleId, setScheduleId] = useState(
+    initialSchedule?.kind === 'schedule' ? initialSchedule.scheduleId : '',
+  );
+  const [scheduleEnabled, setScheduleEnabled] = useState(initialSchedule?.kind === 'schedule');
+  const [destinations, setDestinations] = useState<WorkflowDestinationView[]>(
+    initialValue === undefined ? [] : [...initialValue.destinations],
+  );
   const [validationError, setValidationError] = useState<ValidationError>();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -230,7 +275,14 @@ export function WorkflowEditor({
   const targetOptions = useMemo(
     () => [
       ...accounts
-        .filter((account) => account.status === 'connected')
+        .filter(
+          (account) =>
+            account.status === 'connected' &&
+            ((account.provider === 'youtube' &&
+              account.capabilities.includes('youtube.video.upload')) ||
+              (account.provider === 'tiktok' &&
+                account.capabilities.includes('tiktok.video.publish'))),
+        )
         .map((account) => ({
           value: `${account.provider}:${account.id}`,
           label: `${account.displayName.trim() || 'Unnamed account'} · ${getPlatformMetadata(account.provider).label}`,

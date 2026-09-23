@@ -9,6 +9,7 @@ function workflowsProps(overrides: Partial<WorkflowsPageProps> = {}): WorkflowsP
   return {
     accounts: [
       {
+        capabilities: ['youtube.video.upload'],
         displayName: 'Workshop Channel',
         id: 'account-1',
         provider: 'youtube',
@@ -18,9 +19,28 @@ function workflowsProps(overrides: Partial<WorkflowsPageProps> = {}): WorkflowsP
     error: undefined,
     isLoading: false,
     metaTargets: [],
+    onApplyPreset: async () => {
+      throw new Error('Preset application is not expected in static rendering.');
+    },
     onCreateWorkflow: async () => undefined,
     onRetry: () => undefined,
     sources: [],
+    presets: [
+      {
+        description: 'Watch an OBS Replay Buffer folder and publish vertical clips.',
+        destinationIds: ['youtube'],
+        id: 'obs-clip-short-form',
+        issues: [
+          {
+            code: 'DESTINATION_UNAVAILABLE',
+            message: 'Unavailable destinations will be omitted: tiktok, instagram.',
+            severity: 'warning',
+          },
+        ],
+        label: 'OBS clip → short-form',
+        status: 'partial',
+      },
+    ],
     workflows: [],
     ...overrides,
   };
@@ -31,6 +51,9 @@ describe('web workflows page', () => {
     const markup = renderToStaticMarkup(createElement(WorkflowsPage, workflowsProps()));
 
     expect(markup).toContain('Route builder');
+    expect(markup).toContain('Streamer presets');
+    expect(markup).toContain('OBS clip → short-form');
+    expect(markup).toContain('Limited route');
     expect(markup).toContain('Create a workflow');
     expect(markup).toContain('name="workflow-name"');
     expect(markup).toContain('name="workflow-source-directory"');

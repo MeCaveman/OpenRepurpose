@@ -42,6 +42,7 @@ export * from './schedule.js';
 export * from './external-downloader.js';
 export * from './transcription.js';
 export * from './transform.js';
+export * from './workflow-presets.js';
 
 export type MediaAssetState = 'available' | 'missing';
 

@@ -4,6 +4,8 @@ export type {
   WorkflowAccountView,
   WorkflowDestinationView,
   WorkflowSourceView,
+  WorkflowPresetView,
+  WorkflowPresetIssueView,
   WorkflowTargetView,
   WorkflowsPageProps,
   WorkflowView,

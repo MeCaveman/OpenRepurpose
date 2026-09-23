@@ -20,6 +20,8 @@ import type {
   MediaImportService,
   MediaRepository,
   WorkflowInput,
+  WorkflowPresetService,
+  StreamerWorkflowPresetId,
   WorkflowService,
   SourceService,
   SourceWorkflowCoordinator,
@@ -63,6 +65,7 @@ export interface BuildServerOptions {
   readonly transcriptService?: TranscriptService;
   readonly youtubeOAuthService?: YouTubeOAuthService;
   readonly workflowService?: WorkflowService;
+  readonly workflowPresetService?: Pick<WorkflowPresetService, 'draft' | 'list'>;
 }
 
 function normalizeHostname(hostname: string): string {
@@ -1090,6 +1093,27 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       workflows.delete(request.params.id)
         ? reply.code(204).send()
         : reply.code(404).send({ error: 'Workflow not found.', code: 'WORKFLOW_NOT_FOUND' }),
+    );
+  }
+  if (options.workflowPresetService !== undefined) {
+    const presets = options.workflowPresetService;
+    server.get('/api/workflow-presets', async () => ({ presets: presets.list() }));
+    server.post<{ Params: { id: string } }>(
+      '/api/workflow-presets/:id/draft',
+      async (request, reply) => {
+        if (!['obs-clip-short-form', 'stream-clip-short-form'].includes(request.params.id))
+          return reply
+            .code(404)
+            .send({ error: 'Workflow preset not found.', code: 'WORKFLOW_PRESET_NOT_FOUND' });
+        try {
+          return { draft: presets.draft(request.params.id as StreamerWorkflowPresetId) };
+        } catch (error) {
+          return reply.code(409).send({
+            error: error instanceof Error ? error.message : 'The workflow preset is unavailable.',
+            code: 'WORKFLOW_PRESET_UNAVAILABLE',
+          });
+        }
+      },
     );
   }
   if (options.sourceService !== undefined) {
