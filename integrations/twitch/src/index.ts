@@ -554,11 +554,15 @@ export class TwitchClipMediaResolver implements MediaResolver {
     if (!response.ok || response.body === null)
       throw new MediaResolutionError(
         response.status === 401 || response.status === 403
-          ? 'TWITCH_CLIP_DOWNLOAD_AUTH_FAILED'
+          ? 'TWITCH_CLIP_DOWNLOAD_URL_EXPIRED'
           : 'TWITCH_CLIP_DOWNLOAD_FAILED',
-        response.status === 408 || response.status === 429 || response.status >= 500,
+        response.status === 401 ||
+          response.status === 403 ||
+          response.status === 408 ||
+          response.status === 429 ||
+          response.status >= 500,
         response.status === 401 || response.status === 403
-          ? 'Reconnect the Twitch account to download this clip.'
+          ? 'The temporary Twitch clip download URL expired; a fresh URL will be requested on retry.'
           : 'Twitch clip download failed; a fresh URL will be requested on retry.',
       );
     try {

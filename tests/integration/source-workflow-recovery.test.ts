@@ -17,6 +17,7 @@ import {
   WorkflowService,
   type JobHandler,
   type JsonValue,
+  type MediaResolver,
 } from '@openrepurpose/core';
 import {
   openDatabase,
@@ -31,6 +32,7 @@ import {
   type OpenRepurposeDatabase,
 } from '@openrepurpose/db';
 import { LocalManagedTemporaryStorage, LocalMediaFileInspector } from '@openrepurpose/media';
+import { TwitchClipMediaResolver } from '@openrepurpose/twitch';
 
 interface Clock {
   value: Date;
@@ -58,7 +60,10 @@ function createSystem(
   clock: Clock,
   calls: DestinationCalls,
   failFacebook: { value: boolean },
-  options: { readonly resolverCalls?: { value: number } } = {},
+  options: {
+    readonly resolverCalls?: { value: number };
+    readonly resolvers?: readonly MediaResolver[];
+  } = {},
 ) {
   const media = new SqliteMediaRepository(database);
   const jobsRepository = new SqliteJobRepository(database);
@@ -71,7 +76,7 @@ function createSystem(
   const resolution = new MediaResolutionService(
     resolutions,
     new RegisteredLocalOriginalMatcher(media),
-    [
+    options.resolvers ?? [
       {
         id: 'official-test-resolver',
         canResolve: () => true,
@@ -385,6 +390,319 @@ describe('remote source workflow recovery', () => {
 
     expect(resolverCalls.value).toBe(1);
     expect(system.jobs.list().filter((job) => job.type === 'youtube.upload')).toHaveLength(1);
+    database.close();
+  });
+
+  it('dedupes duplicate and out-of-order observations across restart without republishing', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-source-ordering-'));
+    directories.push(directory);
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    const clock = { value: new Date('2026-09-18T10:00:00.000Z') };
+    const calls = { facebook: 0, youtube: 0 };
+    let database = openDatabase(databasePath);
+    runMigrations(database);
+    seedConnection(database);
+    let system = createSystem(database, directory, clock, calls, { value: false });
+    system.workflows.create({
+      name: 'Ordering and dedupe',
+      remoteSource: { connectionId: 'source-1' },
+      titleTemplate: '{{source.title}}',
+      destinations: [{ destinationId: 'youtube', accountId: 'account-1', privacy: 'private' }],
+    });
+    const polling = new SqliteSourcePollingRepository(database);
+    const observe = (externalId: string, publishedAt: string, eventId: string, title: string) => {
+      const persisted = polling.upsertObservedItem({
+        connectionId: 'source-1',
+        now: clock.value,
+        item: {
+          eventId,
+          externalId,
+          publishedAt,
+          metadata: { title, fileExtension: 'mp4' },
+          media: {
+            availability: 'available',
+            resolutionStrategies: ['official_download'],
+            rightsRequirement: 'connection_authorization',
+          },
+        },
+      });
+      system.jobs.create({
+        type: 'source.item.observed',
+        idempotencyKey: `source-item:${persisted.item.id}:observed`,
+        input: { sourceConnectionId: 'source-1', sourceItemId: persisted.item.id },
+      });
+      return persisted.item.id;
+    };
+
+    const newerId = observe(
+      'clip-newer',
+      '2026-09-18T09:30:00.000Z',
+      'event-newer-1',
+      'Newer clip',
+    );
+    const olderId = observe(
+      'clip-older',
+      '2026-09-18T08:00:00.000Z',
+      'event-older-1',
+      'Older clip delivered second',
+    );
+    expect(newerId).not.toBe(olderId);
+
+    await new JobRunner(system.jobsRepository, [system.handlers.observed], {
+      concurrency: 2,
+      now: () => clock.value,
+    }).runOnce();
+    await new JobRunner(system.jobsRepository, [system.handlers.execution], {
+      concurrency: 2,
+      now: () => clock.value,
+    }).runOnce();
+    const firstPublisher = new JobRunner(system.jobsRepository, [system.handlers.youtube], {
+      concurrency: 2,
+      now: () => clock.value,
+    });
+    await firstPublisher.runOnce();
+    await firstPublisher.runOnce();
+    expect(calls.youtube).toBe(2);
+    database.close();
+
+    clock.value = new Date(clock.value.getTime() + 60_000);
+    database = openDatabase(databasePath);
+    runMigrations(database);
+    system = createSystem(database, directory, clock, calls, { value: false });
+    const restartedPolling = new SqliteSourcePollingRepository(database);
+    for (const duplicate of [
+      {
+        eventId: 'event-older-2',
+        externalId: 'clip-older',
+        publishedAt: '2026-09-18T08:00:00.000Z',
+        title: 'Older clip repeated first',
+      },
+      {
+        eventId: 'event-newer-2',
+        externalId: 'clip-newer',
+        publishedAt: '2026-09-18T09:30:00.000Z',
+        title: 'Newer clip repeated second',
+      },
+    ]) {
+      const persisted = restartedPolling.upsertObservedItem({
+        connectionId: 'source-1',
+        now: clock.value,
+        item: {
+          ...duplicate,
+          metadata: { title: duplicate.title, fileExtension: 'mp4' },
+          media: {
+            availability: 'available',
+            resolutionStrategies: ['official_download'],
+            rightsRequirement: 'connection_authorization',
+          },
+        },
+      });
+      system.jobs.create({
+        type: 'source.item.observed',
+        idempotencyKey: `source-item:${persisted.item.id}:observed`,
+        input: { sourceConnectionId: 'source-1', sourceItemId: persisted.item.id },
+      });
+    }
+    await new JobRunner(
+      system.jobsRepository,
+      [system.handlers.observed, system.handlers.execution, system.handlers.youtube],
+      { concurrency: 3, now: () => clock.value },
+    ).runOnce();
+
+    expect(calls.youtube).toBe(2);
+    expect(database.client.prepare('SELECT count(*) AS count FROM source_items').get()).toEqual({
+      count: 2,
+    });
+    expect(
+      database.client.prepare('SELECT count(*) AS count FROM source_workflow_executions').get(),
+    ).toEqual({ count: 2 });
+    expect(system.jobs.list().filter((job) => job.type === 'youtube.upload')).toHaveLength(2);
+    database.close();
+  });
+
+  it('gets a fresh Twitch URL after an expired download and resumes the same execution after restart', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-twitch-url-restart-'));
+    directories.push(directory);
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    const clock = { value: new Date('2026-09-18T10:00:00.000Z') };
+    const calls = { facebook: 0, youtube: 0 };
+    let lookupCalls = 0;
+    const createResolver = () =>
+      new TwitchClipMediaResolver(
+        { getAccessToken: async () => ({ accessToken: 'access', clientId: 'client' }) },
+        {
+          apiBaseUrl: 'https://twitch.test/helix',
+          http: async (input) => {
+            const url = new URL(input.toString());
+            if (url.pathname === '/helix/clips/downloads') {
+              lookupCalls += 1;
+              return new Response(
+                JSON.stringify({
+                  data: [
+                    {
+                      landscape_download_url:
+                        lookupCalls === 1
+                          ? 'https://cdn.test/expired.mp4'
+                          : 'https://cdn.test/fresh.mp4',
+                    },
+                  ],
+                }),
+                { headers: { 'content-type': 'application/json' } },
+              );
+            }
+            return url.pathname === '/expired.mp4'
+              ? new Response(null, { status: 403 })
+              : new Response('fresh-video-bytes');
+          },
+        },
+      );
+
+    let database = openDatabase(databasePath);
+    runMigrations(database);
+    seedConnection(database);
+    let system = createSystem(
+      database,
+      directory,
+      clock,
+      calls,
+      { value: false },
+      {
+        resolvers: [createResolver()],
+      },
+    );
+    system.workflows.create({
+      name: 'Fresh Twitch URL',
+      remoteSource: { connectionId: 'source-1' },
+      titleTemplate: '{{source.title}}',
+      destinations: [{ destinationId: 'youtube', accountId: 'account-1', privacy: 'private' }],
+    });
+    const item = new SqliteSourcePollingRepository(database).upsertObservedItem({
+      connectionId: 'source-1',
+      now: clock.value,
+      item: {
+        externalId: 'clip-expired-url',
+        metadata: {
+          title: 'Clip with expired URL',
+          fileExtension: 'mp4',
+          twitchKind: 'clip',
+          accountId: 'twitch-account',
+          broadcasterId: 'broadcaster-1',
+          editorId: 'editor-1',
+        },
+        media: {
+          availability: 'available',
+          resolutionStrategies: ['official_download'],
+          rightsRequirement: 'connection_authorization',
+        },
+      },
+    }).item;
+    system.coordinator.observe(item.id);
+    await new JobRunner(system.jobsRepository, [system.handlers.execution], {
+      baseRetryDelayMs: 0,
+      maxRetryDelayMs: 0,
+      concurrency: 1,
+      now: () => clock.value,
+    }).runOnce();
+    expect(system.jobs.list().find((job) => job.type === 'source.execution.run')).toMatchObject({
+      status: 'retrying',
+      lastErrorCode: 'TWITCH_CLIP_DOWNLOAD_URL_EXPIRED',
+    });
+    expect(system.jobs.list().filter((job) => job.type === 'youtube.upload')).toHaveLength(0);
+    database.close();
+
+    clock.value = new Date(clock.value.getTime() + 1);
+    database = openDatabase(databasePath);
+    runMigrations(database);
+    system = createSystem(
+      database,
+      directory,
+      clock,
+      calls,
+      { value: false },
+      {
+        resolvers: [createResolver()],
+      },
+    );
+    await new JobRunner(system.jobsRepository, [system.handlers.execution], {
+      baseRetryDelayMs: 0,
+      maxRetryDelayMs: 0,
+      concurrency: 1,
+      now: () => clock.value,
+    }).runOnce();
+    await new JobRunner(system.jobsRepository, [system.handlers.youtube], {
+      concurrency: 1,
+      now: () => clock.value,
+    }).runOnce();
+
+    expect(lookupCalls).toBe(2);
+    expect(calls.youtube).toBe(1);
+    expect(system.jobs.list().filter((job) => job.type === 'youtube.upload')).toHaveLength(1);
+    database.close();
+  });
+
+  it('fails a missing local original safely and does not create a publish after restart', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-missing-original-'));
+    directories.push(directory);
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    const missingPath = join(directory, 'originals', 'missing-vod.mp4');
+    const clock = { value: new Date('2026-09-18T10:00:00.000Z') };
+    const calls = { facebook: 0, youtube: 0 };
+    let database = openDatabase(databasePath);
+    runMigrations(database);
+    seedConnection(database);
+    let system = createSystem(
+      database,
+      directory,
+      clock,
+      calls,
+      { value: false },
+      {
+        resolvers: [],
+      },
+    );
+    system.workflows.create({
+      name: 'Local original only',
+      remoteSource: { connectionId: 'source-1', localOriginal: { path: missingPath } },
+      titleTemplate: '{{source.title}}',
+      destinations: [{ destinationId: 'youtube', accountId: 'account-1', privacy: 'private' }],
+    });
+    const item = new SqliteSourcePollingRepository(database).upsertObservedItem({
+      connectionId: 'source-1',
+      now: clock.value,
+      item: {
+        externalId: 'vod-without-original',
+        metadata: { title: 'Metadata-only VOD' },
+        media: {
+          availability: 'unavailable',
+          resolutionStrategies: ['local_original'],
+          rightsRequirement: 'connection_authorization',
+        },
+      },
+    }).item;
+    system.coordinator.observe(item.id);
+    await new JobRunner(system.jobsRepository, [system.handlers.execution], {
+      concurrency: 1,
+      now: () => clock.value,
+    }).runOnce();
+    expect(system.jobs.list().find((job) => job.type === 'source.execution.run')).toMatchObject({
+      status: 'failed',
+      lastErrorCode: 'MEDIA_RESOLVER_UNAVAILABLE',
+    });
+    expect(system.jobs.list().filter((job) => job.type === 'youtube.upload')).toHaveLength(0);
+    database.close();
+
+    clock.value = new Date(clock.value.getTime() + 1);
+    database = openDatabase(databasePath);
+    runMigrations(database);
+    system = createSystem(database, directory, clock, calls, { value: false }, { resolvers: [] });
+    system.coordinator.recover();
+    await new JobRunner(
+      system.jobsRepository,
+      [system.handlers.execution, system.handlers.youtube],
+      { concurrency: 2, now: () => clock.value },
+    ).runOnce();
+    expect(calls.youtube).toBe(0);
+    expect(system.jobs.list().filter((job) => job.type === 'youtube.upload')).toHaveLength(0);
     database.close();
   });
 

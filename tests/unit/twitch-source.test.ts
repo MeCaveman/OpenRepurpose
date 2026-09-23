@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MediaResolverRequest } from '@openrepurpose/core';
 import {
+  openDatabase,
+  runMigrations,
   SqliteAccountRepository,
   SqliteOAuthAuthorizationRequestRepository,
 } from '@openrepurpose/db';
+import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
 import { createRedactingLogger } from '@openrepurpose/platform-sdk';
 import { createTemporaryDatabase, InMemorySecretStore } from '@openrepurpose/testkit';
 import {
@@ -207,7 +210,84 @@ describe('Twitch source adapter', () => {
       clientId: 'client-id',
     });
   });
+
+  it('persists token revocation as reauthorization required across a restart', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'openrepurpose-twitch-revocation-'));
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    const vaultPath = join(directory, 'secrets', 'vault.json');
+    const keyPath = join(directory, 'secrets', 'vault.key');
+    let persistentDatabase = openDatabase(databasePath);
+    runMigrations(persistentDatabase);
+    const firstService = new TwitchOAuthService(
+      new SqliteAccountRepository(persistentDatabase),
+      new SqliteOAuthAuthorizationRequestRepository(persistentDatabase),
+      new EncryptedFileSecretStore(vaultPath, keyPath),
+      new URL('http://127.0.0.1:43123'),
+      {
+        now: () => now,
+        endpoints: {
+          authorization: 'https://id.twitch.test/authorize',
+          token: 'https://id.twitch.test/token',
+          validate: 'https://id.twitch.test/validate',
+        },
+        http: async (input) => {
+          const url = new URL(input.toString());
+          return url.pathname === '/token'
+            ? json({ access_token: 'initial-access', refresh_token: 'durable-refresh' })
+            : json({
+                client_id: 'client-id',
+                login: 'streamer',
+                user_id: 'broadcaster-1',
+                scopes: ['channel:manage:clips'],
+              });
+        },
+      },
+    );
+    await firstService.configureCredentials({
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+    });
+    const start = await firstService.beginAuthorization('browser-binding', {
+      officialClipDownload: true,
+    });
+    const account = await firstService.completeAuthorization({
+      browserBinding: 'browser-binding',
+      code: 'code',
+      state: new URL(start.authorizationUrl).searchParams.get('state')!,
+    });
+    persistentDatabase.close();
+
+    persistentDatabase = openDatabase(databasePath);
+    runMigrations(persistentDatabase);
+    const restartedAccounts = new SqliteAccountRepository(persistentDatabase);
+    const restartedService = new TwitchOAuthService(
+      restartedAccounts,
+      new SqliteOAuthAuthorizationRequestRepository(persistentDatabase),
+      new EncryptedFileSecretStore(vaultPath, keyPath),
+      new URL('http://127.0.0.1:43123'),
+      {
+        now: () => new Date(now.getTime() + 1_000),
+        endpoints: {
+          authorization: 'https://id.twitch.test/authorize',
+          token: 'https://id.twitch.test/token',
+          validate: 'https://id.twitch.test/validate',
+        },
+        http: async () => json({ message: 'Invalid refresh token' }, 401),
+      },
+    );
+
+    await expect(restartedService.getAccessToken(account.id)).rejects.toMatchObject({
+      category: 'authentication',
+      code: 'TWITCH_TOKEN_FAILED',
+    });
+    expect(restartedAccounts.findById(account.id)?.status).toBe('reauthorization_required');
+    expect(await readFile(vaultPath, 'utf8')).not.toContain('durable-refresh');
+    persistentDatabase.close();
+  });
 });
-function json(body: unknown): Response {
-  return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
