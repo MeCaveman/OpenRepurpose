@@ -100,6 +100,16 @@ import { NodeWebhookTransport, WebhookNetworkPolicy } from './webhooks.js';
 export async function startServer(): Promise<void> {
   const config = loadApplicationConfig();
   assertLocalOnly(config);
+  if (config.network?.lanEnabled === true && config.network.tls === undefined)
+    process.stderr.write(
+      `${JSON.stringify({
+        level: 'warn',
+        subsystem: 'server',
+        event: 'lan.plain_http',
+        message:
+          'LAN mode is serving plain HTTP. Configure TLS_CERT_PATH/TLS_KEY_PATH or terminate TLS at a trusted reverse proxy.',
+      })}\n`,
+    );
   const database = openDatabase(config.paths.databasePath);
   runMigrations(database);
   const executables = await discoverMediaExecutables();

@@ -66,6 +66,32 @@ describe('Fastify local security boundary', () => {
     expect(rejected.statusCode).toBe(421);
   });
 
+  it('requires a separate LAN browser token for every non-health resource', async () => {
+    const lanConfig: ApplicationConfig = {
+      ...config,
+      appUrl: new URL('http://192.0.2.10:3000'),
+      bindHost: '0.0.0.0',
+      network: { lanEnabled: true, lanAccessToken: 'a'.repeat(32), trustedProxy: false },
+    };
+    server = buildServer({ config: lanConfig, sessionKey: Buffer.alloc(32, 7), staticRoot: false });
+    const host = { host: '192.0.2.10:3000' };
+    expect(
+      (await server.inject({ method: 'GET', url: '/api/health', headers: host })).statusCode,
+    ).toBe(200);
+    expect(
+      (await server.inject({ method: 'GET', url: '/api/session', headers: host })).statusCode,
+    ).toBe(401);
+    const authorized = await server.inject({
+      method: 'GET',
+      url: '/api/session',
+      headers: {
+        ...host,
+        authorization: `Basic ${Buffer.from(`openrepurpose:${'a'.repeat(32)}`).toString('base64')}`,
+      },
+    });
+    expect(authorized.statusCode).toBe(200);
+  });
+
   it('requires an allowed Origin and a session-bound CSRF token for mutations', async () => {
     const app = createServer();
     const missingOrigin = await app.inject({

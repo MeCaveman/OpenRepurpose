@@ -19,6 +19,7 @@
     "@openrepurpose/tiktok": "workspace:*",
     "@openrepurpose/youtube": "workspace:*",
     "@openrepurpose/kick": "workspace:*",
+    "@openrepurpose/server": "workspace:*",
     "commander": "14.0.2"
   },
   "devDependencies": {

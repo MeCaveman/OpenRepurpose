@@ -40,6 +40,14 @@ export interface ApplicationConfig {
     readonly pollIntervalMs: number;
     readonly platformConcurrency: number;
   };
+  readonly network?: {
+    /** Non-loopback exposure is an explicit operator decision. */
+    readonly lanEnabled: boolean;
+    /** Required for browser/static access when LAN exposure is enabled. Never log this value. */
+    readonly lanAccessToken?: string;
+    readonly trustedProxy: boolean;
+    readonly tls?: { readonly certPath: string; readonly keyPath: string };
+  };
   readonly transformRunner: {
     readonly killGraceMs: number;
     readonly stallTimeoutMs: number;
@@ -234,6 +242,11 @@ export function loadApplicationConfig(
       SESSION_KEY_PATH: absolutePath.optional(),
       WHISPER_MODEL_DIR: absolutePath.optional(),
       BIND_HOST: z.string().trim().min(1).default('127.0.0.1'),
+      LAN_ENABLED: z.enum(['true', 'false']).default('false'),
+      LAN_ACCESS_TOKEN: z.string().min(32).max(512).optional(),
+      TLS_CERT_PATH: absolutePath.optional(),
+      TLS_KEY_PATH: absolutePath.optional(),
+      TRUST_PROXY: z.enum(['true', 'false']).default('false'),
       PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
       APP_URL: httpUrlSchema().default('http://127.0.0.1:3000'),
       DEV_SERVER_URL: httpUrlSchema().optional(),
@@ -265,6 +278,15 @@ export function loadApplicationConfig(
       message: 'must be greater than or equal to JOB_RETRY_BASE_MS',
       path: ['JOB_RETRY_MAX_MS'],
     })
+    .refine(
+      (values) =>
+        (values.TLS_CERT_PATH === undefined && values.TLS_KEY_PATH === undefined) ||
+        (values.TLS_CERT_PATH !== undefined && values.TLS_KEY_PATH !== undefined),
+      {
+        message: 'TLS_CERT_PATH and TLS_KEY_PATH must be configured together.',
+        path: ['TLS_KEY_PATH'],
+      },
+    )
     .refine(
       (values) =>
         values.OBS_WEBSOCKET_URL !== undefined || values.OBS_WEBSOCKET_PASSWORD === undefined,
@@ -325,6 +347,14 @@ export function loadApplicationConfig(
       maxRetryDelayMs: parsed.JOB_RETRY_MAX_MS,
       pollIntervalMs: parsed.JOB_POLL_INTERVAL_MS,
       platformConcurrency: parsed.JOB_PLATFORM_CONCURRENCY,
+    },
+    network: {
+      lanEnabled: parsed.LAN_ENABLED === 'true',
+      ...(parsed.LAN_ACCESS_TOKEN === undefined ? {} : { lanAccessToken: parsed.LAN_ACCESS_TOKEN }),
+      trustedProxy: parsed.TRUST_PROXY === 'true',
+      ...(parsed.TLS_CERT_PATH === undefined
+        ? {}
+        : { tls: { certPath: parsed.TLS_CERT_PATH, keyPath: parsed.TLS_KEY_PATH! } }),
     },
     transformRunner: {
       killGraceMs: parsed.TRANSFORM_KILL_GRACE_MS,

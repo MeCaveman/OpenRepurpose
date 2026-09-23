@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import fastifySecureSession from '@fastify/secure-session';
 import fastifyStatic from '@fastify/static';
@@ -104,16 +105,44 @@ function isApiMutation(request: FastifyRequest): boolean {
 
 export function assertLocalOnly(config: ApplicationConfig): void {
   const loopbackHosts = new Set(['127.0.0.1', '::1', 'localhost']);
-  if (!loopbackHosts.has(normalizeHostname(config.bindHost))) {
-    throw new Error(
-      `Public or LAN binding (${config.bindHost}) is not enabled in v0.1. Use a loopback BIND_HOST.`,
-    );
+  const nonLoopbackBinding = !loopbackHosts.has(normalizeHostname(config.bindHost));
+  const externalAppUrl = !loopbackHosts.has(normalizeHostname(config.appUrl.hostname));
+  if ((nonLoopbackBinding || externalAppUrl) && config.network?.lanEnabled !== true) {
+    throw new Error('Non-loopback binding or APP_URL requires LAN_ENABLED=true.');
   }
-  if (!loopbackHosts.has(normalizeHostname(config.appUrl.hostname))) {
-    throw new Error(
-      `Public APP_URL hosts (${config.appUrl.hostname}) are not enabled in v0.1. Use a loopback URL.`,
-    );
+  if ((nonLoopbackBinding || externalAppUrl) && config.network?.lanAccessToken === undefined) {
+    throw new Error('Non-loopback binding requires LAN_ACCESS_TOKEN with at least 32 characters.');
   }
+}
+
+function networkAccessAllowed(request: FastifyRequest, options: BuildServerOptions): boolean {
+  const token = options.config.network?.lanAccessToken;
+  if (options.config.network?.lanEnabled !== true || token === undefined) return true;
+  const authorization = request.headers.authorization;
+  if (typeof authorization !== 'string') return false;
+  const basic = /^Basic\s+(.+)$/iu.exec(authorization);
+  if (basic?.[1] !== undefined) {
+    try {
+      const credentials = Buffer.from(basic[1], 'base64').toString('utf8');
+      const expected = `openrepurpose:${token}`;
+      return (
+        credentials.length === expected.length &&
+        timingSafeEqual(Buffer.from(credentials), Buffer.from(expected))
+      );
+    } catch {
+      return false;
+    }
+  }
+  const bearer = /^Bearer\s+(.+)$/iu.exec(authorization);
+  return (
+    bearer?.[1] !== undefined && options.apiTokenService?.authenticate(bearer[1]) !== undefined
+  );
+}
+
+function isNetworkHealthCheck(request: FastifyRequest): boolean {
+  return (
+    request.method === 'GET' && (request.url === '/api/health' || request.url === '/api/v1/health')
+  );
 }
 
 const sensitiveLogPaths = [
@@ -163,7 +192,15 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
               : { stream: options.loggerDestination }),
           }
         : false,
-    trustProxy: false,
+    trustProxy: options.config.network?.trustedProxy === true,
+    ...(options.config.network?.tls === undefined
+      ? {}
+      : {
+          https: {
+            cert: readFileSync(options.config.network.tls.certPath),
+            key: readFileSync(options.config.network.tls.keyPath),
+          },
+        }),
   });
   const allowedOrigins = new Set([options.config.appUrl.origin]);
   if (options.config.developmentServerUrl !== undefined) {
@@ -217,6 +254,11 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       .header('Referrer-Policy', 'no-referrer')
       .header('X-Content-Type-Options', 'nosniff')
       .header('X-Frame-Options', 'DENY');
+
+    if (!isNetworkHealthCheck(request) && !networkAccessAllowed(request, options)) {
+      reply.header('WWW-Authenticate', 'Basic realm="OpenRepurpose", charset="UTF-8"');
+      return reply.code(401).send({ error: 'Authentication required.', code: 'LAN_AUTH_REQUIRED' });
+    }
 
     if (!isApiMutation(request)) return;
 

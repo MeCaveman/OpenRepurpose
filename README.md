@@ -96,7 +96,7 @@ production server and serves the built React UI from the same loopback origin.
 
 Runtime paths, port, and browser origins are configured through the variables documented in
 `.env.example`. Packet 3 intentionally rejects non-loopback `BIND_HOST` and public `APP_URL` values;
-LAN/VPS exposure remains disabled until its roadmap packet adds authentication and proxy trust.
+See [headless and LAN deployment](docs/self-hosting.md) for the explicit authenticated hosting mode.
 The first server start generates a persistent encrypted-session key at `SESSION_KEY_PATH` (or the
 host-native configuration directory by default).
 

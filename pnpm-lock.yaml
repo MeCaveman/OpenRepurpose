@@ -208,6 +208,9 @@ importers:
       '@openrepurpose/media':
         specifier: workspace:*
         version: link:../../packages/media
+      '@openrepurpose/server':
+        specifier: workspace:*
+        version: link:../server
       '@openrepurpose/shared':
         specifier: workspace:*
         version: link:../../packages/shared

@@ -56,11 +56,13 @@ describe('server startup security', () => {
     expect(() => loadOrCreateSessionKey(keyPath)).toThrow('exactly 32 bytes');
   });
 
-  it('rejects LAN/public binding and public origins in this packet', () => {
-    expect(() => assertLocalOnly(config('0.0.0.0'))).toThrow('not enabled in v0.1');
-    expect(() => assertLocalOnly(config('127.0.0.1', 'https://repurpose.example.test'))).toThrow(
-      'not enabled in v0.1',
-    );
+  it('fails closed for LAN binding until explicit authentication is configured', () => {
+    expect(() => assertLocalOnly(config('0.0.0.0'))).toThrow('requires LAN_ENABLED=true');
+    const lan = {
+      ...config('0.0.0.0', 'https://repurpose.example.test'),
+      network: { lanEnabled: true, lanAccessToken: 'a'.repeat(32), trustedProxy: false },
+    };
+    expect(() => assertLocalOnly(lan)).not.toThrow();
     expect(() => assertLocalOnly(config('127.0.0.1'))).not.toThrow();
   });
 });

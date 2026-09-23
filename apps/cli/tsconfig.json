@@ -13,6 +13,7 @@
     { "path": "../../packages/core" },
     { "path": "../../packages/media" },
     { "path": "../../packages/local-secrets" },
-    { "path": "../../integrations/youtube" }
+    { "path": "../../integrations/youtube" },
+    { "path": "../server" }
   ]
 }

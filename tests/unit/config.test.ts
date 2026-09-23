@@ -106,6 +106,30 @@ describe('application configuration', () => {
     );
   });
 
+  it('loads explicit LAN, TLS, and reverse-proxy configuration without weakening the loopback default', () => {
+    const config = loadApplicationConfig(
+      {
+        APP_URL: 'https://repurpose.example.test',
+        BIND_HOST: '0.0.0.0',
+        LAN_ENABLED: 'true',
+        LAN_ACCESS_TOKEN: 'a'.repeat(32),
+        TLS_CERT_PATH: '/config/tls/cert.pem',
+        TLS_KEY_PATH: '/config/tls/key.pem',
+        TRUST_PROXY: 'true',
+      },
+      linuxRuntime,
+    );
+    expect(config.network).toEqual({
+      lanEnabled: true,
+      lanAccessToken: 'a'.repeat(32),
+      tls: { certPath: '/config/tls/cert.pem', keyPath: '/config/tls/key.pem' },
+      trustedProxy: true,
+    });
+    expect(() =>
+      loadApplicationConfig({ TLS_CERT_PATH: '/config/tls/cert.pem' }, linuxRuntime),
+    ).toThrow('TLS_CERT_PATH and TLS_KEY_PATH must be configured together');
+  });
+
   it('loads an optional local OBS WebSocket hint without making folder watches depend on it', () => {
     const config = loadApplicationConfig(
       {

@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { Command } from 'commander';
 import {
   JobService,
+  ApiTokenService,
   MediaImportService,
   ScheduleService,
   SourceService,
@@ -20,6 +21,7 @@ import {
   openDatabase,
   runMigrations,
   SqliteAccountRepository,
+  SqliteApiTokenRepository,
   SqliteJobRepository,
   SqliteMediaRepository,
   SqliteOAuthAuthorizationRequestRepository,
@@ -186,6 +188,42 @@ function jobContext(environment: Environment) {
       new SqliteMediaRepository(database),
       new SqliteTransformDerivativeRepository(database),
       service,
+    ),
+  };
+}
+
+function apiTokenContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  return { database, service: new ApiTokenService(new SqliteApiTokenRepository(database)) };
+}
+
+function mcpContext(environment: Environment) {
+  const config = loadApplicationConfig(environment);
+  const database = openDatabase(config.paths.databasePath);
+  runMigrations(database);
+  const secrets = new EncryptedFileSecretStore(
+    config.paths.secretVaultPath,
+    config.paths.secretKeyPath,
+  );
+  return {
+    accountService: new YouTubeOAuthService(
+      new SqliteAccountRepository(database),
+      new SqliteOAuthAuthorizationRequestRepository(database),
+      secrets,
+      config.appUrl,
+    ),
+    database,
+    jobService: new JobService(new SqliteJobRepository(database)),
+    mediaRepository: new SqliteMediaRepository(database),
+    scheduleService: new ScheduleService(
+      new SqliteScheduleRepository(database),
+      new SqliteSourcePollingRepository(database),
+    ),
+    workflowService: new WorkflowService(
+      new SqliteWorkflowRepository(database),
+      new JobService(new SqliteJobRepository(database)),
     ),
   };
 }
@@ -387,6 +425,107 @@ export function createCli(options: CreateCliOptions = {}): Command {
     for (const check of checks)
       write(`${check.ok ? 'OK' : 'FAIL'} ${check.name}: ${check.detail}\n`);
     if (checks.some((check) => !check.ok)) process.exitCode = 1;
+  });
+  program
+    .command('start')
+    .description(
+      'Start the local server; --headless suppresses no behavior because the server never opens a browser',
+    )
+    .option('--headless', 'declare non-interactive service operation')
+    .action(async () => {
+      const { startServer } = await import('@openrepurpose/server');
+      await startServer();
+    });
+
+  const api = program.command('api').description('Administer local REST API credentials');
+  const tokens = api.command('token').description('Create, list, and revoke API bearer tokens');
+  tokens
+    .command('create <name>')
+    .option('--read-only', 'issue read permission only')
+    .option('--json', 'write JSON')
+    .action((name: string, commandOptions: { json?: boolean; readOnly?: boolean }) => {
+      const context = apiTokenContext(environment);
+      try {
+        const created = context.service.create(
+          name,
+          commandOptions.readOnly ? ['read'] : ['control'],
+        );
+        write(commandOptions.json ? `${JSON.stringify(created)}\n` : `${created.token}\n`);
+      } finally {
+        context.database.close();
+      }
+    });
+  tokens
+    .command('revoke <token-id>')
+    .option('--json', 'write JSON')
+    .action((id: string, commandOptions: { json?: boolean }) => {
+      const context = apiTokenContext(environment);
+      try {
+        const revoked = context.service.revoke(id);
+        if (revoked === undefined) throw new Error(`API token not found: ${id}`);
+        write(commandOptions.json ? `${JSON.stringify(revoked)}\n` : `${revoked.id}\trevoked\n`);
+      } finally {
+        context.database.close();
+      }
+    });
+  tokens
+    .command('list')
+    .option('--json', 'write JSON')
+    .action((commandOptions: { json?: boolean }) => {
+      const context = apiTokenContext(environment);
+      try {
+        const listed = context.service.list();
+        write(
+          commandOptions.json
+            ? `${JSON.stringify(listed)}\n`
+            : listed
+                .map(
+                  (token) =>
+                    `${token.id}\t${token.name}\t${token.permissions.join(',')}\t${token.revokedAt === undefined ? 'active' : 'revoked'}`,
+                )
+                .join('\n') + (listed.length === 0 ? '' : '\n'),
+        );
+      } finally {
+        context.database.close();
+      }
+    });
+
+  const configCommand = program
+    .command('config')
+    .description('Inspect effective local configuration');
+  configCommand
+    .command('show')
+    .description('Show effective hosting configuration without secret values')
+    .option('--json', 'write JSON')
+    .action((commandOptions: { json?: boolean }) => {
+      const config = loadApplicationConfig(environment);
+      const safe = {
+        appUrl: config.appUrl.toString(),
+        bindHost: config.bindHost,
+        lanEnabled: config.network?.lanEnabled ?? false,
+        lanAccessTokenConfigured: config.network?.lanAccessToken !== undefined,
+        port: config.port,
+        tlsConfigured: config.network?.tls !== undefined,
+        trustedProxy: config.network?.trustedProxy ?? false,
+      };
+      write(
+        commandOptions.json
+          ? `${JSON.stringify(safe)}\n`
+          : Object.entries(safe)
+              .map(([key, value]) => `${key}\t${value}`)
+              .join('\n') + '\n',
+      );
+    });
+
+  const mcp = program.command('mcp').description('Run the local stdio MCP server');
+  mcp.command('start').action(async () => {
+    const context = mcpContext(environment);
+    try {
+      const { createMcpServer, serveMcpStdio } = await import('@openrepurpose/server');
+      await serveMcpStdio(createMcpServer(context));
+    } finally {
+      context.database.close();
+    }
   });
 
   const models = program
