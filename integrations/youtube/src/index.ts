@@ -16,6 +16,8 @@ import type {
 import { JobExecutionError } from '@openrepurpose/core';
 import type {
   DestinationCapabilities,
+  DestinationJobAdapter,
+  PluginManifest,
   PublishMetadata,
   SecretReference,
   SecretStore,
@@ -711,7 +713,9 @@ async function json(response: Response): Promise<Record<string, unknown> | undef
  * sent; after an interruption it queries the session with the resumable status Content-Range and
  * resumes only the acknowledged suffix. Once a remote ID exists it never creates a new upload.
  */
-export class YouTubeUploadJobHandler implements JobHandler {
+export class YouTubeUploadJobHandler implements JobHandler, DestinationJobAdapter {
+  public readonly displayName = 'YouTube';
+  public readonly id = 'youtube';
   public readonly type = YOUTUBE_UPLOAD_JOB_TYPE;
   private readonly chunkSizeBytes: number;
   private readonly endpoints: typeof defaultUploadEndpoints;
@@ -730,6 +734,10 @@ export class YouTubeUploadJobHandler implements JobHandler {
     this.chunkSizeBytes = options.chunkSizeBytes ?? 8 * 1024 * 1024;
     if (!Number.isInteger(this.chunkSizeBytes) || this.chunkSizeBytes < 256 * 1024)
       throw new Error('YouTube upload chunk size must be at least 256 KiB.');
+  }
+
+  public async capabilities(): Promise<DestinationCapabilities> {
+    return youtubeDestinationCapabilities;
   }
 
   public async execute(inputValue: JsonValue, context: JobHandlerContext): Promise<void> {
@@ -1459,3 +1467,26 @@ export class YouTubeOAuthService {
     return { clientId, ...(clientSecret === undefined ? {} : { clientSecret }) };
   }
 }
+
+export const youtubePluginManifest = {
+  capabilities: [
+    { id: 'youtube', kind: 'source' },
+    { id: 'youtube', jobType: YOUTUBE_UPLOAD_JOB_TYPE, kind: 'destination' },
+  ],
+  configurationSchema: { additionalProperties: false, properties: {}, type: 'object' },
+  id: 'openrepurpose.youtube',
+  name: 'OpenRepurpose YouTube',
+  requiredApiVersion: '^1.0.0',
+  permissions: {
+    childProcesses: [],
+    filesystem: [{ access: ['read'], root: 'media' }],
+    networkHosts: ['accounts.google.com', 'oauth2.googleapis.com', 'www.googleapis.com'],
+    secrets: [
+      { access: ['read', 'write'], name: 'client-id', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'client-secret', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'code-verifier', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'youtube-refresh-token', scope: 'account' },
+    ],
+  },
+  version: '1.0.0',
+} as const satisfies PluginManifest;

@@ -3,8 +3,12 @@ import {
   type AdapterContext,
   type DestinationAdapter,
   type DestinationCapabilities,
+  type DestinationJobAdapter,
+  isPluginApiCompatible,
+  parsePluginManifest,
   type PublishRequest,
   type PublishResult,
+  type PluginManifest,
   type RemoteStatus,
   type SecretReference,
   type SecretStore,
@@ -15,6 +19,91 @@ import {
   type SourcePollResult,
   type ValidationResult,
 } from '@openrepurpose/platform-sdk';
+
+function contractFailure(message: string): never {
+  throw new Error(`Plugin contract violation: ${message}`);
+}
+
+function assertNonEmpty(value: string, label: string): void {
+  if (value.trim().length === 0) contractFailure(`${label} must be non-empty.`);
+}
+
+function assertDestinationCapabilities(capabilities: DestinationCapabilities, id: string): void {
+  if (capabilities.media.kinds.length === 0)
+    contractFailure(`destination ${id} must support at least one media kind.`);
+  if (new Set(capabilities.media.kinds).size !== capabilities.media.kinds.length)
+    contractFailure(`destination ${id} contains duplicate media kinds.`);
+  if (capabilities.privacy.supported !== capabilities.privacy.values.length > 0)
+    contractFailure(`destination ${id} has inconsistent privacy capabilities.`);
+  for (const [name, field] of Object.entries(capabilities.metadata)) {
+    if ('required' in field && field.required && !field.supported)
+      contractFailure(`destination ${id} marks unsupported metadata ${name} as required.`);
+  }
+}
+
+export async function runDestinationAdapterContract(adapter: DestinationAdapter): Promise<void> {
+  assertNonEmpty(adapter.id, 'destination ID');
+  assertNonEmpty(adapter.displayName, `destination ${adapter.id} display name`);
+  assertDestinationCapabilities(await adapter.capabilities(), adapter.id);
+  if (typeof adapter.validate !== 'function' || typeof adapter.publish !== 'function')
+    contractFailure(`destination ${adapter.id} is missing required methods.`);
+}
+
+export async function runDestinationJobAdapterContract(
+  adapter: DestinationJobAdapter,
+): Promise<void> {
+  assertNonEmpty(adapter.id, 'destination ID');
+  assertNonEmpty(adapter.displayName, `destination ${adapter.id} display name`);
+  assertNonEmpty(adapter.type, `destination ${adapter.id} job type`);
+  assertDestinationCapabilities(await adapter.capabilities(), adapter.id);
+  if (typeof adapter.execute !== 'function')
+    contractFailure(`destination ${adapter.id} is missing execute().`);
+}
+
+export async function runSourceAdapterContract(adapter: SourceAdapter): Promise<void> {
+  assertNonEmpty(adapter.id, 'source ID');
+  assertNonEmpty(adapter.displayName, `source ${adapter.id} display name`);
+  const capabilities = await adapter.capabilities();
+  if (!capabilities.polling) contractFailure(`source ${adapter.id} must support polling in v1.`);
+  if (new Set(capabilities.mediaResolution).size !== capabilities.mediaResolution.length)
+    contractFailure(`source ${adapter.id} contains duplicate media-resolution strategies.`);
+  if (typeof adapter.poll !== 'function')
+    contractFailure(`source ${adapter.id} is missing poll().`);
+}
+
+export interface PluginContractSubject {
+  readonly destinations?: readonly DestinationJobAdapter[];
+  readonly manifest: PluginManifest;
+  readonly sources?: readonly SourceAdapter[];
+}
+
+/** Verifies a manifest and requires its declared source/destination contributions to match runtime adapters. */
+export async function runPluginContract(subject: PluginContractSubject): Promise<void> {
+  const manifest = parsePluginManifest(subject.manifest);
+  if (!isPluginApiCompatible(manifest.requiredApiVersion))
+    contractFailure(`${manifest.id} is incompatible with the current plugin API.`);
+
+  const sources = subject.sources ?? [];
+  const destinations = subject.destinations ?? [];
+  await Promise.all(sources.map(runSourceAdapterContract));
+  await Promise.all(destinations.map(runDestinationJobAdapterContract));
+
+  const declaredSources = manifest.capabilities
+    .filter((capability) => capability.kind === 'source')
+    .map((capability) => capability.id)
+    .sort();
+  const runtimeSources = sources.map((adapter) => adapter.id).sort();
+  if (JSON.stringify(declaredSources) !== JSON.stringify(runtimeSources))
+    contractFailure(`${manifest.id} source declarations do not match runtime adapters.`);
+
+  const declaredDestinations = manifest.capabilities
+    .filter((capability) => capability.kind === 'destination')
+    .map((capability) => `${capability.id}:${capability.jobType}`)
+    .sort();
+  const runtimeDestinations = destinations.map((adapter) => `${adapter.id}:${adapter.type}`).sort();
+  if (JSON.stringify(declaredDestinations) !== JSON.stringify(runtimeDestinations))
+    contractFailure(`${manifest.id} destination declarations do not match runtime adapters.`);
+}
 
 export const mockDestinationCapabilities: DestinationCapabilities = {
   media: { kinds: ['video'], maxFileSizeBytes: 1_000_000_000 },

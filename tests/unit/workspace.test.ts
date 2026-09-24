@@ -8,6 +8,9 @@ const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const expectedPackages = new Map([
   ['integrations/tiktok', '@openrepurpose/tiktok'],
   ['integrations/youtube', '@openrepurpose/youtube'],
+  ['integrations/kick', '@openrepurpose/kick'],
+  ['integrations/meta', '@openrepurpose/meta'],
+  ['integrations/twitch', '@openrepurpose/twitch'],
   ['apps/cli', '@openrepurpose/cli'],
   ['apps/server', '@openrepurpose/server'],
   ['apps/web', '@openrepurpose/web'],
@@ -39,9 +42,7 @@ describe('workspace skeleton', () => {
       private?: boolean;
     };
 
-    expect(manifest).toMatchObject({
-      name: expectedName,
-      private: true,
-    });
+    expect(manifest.name).toBe(expectedName);
+    expect(manifest.private).toBe(directory !== 'packages/platform-sdk');
   });
 });

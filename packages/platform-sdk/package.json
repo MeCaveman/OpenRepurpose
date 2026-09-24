@@ -1,7 +1,7 @@
 {
   "name": "@openrepurpose/platform-sdk",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
   "exports": {
     ".": {
@@ -12,6 +12,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "24.13.5"

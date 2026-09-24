@@ -15,7 +15,13 @@ import type {
   OAuthAuthorizationRequestRepository,
 } from '@openrepurpose/core';
 import { JobExecutionError } from '@openrepurpose/core';
-import type { SecretReference, SecretStore } from '@openrepurpose/platform-sdk';
+import type {
+  DestinationCapabilities,
+  DestinationJobAdapter,
+  PluginManifest,
+  SecretReference,
+  SecretStore,
+} from '@openrepurpose/platform-sdk';
 import { parseRetryAfterMs, PlatformError } from '@openrepurpose/platform-sdk';
 
 export const TIKTOK_IDENTITY_SCOPE = 'user.info.basic';
@@ -112,6 +118,19 @@ export interface TikTokOAuthCallbackInput {
 
 export type TikTokPrivacyLevel =
   'FOLLOWER_OF_CREATOR' | 'MUTUAL_FOLLOW_FRIENDS' | 'PUBLIC_TO_EVERYONE' | 'SELF_ONLY';
+
+export const tiktokDestinationCapabilities: DestinationCapabilities = {
+  media: { kinds: ['video'] },
+  metadata: {
+    category: { required: false, supported: false },
+    description: { maxLength: 2_200, required: false, supported: true },
+    tags: { supported: false },
+    title: { required: false, supported: false },
+  },
+  privacy: { supported: true, values: ['private', 'public'] },
+  resumableUpload: true,
+  statusPolling: true,
+};
 
 export interface TikTokAccountCapabilities {
   readonly accountId: string;
@@ -953,7 +972,9 @@ interface UploadUrlLease {
  * expired URL after an interrupted transfer deliberately fails safely instead of creating a
  * second Direct Post.
  */
-export class TikTokDirectPostJobHandler implements JobHandler {
+export class TikTokDirectPostJobHandler implements JobHandler, DestinationJobAdapter {
+  public readonly displayName = 'TikTok';
+  public readonly id = 'tiktok';
   public readonly type = TIKTOK_DIRECT_POST_JOB_TYPE;
   private readonly chunkSizeBytes: number;
   private readonly endpoints: typeof defaultPublishEndpoints;
@@ -977,6 +998,10 @@ export class TikTokDirectPostJobHandler implements JobHandler {
       this.chunkSizeBytes > 64 * 1024 * 1024
     )
       throw new Error('TikTok upload chunks must be between 5 MiB and 64 MiB.');
+  }
+
+  public async capabilities(): Promise<DestinationCapabilities> {
+    return tiktokDestinationCapabilities;
   }
 
   public async execute(inputValue: JsonValue, context: JobHandlerContext): Promise<void> {
@@ -1278,3 +1303,24 @@ export class TikTokDirectPostJobHandler implements JobHandler {
     return this.checkpoints.save({ ...record, updatedAt: this.now() });
   }
 }
+
+export const tiktokPluginManifest = {
+  capabilities: [{ id: 'tiktok', jobType: TIKTOK_DIRECT_POST_JOB_TYPE, kind: 'destination' }],
+  configurationSchema: { additionalProperties: false, properties: {}, type: 'object' },
+  id: 'openrepurpose.tiktok',
+  name: 'OpenRepurpose TikTok',
+  requiredApiVersion: '^1.0.0',
+  permissions: {
+    childProcesses: [],
+    filesystem: [{ access: ['read'], root: 'media' }],
+    networkHosts: ['open.tiktokapis.com', 'www.tiktok.com', '*.tiktokapis.com'],
+    secrets: [
+      { access: ['read', 'write'], name: 'client-key', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'client-secret', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'code-verifier', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'tiktok-token-bundle', scope: 'account' },
+      { access: ['read', 'write', 'delete'], name: 'tiktok-upload-url', scope: 'application' },
+    ],
+  },
+  version: '1.0.0',
+} as const satisfies PluginManifest;

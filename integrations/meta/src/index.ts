@@ -15,7 +15,13 @@ import type {
   OAuthAuthorizationRequestRepository,
 } from '@openrepurpose/core';
 import { JobExecutionError } from '@openrepurpose/core';
-import type { SecretReference, SecretStore } from '@openrepurpose/platform-sdk';
+import type {
+  DestinationCapabilities,
+  DestinationJobAdapter,
+  PluginManifest,
+  SecretReference,
+  SecretStore,
+} from '@openrepurpose/platform-sdk';
 import { parseRetryAfterMs, PlatformError } from '@openrepurpose/platform-sdk';
 
 export const META_SCOPES = [
@@ -519,6 +525,19 @@ const defaultInstagramReelsEndpoints: InstagramReelsEndpoints = {
   graph: 'https://graph.facebook.com/v26.0',
 };
 
+export const instagramDestinationCapabilities: DestinationCapabilities = {
+  media: { kinds: ['video'], maxDurationSeconds: 900 },
+  metadata: {
+    category: { required: false, supported: false },
+    description: { maxLength: 2_200, required: false, supported: true },
+    tags: { supported: false },
+    title: { required: false, supported: false },
+  },
+  privacy: { supported: false, values: [] },
+  resumableUpload: true,
+  statusPolling: true,
+};
+
 function jobInput(value: JsonValue): InstagramReelsJobInput {
   const input = object(value);
   if (!input || typeof input.mediaId !== 'string' || typeof input.targetId !== 'string')
@@ -604,7 +623,9 @@ function isUploadUri(value: string): boolean {
  * are checkpointed before transfer; a transport interruption consequently stops safely instead of
  * creating another container or replaying unknown bytes.
  */
-export class InstagramReelsJobHandler implements JobHandler {
+export class InstagramReelsJobHandler implements JobHandler, DestinationJobAdapter {
+  public readonly displayName = 'Instagram Reels';
+  public readonly id = 'instagram';
   public readonly type = INSTAGRAM_REELS_JOB_TYPE;
   private readonly endpoints: InstagramReelsEndpoints;
   private readonly http: MetaHttpClient;
@@ -620,6 +641,10 @@ export class InstagramReelsJobHandler implements JobHandler {
     this.endpoints = { ...defaultInstagramReelsEndpoints, ...options.endpoints };
     this.http = options.http ?? fetch;
     this.now = options.now ?? (() => new Date());
+  }
+
+  public async capabilities(): Promise<DestinationCapabilities> {
+    return instagramDestinationCapabilities;
   }
 
   public async execute(value: JsonValue, context: JobHandlerContext): Promise<void> {
@@ -986,6 +1011,35 @@ export class InstagramReelsJobHandler implements JobHandler {
 
 export const FACEBOOK_REELS_JOB_TYPE = 'facebook.reels.publish';
 
+export const metaPluginManifest = {
+  capabilities: [
+    { id: 'instagram', jobType: INSTAGRAM_REELS_JOB_TYPE, kind: 'destination' },
+    { id: 'facebook', jobType: FACEBOOK_REELS_JOB_TYPE, kind: 'destination' },
+  ],
+  configurationSchema: { additionalProperties: false, properties: {}, type: 'object' },
+  id: 'openrepurpose.meta',
+  name: 'OpenRepurpose Meta',
+  requiredApiVersion: '^1.0.0',
+  permissions: {
+    childProcesses: [],
+    filesystem: [{ access: ['read'], root: 'media' }],
+    networkHosts: ['graph.facebook.com', 'rupload.facebook.com', 'www.facebook.com'],
+    secrets: [
+      { access: ['read', 'write'], name: 'client-id', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'client-secret', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'meta-token-bundle', scope: 'account' },
+      { access: ['read', 'write', 'delete'], name: 'meta-page-token', scope: 'account' },
+      { access: ['read', 'write', 'delete'], name: 'instagram-upload-uri', scope: 'application' },
+      {
+        access: ['read', 'write', 'delete'],
+        name: 'facebook-reels-upload-uri',
+        scope: 'application',
+      },
+    ],
+  },
+  version: '1.0.0',
+} as const satisfies PluginManifest;
+
 export interface FacebookReelsJobInput {
   readonly mediaId: string;
   readonly targetId: string;
@@ -1004,6 +1058,19 @@ export interface FacebookReelsEndpoints {
 
 const defaultFacebookReelsEndpoints: FacebookReelsEndpoints = {
   graph: 'https://graph.facebook.com/v26.0',
+};
+
+export const facebookDestinationCapabilities: DestinationCapabilities = {
+  media: { kinds: ['video'], maxDurationSeconds: 90 },
+  metadata: {
+    category: { required: false, supported: false },
+    description: { required: false, supported: true },
+    tags: { supported: false },
+    title: { required: false, supported: true },
+  },
+  privacy: { supported: false, values: [] },
+  resumableUpload: true,
+  statusPolling: true,
 };
 
 function facebookJobInput(value: JsonValue): FacebookReelsJobInput {
@@ -1095,7 +1162,9 @@ function transferredBytes(value: Record<string, unknown> | undefined): number | 
 }
 
 /** Facebook Page Reels transport: stream locally, recover a confirmed server offset, then reconcile publication. */
-export class FacebookReelsJobHandler implements JobHandler {
+export class FacebookReelsJobHandler implements JobHandler, DestinationJobAdapter {
+  public readonly displayName = 'Facebook Reels';
+  public readonly id = 'facebook';
   public readonly type = FACEBOOK_REELS_JOB_TYPE;
   private readonly endpoints: FacebookReelsEndpoints;
   private readonly http: MetaHttpClient;
@@ -1111,6 +1180,10 @@ export class FacebookReelsJobHandler implements JobHandler {
     this.endpoints = { ...defaultFacebookReelsEndpoints, ...options.endpoints };
     this.http = options.http ?? fetch;
     this.now = options.now ?? (() => new Date());
+  }
+
+  public async capabilities(): Promise<DestinationCapabilities> {
+    return facebookDestinationCapabilities;
   }
 
   public async execute(value: JsonValue, context: JobHandlerContext): Promise<void> {

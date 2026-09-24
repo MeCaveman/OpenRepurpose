@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   DestinationRegistry,
+  DEFAULT_PLUGIN_LOAD_POLICY,
+  OPENREPURPOSE_PLUGIN_API_VERSION,
   PlatformError,
   REDACTED_LOG_VALUE,
   SourceRegistry,
   createRedactingLogger,
+  evaluatePluginLoad,
+  isPluginApiCompatible,
   isPlatformError,
   parseRetryAfterMs,
+  parsePluginManifest,
   validateSourcePollResult,
   type AdapterContext,
   type PublishRequest,
@@ -95,6 +100,70 @@ describe('destination adapter contract', () => {
 
     unregister();
     expect(registry.get('second')).toBeUndefined();
+  });
+});
+
+describe('plugin manifest and load policy', () => {
+  const manifest = {
+    capabilities: [{ id: 'example', kind: 'source' }],
+    configurationSchema: { additionalProperties: false, properties: {}, type: 'object' },
+    id: 'example.plugin',
+    name: 'Example plugin',
+    requiredApiVersion: '^1.0.0',
+    permissions: {
+      childProcesses: [],
+      filesystem: [],
+      networkHosts: ['api.example.com'],
+      secrets: [],
+    },
+    version: '1.2.3',
+  } as const;
+
+  it('validates versioned manifests and supported API ranges', () => {
+    expect(parsePluginManifest(manifest)).toEqual(manifest);
+    expect(OPENREPURPOSE_PLUGIN_API_VERSION).toBe('1.0.0');
+    expect(isPluginApiCompatible('1.0.0')).toBe(true);
+    expect(isPluginApiCompatible('^1.0.0', '1.9.0')).toBe(true);
+    expect(isPluginApiCompatible('^1.0.0', '2.0.0')).toBe(false);
+    expect(isPluginApiCompatible('~1.2.0', '1.3.0')).toBe(false);
+    expect(isPluginApiCompatible('>=1.0.0 <2.0.0', '1.5.0')).toBe(true);
+    expect(() =>
+      parsePluginManifest({
+        ...manifest,
+        permissions: { ...manifest.permissions, networkHosts: ['https://api.example.com/path'] },
+      }),
+    ).toThrow();
+    expect(() =>
+      parsePluginManifest({
+        ...manifest,
+        capabilities: [...manifest.capabilities, ...manifest.capabilities],
+      }),
+    ).toThrow('Duplicate plugin capability');
+  });
+
+  it('disables third-party code by default and requires an advanced risk acknowledgement', () => {
+    const parsed = parsePluginManifest(manifest);
+    expect(DEFAULT_PLUGIN_LOAD_POLICY).toEqual({ thirdParty: 'disabled' });
+    expect(evaluatePluginLoad({ manifest: parsed, origin: 'bundled' })).toEqual({ allowed: true });
+    expect(evaluatePluginLoad({ manifest: parsed, origin: 'third_party' })).toMatchObject({
+      allowed: false,
+      code: 'THIRD_PARTY_DISABLED',
+    });
+    expect(
+      evaluatePluginLoad({
+        manifest: parsed,
+        origin: 'third_party',
+        policy: { thirdParty: 'advanced' },
+      }),
+    ).toMatchObject({ allowed: false, code: 'TRUST_ACKNOWLEDGEMENT_REQUIRED' });
+    expect(
+      evaluatePluginLoad({
+        acknowledgedInProcessRisk: true,
+        manifest: parsed,
+        origin: 'third_party',
+        policy: { thirdParty: 'advanced' },
+      }),
+    ).toMatchObject({ allowed: true, warning: expect.stringContaining('in-process') });
   });
 });
 

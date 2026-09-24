@@ -4,6 +4,7 @@ import type {
   DestinationCapabilities,
   PublishRequest,
   PublishResult,
+  PluginJsonValue,
   RemoteStatus,
   ValidationResult,
 } from './types.js';
@@ -22,6 +23,26 @@ export interface DestinationAdapter {
   getStatus?(remoteId: string, context: AdapterContext): Promise<RemoteStatus>;
   publish(input: PublishRequest, context: AdapterContext): Promise<PublishResult>;
   validate(input: PublishRequest): Promise<ValidationResult>;
+}
+
+/**
+ * Stable boundary for destinations executed by OpenRepurpose's persistent local job runner.
+ * The host owns retries, cancellation, recovery, and idempotency; the adapter owns the remote API.
+ */
+export interface DestinationJobAdapter {
+  readonly displayName: string;
+  readonly id: string;
+  /** Persisted job discriminator. Changing it is a breaking data-compatibility change. */
+  readonly type: string;
+  capabilities(): Promise<DestinationCapabilities>;
+  execute(input: PluginJsonValue, context: DestinationJobContext): Promise<void>;
+}
+
+export interface DestinationJobContext {
+  readonly attemptNumber: number;
+  readonly idempotencyKey?: string;
+  readonly jobId: string;
+  readonly signal: AbortSignal;
 }
 
 /** Composition-time registry; integrations self-register without provider-specific switches. */

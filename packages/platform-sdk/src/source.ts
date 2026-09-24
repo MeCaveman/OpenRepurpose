@@ -1,13 +1,8 @@
 import type { StructuredLogger } from './logger.js';
 import type { SecretStore } from './secrets.js';
+import type { PluginJsonValue } from './types.js';
 
-export type SourceJsonValue =
-  | boolean
-  | null
-  | number
-  | string
-  | { readonly [key: string]: SourceJsonValue }
-  | readonly SourceJsonValue[];
+export type SourceJsonValue = PluginJsonValue;
 
 export interface SourceCapabilities {
   readonly eventIds: boolean;

@@ -9,6 +9,7 @@ import type {
 import type {
   SecretReference,
   SecretStore,
+  PluginManifest,
   SourceAdapter,
   SourceAdapterContext,
   SourceCapabilities,
@@ -372,6 +373,26 @@ export class KickSourceAdapter implements SourceAdapter {
     return { hasMore: false, items, cursor: null };
   }
 }
+
+export const kickPluginManifest = {
+  capabilities: [{ id: 'kick', kind: 'source' }],
+  configurationSchema: { additionalProperties: false, properties: {}, type: 'object' },
+  id: 'openrepurpose.kick',
+  name: 'OpenRepurpose Kick',
+  requiredApiVersion: '^1.0.0',
+  permissions: {
+    childProcesses: [],
+    filesystem: [],
+    networkHosts: ['api.kick.com', 'id.kick.com', 'kick.com'],
+    secrets: [
+      { access: ['read', 'write'], name: 'client-id', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'client-secret', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'kick-oauth-pkce-verifier', scope: 'account' },
+      { access: ['read', 'write', 'delete'], name: 'kick-refresh-token', scope: 'account' },
+    ],
+  },
+  version: '1.0.0',
+} as const satisfies PluginManifest;
 function configFor(value: Readonly<Record<string, SourceJsonValue>>) {
   const accountId = value.accountId;
   const broadcasterId = value.broadcasterId;

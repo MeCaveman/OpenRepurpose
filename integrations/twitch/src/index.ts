@@ -21,6 +21,7 @@ import type {
   SourceJsonValue,
   SourcePollRequest,
   SourcePollResult,
+  PluginManifest,
   SecretReference,
   SecretStore,
 } from '@openrepurpose/platform-sdk';
@@ -582,6 +583,25 @@ export class TwitchClipMediaResolver implements MediaResolver {
     }
   }
 }
+
+export const twitchPluginManifest = {
+  capabilities: [{ id: 'twitch', kind: 'source' }],
+  configurationSchema: { additionalProperties: false, properties: {}, type: 'object' },
+  id: 'openrepurpose.twitch',
+  name: 'OpenRepurpose Twitch',
+  requiredApiVersion: '^1.0.0',
+  permissions: {
+    childProcesses: [],
+    filesystem: [{ access: ['write'], root: 'temp' }],
+    networkHosts: ['api.twitch.tv', 'id.twitch.tv'],
+    secrets: [
+      { access: ['read', 'write'], name: 'client-id', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'client-secret', scope: 'application' },
+      { access: ['read', 'write', 'delete'], name: 'twitch-refresh-token', scope: 'account' },
+    ],
+  },
+  version: '1.0.0',
+} as const satisfies PluginManifest;
 
 function parseConfig(value: Readonly<Record<string, SourceJsonValue>>): TwitchSourceConfiguration {
   const accountId = value.accountId,

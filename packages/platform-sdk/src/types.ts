@@ -1,5 +1,14 @@
 export type DestinationMediaKind = 'audio' | 'image' | 'video';
 
+/** JSON-safe values accepted at the stable plugin boundary. */
+export type PluginJsonValue =
+  | boolean
+  | null
+  | number
+  | string
+  | { readonly [key: string]: PluginJsonValue }
+  | readonly PluginJsonValue[];
+
 export type DestinationPrivacy = 'private' | 'public' | 'unlisted';
 
 export interface TextFieldCapability {

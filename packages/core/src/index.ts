@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   isPlatformError,
   validateSourcePollResult,
+  type DestinationJobContext,
+  type PluginJsonValue,
   type SourceAdapterContext,
   type SourceItemObservation,
   type SourceJsonValue,
@@ -240,8 +242,7 @@ export class MediaImportService {
 }
 
 export type JsonPrimitive = boolean | null | number | string;
-export type JsonValue =
-  JsonPrimitive | { readonly [key: string]: JsonValue } | readonly JsonValue[];
+export type JsonValue = PluginJsonValue;
 
 export type JobStatus = 'pending' | 'running' | 'retrying' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -510,12 +511,7 @@ function inferJobConcurrencyScope(
     : undefined;
 }
 
-export interface JobHandlerContext {
-  readonly attemptNumber: number;
-  readonly idempotencyKey?: string;
-  readonly jobId: string;
-  readonly signal: AbortSignal;
-}
+export type JobHandlerContext = DestinationJobContext;
 
 export interface JobHandler {
   readonly type: string;
