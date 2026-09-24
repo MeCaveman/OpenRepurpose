@@ -3,6 +3,9 @@ packages:
   - packages/*
   - integrations/*
 
+# Required so pnpm's non-legacy deploy can follow the complete workspace runtime graph.
+injectWorkspacePackages: true
+
 allowBuilds:
   esbuild: true
 

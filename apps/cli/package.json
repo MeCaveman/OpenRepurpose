@@ -5,6 +5,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "openrepurpose": "dist/index.js"
+  },
   "scripts": {
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "build": "tsc -p tsconfig.json",
@@ -16,7 +19,10 @@
     "@openrepurpose/core": "workspace:*",
     "@openrepurpose/media": "workspace:*",
     "@openrepurpose/local-secrets": "workspace:*",
+    "@openrepurpose/meta": "workspace:*",
+    "@openrepurpose/platform-sdk": "workspace:*",
     "@openrepurpose/tiktok": "workspace:*",
+    "@openrepurpose/twitch": "workspace:*",
     "@openrepurpose/youtube": "workspace:*",
     "@openrepurpose/kick": "workspace:*",
     "@openrepurpose/server": "workspace:*",
