@@ -55,6 +55,10 @@ credential where appropriate. OpenRepurpose does not supply certificates or mana
 
 ## Service operation
 
+The portable Linux artifact and its XDG/system-service data locations are documented in
+[Linux portable installation](linux-install.md). Keep the extracted release directory separate from
+configuration and data so an upgrade cannot overwrite state.
+
 Linux systemd example (`/etc/systemd/system/openrepurpose.service`):
 
 ```ini
@@ -67,7 +71,7 @@ Wants=network-online.target
 Type=simple
 User=openrepurpose
 EnvironmentFile=/etc/openrepurpose/openrepurpose.env
-ExecStart=/usr/local/bin/openrepurpose start --headless
+ExecStart=/opt/openrepurpose/OpenRepurpose/openrepurpose start --headless
 Restart=on-failure
 RestartSec=5
 

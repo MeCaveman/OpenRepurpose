@@ -1,5 +1,6 @@
 import { cpSync, existsSync, rmSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
+import process from 'node:process';
 
 const [source, destination] = process.argv.slice(2);
 if (source === undefined || destination === undefined)
@@ -8,7 +9,14 @@ if (source === undefined || destination === undefined)
 const sourcePath = resolve(source);
 const destinationPath = resolve(destination);
 if (!existsSync(sourcePath)) throw new Error(`Package source does not exist: ${sourcePath}`);
-if (destinationPath.startsWith(`${sourcePath}\\`) || sourcePath.startsWith(`${destinationPath}\\`))
+function containsPath(parent, child) {
+  const pathFromParent = relative(parent, child);
+  return pathFromParent === '' || (!pathFromParent.startsWith('..') && !isAbsolute(pathFromParent));
+}
+
+const sourceContainsDestination = containsPath(sourcePath, destinationPath);
+const destinationContainsSource = containsPath(destinationPath, sourcePath);
+if (sourceContainsDestination || destinationContainsSource)
   throw new Error('Source and destination must not contain one another.');
 rmSync(destinationPath, { force: true, recursive: true });
 cpSync(sourcePath, destinationPath, { dereference: true, recursive: true });
