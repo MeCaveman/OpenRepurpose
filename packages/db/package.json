@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@openrepurpose/core": "workspace:*",
-    "drizzle-orm": "1.0.0-rc.4"
+    "drizzle-orm": "1.0.0-rc.5-5935859"
   },
   "devDependencies": {
     "@types/node": "26.6.2"
