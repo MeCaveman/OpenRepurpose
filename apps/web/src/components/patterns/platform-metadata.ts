@@ -1,4 +1,5 @@
-export type KnownPlatform = 'facebook' | 'instagram' | 'local' | 'meta' | 'tiktok' | 'youtube';
+export type KnownPlatform =
+  'facebook' | 'instagram' | 'kick' | 'local' | 'meta' | 'tiktok' | 'twitch' | 'youtube';
 
 export type PlatformMetadata = {
   readonly id: string;
@@ -9,9 +10,11 @@ export type PlatformMetadata = {
 const platforms: Readonly<Record<KnownPlatform, PlatformMetadata>> = {
   facebook: { id: 'facebook', label: 'Facebook', mark: 'FB' },
   instagram: { id: 'instagram', label: 'Instagram', mark: 'IG' },
+  kick: { id: 'kick', label: 'Kick', mark: 'KI' },
   local: { id: 'local', label: 'Local files', mark: 'LF' },
   meta: { id: 'meta', label: 'Meta', mark: 'ME' },
   tiktok: { id: 'tiktok', label: 'TikTok', mark: 'TT' },
+  twitch: { id: 'twitch', label: 'Twitch', mark: 'TW' },
   youtube: { id: 'youtube', label: 'YouTube', mark: 'YT' },
 };
 

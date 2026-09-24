@@ -30,7 +30,8 @@ describe('Linux x64 portable release contract', () => {
     expect(packaging).toContain('SHA256SUMS.txt');
     expect(packaging).toContain('THIRD_PARTY_NOTICES.md');
     expect(packaging).toContain("resolve(repositoryRoot, 'LICENSE')");
-    expect(packaging).toContain("resolve(staging, 'docs/licenses')");
+    expect(packaging).toContain("resolve(staging, 'docs')");
+    expect(packaging).toContain("['README.md', 'SECURITY.md', 'CONTRIBUTING.md']");
     expect(packaging).toContain("'--sort=name'");
     expect(packaging).toContain("'--mtime=@0'");
     expect(smoke).toContain('XDG_CONFIG_HOME="$clean_profile/config"');

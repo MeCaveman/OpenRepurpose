@@ -20,8 +20,9 @@ is:
 http://127.0.0.1:3000/api/accounts/youtube/oauth/callback
 ```
 
-Keep the host and port in `APP_URL` aligned with the address used in the browser. v0.1 accepts only
-loopback deployment; a future server-mode packet will own public HTTPS/reverse-proxy operation.
+Keep the host and port in `APP_URL` aligned with the address used in the browser. Loopback is the
+default. Authenticated LAN/headless mode requires deliberate configuration; public callbacks should
+use the configured HTTPS reverse-proxy origin.
 
 ## Configure OpenRepurpose
 
@@ -74,8 +75,8 @@ with `SECRET_VAULT_PATH` and `SECRET_KEY_PATH`.
 
 This protects against casual inspection and against a database or vault-only backup leaking usable
 tokens. It does **not** protect against malware, an administrator, or another process already running
-as the same OS user and able to read both files. OS-native credential storage remains a stable-release
-hardening target.
+as the same OS user and able to read both files. The deployment-neutral file vault is the supported
+v1 secret store on Windows, Linux, and Docker.
 
 ## Google restrictions and troubleshooting
 

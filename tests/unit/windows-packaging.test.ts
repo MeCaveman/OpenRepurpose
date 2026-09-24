@@ -33,7 +33,8 @@ describe('Windows x64 portable release contract', () => {
     expect(packaging).toContain('SHA256SUMS.txt');
     expect(packaging).toContain('THIRD_PARTY_NOTICES.md');
     expect(packaging).toContain("'LICENSE') -Destination $staging");
-    expect(packaging).toContain("'docs\\licenses') (Join-Path $staging 'docs\\licenses')");
+    expect(packaging).toContain("'docs') (Join-Path $staging 'docs')");
+    expect(packaging).toContain("@('README.md', 'SECURITY.md', 'CONTRIBUTING.md')");
     expect(packaging).toContain('ZipFile]::CreateFromDirectory');
     expect(smoke).toContain("$env:APPDATA = Join-Path $cleanProfile 'Roaming'");
     expect(smoke).toContain("'http://127.0.0.1:39100/api/health'");

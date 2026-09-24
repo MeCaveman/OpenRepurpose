@@ -5,9 +5,10 @@ the web UI or with `openrepurpose jobs list` / `openrepurpose jobs show <job-id>
 
 ## The dashboard does not start
 
-- Confirm Node.js 24.21.0 and pnpm 12.4.2 are installed.
-- Run `pnpm build` and then `pnpm start` from the repository root.
-- v0.1 binds to `127.0.0.1` by default. A LAN/public `BIND_HOST` or `APP_URL` is rejected.
+- For a portable release, run the packaged `openrepurpose doctor`; Node.js and pnpm are bundled.
+- For a source checkout, confirm Node.js 24.21.0 and pnpm 12.4.2, then run `pnpm build` and `pnpm start`.
+- OpenRepurpose binds to `127.0.0.1` by default. A LAN/public `BIND_HOST` or `APP_URL` requires
+  explicit authenticated LAN mode.
 - If the port is busy, set a different `PORT` and matching loopback `APP_URL`.
 
 ## Setup reports missing ffmpeg or ffprobe
@@ -66,5 +67,18 @@ resumable session and remote video ID, so recovery does not blindly create a sec
 ## Security errors from the browser
 
 State-changing API requests require the local origin and a session CSRF token. Do not disable this
-check or expose the v0.1 server through a reverse proxy; loopback-only access is intentional until a
-later release adds authenticated headless/LAN support.
+check. If using a reverse proxy, set the configured public origin exactly, protect the backend from
+direct access, enable authenticated LAN mode, and trust forwarded headers only from that proxy.
+
+## Backup restore says the database is busy
+
+Stop every OpenRepurpose server, worker, scheduler, and CLI process using the database. Restore
+validates the entire backup before mutation and refuses to continue without the database lock. Do
+not delete `-wal`/`-shm` files from a running database. See [backup and restore](backup-restore.md).
+
+## OAuth succeeds but publishing is unavailable
+
+OAuth proves identity, not every capability. Check the account card for missing scopes, reconnect
+requirements, target eligibility, app-review/audit restrictions, creator privacy choices, quota, or
+remote processing failures. Use the current [platform guide](platform-setup/README.md) and never try
+to work around a platform restriction.

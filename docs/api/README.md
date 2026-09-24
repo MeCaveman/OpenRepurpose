@@ -49,9 +49,8 @@ Revoked tokens stop authenticating immediately. Token values and verifiers never
 responses or logs.
 
 The localhost web application uses its encrypted browser session plus Origin/CSRF checks instead of
-receiving or storing a machine token. A browser session can create the first API token through
-`POST /api/v1/auth/tokens`. Token CLI administration is scheduled for the later v0.9 headless/CLI
-packet.
+receiving or storing a machine token. A browser session can create a token through
+`POST /api/v1/auth/tokens`; the CLI supports `openrepurpose api token create`, `list`, and `revoke`.
 
 ## Errors
 

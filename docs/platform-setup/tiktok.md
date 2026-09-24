@@ -13,7 +13,7 @@ identity, granted scopes, and live creator posting capabilities.
 4. Register the exact callback shown on OpenRepurpose's **Accounts** page:
    - Local Windows/Linux: use the shown `localhost` or `127.0.0.1` URL with its explicit port.
      TikTok treats this as a desktop flow, and OpenRepurpose uses required S256 PKCE.
-   - Future reverse-proxied/VPS deployment: `APP_URL` must produce an absolute, static HTTPS
+   - Reverse-proxied/VPS deployment: `APP_URL` must produce an absolute, static HTTPS
      callback. TikTok treats this as a web confidential-client flow.
 5. Copy the app's **Client key** and **Client secret** into the TikTok card on **Accounts**, save,
    then select **Connect TikTok**.
@@ -50,8 +50,9 @@ creator-info endpoint does not reveal the developer app's audit status. Therefor
 - does not silently change a requested privacy value or work around TikTok review, rate limits,
   creator bans, or posting caps.
 
-Packet 2 connects accounts and displays preflight capabilities only. Video initialization,
-streaming upload, and status polling belong to Packet 3 and are intentionally not available yet.
+OpenRepurpose queries creator information before a publish, streams the selected local file to the
+official upload URL, and polls publish status through the persistent job runner. Upload completion
+does not imply that TikTok finished processing or made the post visible.
 
 ## Official references
 

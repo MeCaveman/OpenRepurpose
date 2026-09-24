@@ -1,0 +1,31 @@
+name: Feature request
+description: Propose a local-first capability or improvement.
+title: '[Feature]: '
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the creator/operator need, not only a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Platform, privacy, deployment, or compatibility constraints
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This does not require an OpenRepurpose-hosted cloud service.
+          required: true
+        - label: I have not included credentials, private media, or sensitive logs.
+          required: true

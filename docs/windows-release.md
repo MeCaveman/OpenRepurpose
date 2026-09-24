@@ -33,7 +33,8 @@ pass its path explicitly:
 ```
 
 The script rejects a runtime whose locked hash or Node version differs. The ZIP is a portable
-artifact, not an MSI installer; upgrades and uninstall/data-removal guidance remain Packet 9 work.
+artifact, not an MSI installer; see [Quick Start — Windows](quick-start-windows.md) for upgrades and
+[uninstall/data removal](uninstall.md) for the separate application-data cleanup step.
 
 ## Clean-user-profile smoke
 

@@ -55,7 +55,12 @@ if (!(Test-Path -LiteralPath (Join-Path $webDistribution 'index.html'))) {
 Copy-DirectoryContents $webDistribution (Join-Path $app 'node_modules\@openrepurpose\web\dist')
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD_PARTY_NOTICES.md') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $staging
-Copy-DirectoryContents (Join-Path $repositoryRoot 'docs\licenses') (Join-Path $staging 'docs\licenses')
+Copy-DirectoryContents (Join-Path $repositoryRoot 'docs') (Join-Path $staging 'docs')
+foreach ($relativePath in @('README.md', 'SECURITY.md', 'CONTRIBUTING.md')) {
+  $sourcePath = Join-Path $repositoryRoot $relativePath
+  $destinationPath = Join-Path $staging $relativePath
+  Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+}
 
 $runtimeArchive = if ([string]::IsNullOrWhiteSpace($NodeRuntimeArchive)) {
   Join-Path $output $runtime.archiveName

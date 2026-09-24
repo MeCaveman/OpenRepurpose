@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
@@ -32,6 +32,18 @@ test('setup journey reports mocked destination readiness and TikTok audit restri
           flow: 'desktop',
           redirectUri: 'http://127.0.0.1:3000/api/accounts/tiktok/oauth/callback',
         },
+        meta: {
+          configured: true,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/meta/oauth/callback',
+        },
+        twitch: {
+          configured: false,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/twitch/oauth/callback',
+        },
+        kick: {
+          configured: false,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/kick/oauth/callback',
+        },
         youtube: {
           configured: true,
           clientSecretConfigured: true,
@@ -42,10 +54,25 @@ test('setup journey reports mocked destination readiness and TikTok audit restri
   );
   await page.goto('/setup');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Setup');
+  await expect(page.getByRole('heading', { name: 'From install to first route' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Destination readiness' })).toBeVisible();
-  await expect(page.getByText('Configured')).toHaveCount(2);
+  await expect(page.getByText('Configured')).toHaveCount(3);
+  await expect(page.getByText('Action required')).toHaveCount(2);
   await expect(page.getByText('TikTok unaudited clients can publish only')).toBeVisible();
   await expect(page.getByText(/youtube\/oauth\/callback/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Meta credentials' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Twitch credentials' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Kick credentials' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Verify the installation' })).toHaveAttribute(
+    'href',
+    '/docs#quick-start',
+  );
+
+  if (process.env.CAPTURE_PACKET9_DOCS === '1') {
+    mkdirSync(resolve('docs/images'), { recursive: true });
+    await page.setViewportSize({ height: 900, width: 1440 });
+    await page.screenshot({ path: resolve('docs/images/setup-readiness.png') });
+  }
 
   await page.setViewportSize({ height: 800, width: 320 });
   await expect(page.getByRole('heading', { name: 'YouTube credentials' })).toBeVisible();
@@ -53,6 +80,153 @@ test('setup journey reports mocked destination readiness and TikTok audit restri
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
+});
+
+test('local handbook and onboarding pass the basic accessibility and viewport audit', async ({
+  page,
+}) => {
+  await serveProductionAssets(page);
+  await page.route('**/api/setup', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        kick: {
+          configured: false,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/kick/oauth/callback',
+        },
+        meta: {
+          configured: false,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/meta/oauth/callback',
+        },
+        tiktok: {
+          configured: false,
+          flow: 'desktop',
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/tiktok/oauth/callback',
+        },
+        twitch: {
+          configured: false,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/twitch/oauth/callback',
+        },
+        youtube: {
+          configured: false,
+          redirectUri: 'http://127.0.0.1:3000/api/accounts/youtube/oauth/callback',
+        },
+      }),
+    }),
+  );
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 412, height: 915 },
+    { width: 768, height: 1024 },
+    { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+    { width: 2560, height: 1440 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/setup');
+    await expect(page.getByRole('heading', { level: 1, name: 'Setup' })).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Setup sequence' })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+
+    await page.goto('/docs');
+    await expect(page).toHaveTitle('Docs · OpenRepurpose');
+    await expect(page.getByRole('heading', { level: 1, name: 'Documentation' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Documentation topics' })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/docs');
+  await expect(page.getByRole('link', { name: 'Setup', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await page.keyboard.press('Tab');
+  const skipLink = page.getByRole('link', { name: 'Skip to content' });
+  await expect(skipLink).toBeFocused();
+  expect(
+    await skipLink.evaluate((element) => Number.parseFloat(getComputedStyle(element).outlineWidth)),
+  ).toBeGreaterThanOrEqual(2);
+
+  const unnamedControls = await page
+    .locator('a[href], button, input, select, textarea')
+    .evaluateAll((elements) =>
+      elements
+        .filter((element) => {
+          const style = getComputedStyle(element);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        })
+        .filter((element) => {
+          const labelledBy = element.getAttribute('aria-labelledby');
+          const labelledByText = labelledBy
+            ?.split(/\s+/)
+            .map((id) => document.getElementById(id)?.textContent ?? '')
+            .join(' ')
+            .trim();
+          const labels =
+            element instanceof HTMLInputElement ||
+            element instanceof HTMLSelectElement ||
+            element instanceof HTMLTextAreaElement
+              ? [...(element.labels ?? [])]
+                  .map((label) => label.textContent ?? '')
+                  .join(' ')
+                  .trim()
+              : '';
+          return !(
+            element.getAttribute('aria-label')?.trim() ||
+            labelledByText ||
+            labels ||
+            element.textContent?.trim() ||
+            element.getAttribute('title')?.trim()
+          );
+        })
+        .map((element) => element.outerHTML),
+    );
+  expect(unnamedControls).toEqual([]);
+
+  const compactNavigationTargets = await page
+    .locator('[data-navigation-mode="compact"] a')
+    .evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
+  expect(compactNavigationTargets.every((height) => height >= 44)).toBe(true);
+
+  const textContrast = await page
+    .getByText('Run openrepurpose doctor, start the server, and open the loopback URL it prints.')
+    .evaluate((element) => {
+      const parse = (value: string): [number, number, number] => {
+        const channels = value
+          .match(/[\d.]+/g)
+          ?.slice(0, 3)
+          .map(Number);
+        if (channels?.length !== 3) throw new Error(`Unsupported color: ${value}`);
+        return channels as [number, number, number];
+      };
+      const luminance = ([red, green, blue]: [number, number, number]) => {
+        const [r, g, b] = [red, green, blue].map((channel) => {
+          const normalized = channel / 255;
+          return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+      };
+      let surface: Element | null = element;
+      let background = 'rgba(0, 0, 0, 0)';
+      while (surface !== null) {
+        background = getComputedStyle(surface).backgroundColor;
+        if (!background.endsWith(', 0)') && background !== 'transparent') break;
+        surface = surface.parentElement;
+      }
+      const foregroundLuminance = luminance(parse(getComputedStyle(element).color));
+      const backgroundLuminance = luminance(parse(background));
+      const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+      const darker = Math.min(foregroundLuminance, backgroundLuminance);
+      return (lighter + 0.05) / (darker + 0.05);
+    });
+  expect(textContrast).toBeGreaterThanOrEqual(4.5);
 });
 
 test('Meta accounts journey keeps Facebook Pages and Instagram targets distinct', async ({

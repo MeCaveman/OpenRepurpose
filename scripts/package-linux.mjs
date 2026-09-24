@@ -123,7 +123,9 @@ cpSync(
   resolve(staging, 'THIRD_PARTY_NOTICES.md'),
 );
 cpSync(resolve(repositoryRoot, 'LICENSE'), resolve(staging, 'LICENSE'));
-copyDirectoryContents(resolve(repositoryRoot, 'docs/licenses'), resolve(staging, 'docs/licenses'));
+copyDirectoryContents(resolve(repositoryRoot, 'docs'), resolve(staging, 'docs'));
+for (const relativePath of ['README.md', 'SECURITY.md', 'CONTRIBUTING.md'])
+  cpSync(resolve(repositoryRoot, relativePath), resolve(staging, relativePath));
 
 const runtimeArchive = suppliedRuntimeArchive ?? resolve(outputDirectory, runtime.archiveName);
 if (suppliedRuntimeArchive === undefined) await download(runtime.archiveUrl, runtimeArchive);

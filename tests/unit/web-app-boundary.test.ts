@@ -5,10 +5,11 @@ import { describe, expect, it } from 'vitest';
 describe('web application boundary', () => {
   const appSource = readFileSync(resolve('apps/web/src/App.tsx'), 'utf8');
 
-  it('registers the existing routes, the local model manager, and the not-found boundary', () => {
+  it('registers the existing routes, local handbook, model manager, and not-found boundary', () => {
     const registeredPaths = [
       '/',
       '/setup',
+      '/docs',
       '/accounts',
       '/sources',
       '/media',

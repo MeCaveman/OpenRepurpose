@@ -7,10 +7,8 @@ surface is not currently published by Kick.
 ## Prerequisites
 
 1. Enable 2FA on the Kick account, then create a Kick app in its Developer settings.
-2. Register the exact callback URL shown by OpenRepurpose after credentials are saved, normally
-   `http://localhost:<port>/api/accounts/kick/oauth/callback`.
-3. Save the app's client ID and client secret locally using `POST /api/accounts/kick/credentials`,
-   then complete the browser connection from `POST /api/accounts/kick/oauth/start`.
+2. Register the exact callback URL shown by OpenRepurpose **Setup** or **Accounts**.
+3. Save the app's client ID and client secret under **Accounts**, then complete browser consent.
 
 The connection requests only `user:read` and `channel:read`. OpenRepurpose uses PKCE, an
 installation-local browser-bound state, and local secret storage; authorization codes and tokens

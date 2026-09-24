@@ -11,6 +11,7 @@ import {
   type WorkspaceMode,
 } from './components/layout';
 import { AccountsRoute } from './features/accounts';
+import { DocsPage } from './features/docs';
 import { JobsRoute } from './features/jobs';
 import { MediaRoute } from './features/media';
 import { ModelsRoute } from './features/models';
@@ -28,10 +29,22 @@ interface RouteDefinition extends ResourceNavigationItem {
   readonly eyebrow: string;
   readonly render: (navigate: Navigate) => ReactNode;
   readonly title: string;
+  readonly visibleInNavigation?: boolean;
   readonly workspaceMode?: WorkspaceMode;
 }
 
 const routes: readonly RouteDefinition[] = [
+  {
+    href: '/docs',
+    icon: 'setup',
+    label: 'Docs',
+    eyebrow: 'Local handbook',
+    title: 'Documentation',
+    description: 'Safe setup, platform boundaries, automation, and local data guidance.',
+    render: () => <DocsPage />,
+    visibleInNavigation: false,
+    workspaceMode: 'setup',
+  },
   {
     href: '/',
     icon: 'dashboard',
@@ -47,7 +60,7 @@ const routes: readonly RouteDefinition[] = [
     label: 'Setup',
     eyebrow: 'System readiness',
     title: 'Setup',
-    description: 'Configuration and dependency checks will appear here as capabilities are added.',
+    description: 'Verify this installation, configure platform apps, and prepare the first route.',
     render: () => <SetupRoute />,
     workspaceMode: 'setup',
   },
@@ -119,11 +132,9 @@ const routes: readonly RouteDefinition[] = [
   },
 ];
 
-const navigation: readonly ResourceNavigationItem[] = routes.map(({ href, icon, label }) => ({
-  href,
-  icon,
-  label,
-}));
+const navigation: readonly ResourceNavigationItem[] = routes
+  .filter((route) => route.visibleInNavigation !== false)
+  .map(({ href, icon, label }) => ({ href, icon, label }));
 
 const notFoundRoute = {
   eyebrow: 'Not found',
@@ -146,6 +157,7 @@ function usePathname(): string {
 export function App() {
   const pathname = usePathname();
   const route = routes.find((candidate) => candidate.href === pathname) ?? notFoundRoute;
+  const navigationPath = pathname === '/docs' ? '/setup' : pathname;
   useEffect(() => {
     document.title = `${'label' in route ? route.label : 'Not found'} · OpenRepurpose`;
   }, [route]);
@@ -164,7 +176,7 @@ export function App() {
       }
       resourceRail={
         <ResourceNavigation
-          currentPath={pathname}
+          currentPath={navigationPath}
           items={navigation}
           mode="rail"
           onNavigate={navigate}
@@ -172,7 +184,7 @@ export function App() {
       }
     >
       <ResourceNavigation
-        currentPath={pathname}
+        currentPath={navigationPath}
         items={navigation}
         mode="compact"
         onNavigate={navigate}
