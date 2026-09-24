@@ -28,7 +28,10 @@ describe('v1.0 release-candidate matrix', () => {
     expect(mediaSmoke).toContain("'node_modules',");
     expect(mediaSmoke).toContain('compileTransformCommand');
     expect(mediaSmoke).toContain('FfprobeMediaProbe');
-    expect(read('scripts/stage-web-distribution.mjs')).toContain("'@openrepurpose/server'");
+    const stagedWebDistribution = read('scripts/stage-web-distribution.mjs');
+    expect(stagedWebDistribution).toContain("'@openrepurpose/server'");
+    expect(stagedWebDistribution).toContain("resolve(serverDirectory, 'web', 'dist')");
+    expect(read('apps/server/src/app.ts')).toContain('const packagedStaticRoot');
     expect(read('package.json')).toContain('smoke:linux-artifact:docker');
     expect(liveSmoke).toContain('No live platform credential set was supplied');
     expect(liveSmoke).not.toContain('JSON.stringify(process.env)');

@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifySecureSession from '@fastify/secure-session';
 import fastifyStatic from '@fastify/static';
@@ -42,7 +43,13 @@ declare module '@fastify/secure-session' {
 }
 
 const stateChangingMethods = new Set(['DELETE', 'PATCH', 'POST', 'PUT']);
-const defaultStaticRoot = fileURLToPath(new URL('../../web/dist', import.meta.url));
+// Portable artifacts stage the UI inside the server package so it cannot depend on pnpm's
+// workspace-link layout after archive extraction. Source checkouts retain the workspace path.
+const packagedStaticRoot = fileURLToPath(new URL('../web/dist', import.meta.url));
+const workspaceStaticRoot = fileURLToPath(new URL('../../web/dist', import.meta.url));
+const defaultStaticRoot = existsSync(join(packagedStaticRoot, 'index.html'))
+  ? packagedStaticRoot
+  : workspaceStaticRoot;
 
 export interface LoggerDestination {
   write(chunk: string): void;

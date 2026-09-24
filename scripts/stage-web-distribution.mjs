@@ -32,10 +32,16 @@ if (serverDirectories.length === 0)
   throw new Error('The deployed application does not contain @openrepurpose/server.');
 
 for (const serverDirectory of serverDirectories) {
-  const destination = resolve(serverDirectory, '..', 'web', 'dist');
-  mkdirSync(destination, { recursive: true });
-  for (const entry of readdirSync(webDistribution))
-    cpSync(resolve(webDistribution, entry), resolve(destination, entry), {
-      recursive: true,
-    });
+  // Keep the former sibling path for compatibility with existing package layouts, but embed the
+  // UI in the server package as the portable runtime's primary static root.
+  for (const destination of [
+    resolve(serverDirectory, 'web', 'dist'),
+    resolve(serverDirectory, '..', 'web', 'dist'),
+  ]) {
+    mkdirSync(destination, { recursive: true });
+    for (const entry of readdirSync(webDistribution))
+      cpSync(resolve(webDistribution, entry), resolve(destination, entry), {
+        recursive: true,
+      });
+  }
 }
