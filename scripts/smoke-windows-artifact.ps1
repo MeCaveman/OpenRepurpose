@@ -12,11 +12,11 @@ $zip = Join-Path $artifact 'OpenRepurpose-windows-x64.zip'
 if (!(Test-Path -LiteralPath $zip)) { throw "Artifact ZIP was not found: $zip" }
 $installationRoot = Join-Path $artifact 'clean-install'
 
-# Defender and other filesystem scanners can briefly retain a newly-created ZIP on Windows.
-# Retry extraction from a clean destination so a transient sharing violation cannot make the
-# clean-profile release gate flaky.
-$extractAttempts = 20
-for ($attempt = 1; $attempt -le $extractAttempts; $attempt++) {
+# Defender and other filesystem scanners can retain a newly-created ZIP long enough for an
+# arbitrary retry count to be unreliable. Retry extraction from a clean destination until a
+# bounded deadline so a transient sharing violation cannot make the release gate flaky.
+$extractDeadline = [DateTime]::UtcNow.AddMinutes(3)
+while ($true) {
   if (Test-Path -LiteralPath $installationRoot) {
     Remove-Item -LiteralPath $installationRoot -Recurse -Force
   }
@@ -24,7 +24,7 @@ for ($attempt = 1; $attempt -le $extractAttempts; $attempt++) {
     Expand-Archive -LiteralPath $zip -DestinationPath $installationRoot -Force
     break
   } catch {
-    if ($attempt -eq $extractAttempts) { throw }
+    if ([DateTime]::UtcNow -ge $extractDeadline) { throw }
     Start-Sleep -Seconds 1
   }
 }
