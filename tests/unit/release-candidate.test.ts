@@ -18,6 +18,7 @@ describe('v1.0 release-candidate matrix', () => {
     expect(workflow).toContain('environment: live-platform-smoke');
     expect(workflow).toContain('Mocked first-party platform contracts');
     expect(workflow).toContain('FFmpeg and subtitle matrix');
+    expect(workflow).toContain('title=Windows portable artifact smoke');
   });
 
   it('runs media verification against packaged code and keeps live checks read-only', () => {
