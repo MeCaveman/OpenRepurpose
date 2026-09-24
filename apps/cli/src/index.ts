@@ -19,6 +19,7 @@ import type {
 } from '@openrepurpose/core';
 import {
   openDatabase,
+  previewMigrations,
   runMigrations,
   createPortableBackup,
   restorePortableBackup,
@@ -45,7 +46,7 @@ import {
   WHISPER_CPP_MODEL_CATALOG,
   type TranscriptionModelManager,
 } from '@openrepurpose/media';
-import { loadApplicationConfig } from '@openrepurpose/shared';
+import { loadApplicationConfig, OPENREPURPOSE_VERSION } from '@openrepurpose/shared';
 import type { Environment } from '@openrepurpose/shared';
 import { EncryptedFileSecretStore } from '@openrepurpose/local-secrets';
 import { YouTubeOAuthService } from '@openrepurpose/youtube';
@@ -390,6 +391,8 @@ export interface CreateCliOptions {
   readonly modelManager?: TranscriptionModelManager;
   /** Test/runtime composition hook; normal CLI use discovers the concrete local FFmpeg build. */
   readonly transformTool?: TransformToolIdentity;
+  /** Test/runtime composition hook; normal update checks use the GitHub Releases API. */
+  readonly fetch?: typeof fetch;
   readonly write?: (value: string) => void;
 }
 
@@ -407,6 +410,61 @@ function formatModelBytes(value: number | undefined): string {
   const unitIndex = value === 0 ? 0 : Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4);
   const amount = value / 1024 ** unitIndex;
   return `${amount.toFixed(unitIndex === 0 ? 0 : amount >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+}
+
+export interface ReleaseUpdate {
+  readonly currentVersion: string;
+  readonly latestVersion: string;
+  readonly notesUrl: string;
+  readonly updateAvailable: boolean;
+}
+
+function releaseVersion(value: string): readonly [number, number, number] | undefined {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/u.exec(value.trim());
+  return match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function isNewerRelease(candidate: string, current: string): boolean {
+  const candidateParts = releaseVersion(candidate);
+  const currentParts = releaseVersion(current);
+  if (candidateParts === undefined || currentParts === undefined) return false;
+  for (let index = 0; index < candidateParts.length; index += 1) {
+    if (candidateParts[index]! !== currentParts[index]!)
+      return candidateParts[index]! > currentParts[index]!;
+  }
+  return false;
+}
+
+/** Checks an explicitly configured GitHub Releases API endpoint; it never downloads or installs. */
+export async function checkForUpdate(
+  releasesUrl: string,
+  request: typeof fetch = fetch,
+): Promise<ReleaseUpdate> {
+  const url = new URL(releasesUrl);
+  if (url.protocol !== 'https:' || url.hostname !== 'api.github.com')
+    throw new Error('Update checks require an HTTPS GitHub Releases API URL.');
+  const response = await request(url, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'OpenRepurpose-update-check' },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`GitHub Releases check failed (${response.status}).`);
+  const value: unknown = await response.json();
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    typeof (value as { tag_name?: unknown }).tag_name !== 'string' ||
+    typeof (value as { html_url?: unknown }).html_url !== 'string'
+  )
+    throw new Error('GitHub Releases returned an invalid release record.');
+  const release = value as { html_url: string; tag_name: string };
+  if (releaseVersion(release.tag_name) === undefined)
+    throw new Error('GitHub Releases returned an invalid semantic-version tag.');
+  return {
+    currentVersion: OPENREPURPOSE_VERSION,
+    latestVersion: release.tag_name.replace(/^v/u, ''),
+    notesUrl: release.html_url,
+    updateAvailable: isNewerRelease(release.tag_name, OPENREPURPOSE_VERSION),
+  };
 }
 
 type TransformPresetName = 'landscape' | 'square' | 'vertical';
@@ -477,7 +535,57 @@ function transformPlanFromOptions(options: {
 export function createCli(options: CreateCliOptions = {}): Command {
   const environment = options.environment ?? process.env;
   const write = options.write ?? ((value: string) => process.stdout.write(value));
-  const program = new Command().name('openrepurpose').description('Local media automation');
+  const program = new Command()
+    .name('openrepurpose')
+    .description('Local media automation')
+    .version(OPENREPURPOSE_VERSION, '--version', 'Print the installed OpenRepurpose version');
+  program
+    .command('version')
+    .description('Print the installed OpenRepurpose version')
+    .action(() => {
+      write(`${OPENREPURPOSE_VERSION}\n`);
+    });
+  const updateCommand = program
+    .command('update')
+    .description('Check an explicitly configured GitHub Release; never downloads or installs');
+  updateCommand
+    .command('check')
+    .option('--url <github-releases-api-url>', 'GitHub Releases API latest-release URL')
+    .option('--json', 'write JSON')
+    .action(async (commandOptions: { json?: boolean; url?: string }) => {
+      const releasesUrl = commandOptions.url ?? environment.OPENREPURPOSE_RELEASES_URL;
+      if (releasesUrl === undefined)
+        throw new Error(
+          'No update endpoint is configured. Set OPENREPURPOSE_RELEASES_URL or pass --url with the GitHub Releases API latest-release URL.',
+        );
+      const result = await checkForUpdate(releasesUrl, options.fetch);
+      write(
+        commandOptions.json
+          ? `${JSON.stringify(result)}\n`
+          : `${result.updateAvailable ? `Update available: ${result.latestVersion}` : `OpenRepurpose ${result.currentVersion} is current`}\nRelease notes: ${result.notesUrl}\nNo update was downloaded or installed.\n`,
+      );
+    });
+  const migrationCommand = program
+    .command('migrations')
+    .description('Preview database migration and automatic rollback-backup behavior');
+  migrationCommand
+    .command('preview')
+    .option('--json', 'write JSON')
+    .action((commandOptions: { json?: boolean }) => {
+      const config = loadApplicationConfig(environment);
+      const database = openDatabase(config.paths.databasePath);
+      try {
+        const preview = previewMigrations(database);
+        const result = { databasePath: config.paths.databasePath, ...preview };
+        write(
+          commandOptions.json
+            ? `${JSON.stringify(result)}\n`
+            : `database\t${result.databasePath}\napplied\t${result.applied.length}\npending\t${result.pending.length === 0 ? 'none' : result.pending.join(',')}\npre-upgrade backup\t${result.backupWillBeCreated ? 'will be created' : 'not needed'}\n`,
+        );
+      } finally {
+        database.close();
+      }
+    });
   program.command('doctor').action(async () => {
     const checks = await runDoctor(environment);
     for (const check of checks)

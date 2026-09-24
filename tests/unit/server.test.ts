@@ -64,7 +64,7 @@ describe('Fastify local security boundary', () => {
     const app = createServer();
     const response = await app.inject({ method: 'GET', url: '/api/health', headers: allowedHost });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ service: 'openrepurpose', status: 'ok', version: '0.1.0' });
+    expect(response.json()).toEqual({ service: 'openrepurpose', status: 'ok', version: '1.0.0' });
     expect(response.headers['x-content-type-options']).toBe('nosniff');
 
     const rejected = await app.inject({

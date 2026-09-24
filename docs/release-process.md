@@ -9,7 +9,9 @@ is green. Maintainers must not treat a source-workspace pass as artifact evidenc
 3. Build Windows x64 and Linux x64 artifacts with the pinned official Node runtime.
 4. Smoke extracted artifacts under clean profiles/hosts, including `doctor`, startup, health,
    dashboard, configured FFmpeg/subtitles, and upgrade/rollback.
-5. Generate SHA-256 files and record runtime/source provenance. Never claim a signature that was not produced.
+5. Generate SHA-256 files and record runtime/source provenance. Each portable archive has a sibling
+   `.sha256` file; use `pnpm release:artifacts artifacts/release` after collecting both artifacts to
+   make the release-level `SHA256SUMS.txt`. Never claim a signature that was not produced.
 6. Publish notes, artifacts, checksums, source, license, notices, and known limitations.
 7. Download published artifacts and repeat clean Windows/Linux verification before marking stable.
 
@@ -33,3 +35,21 @@ That command builds the Linux x64 portable archive in a pinned Debian/Node envir
 FFmpeg only in the disposable certification image, and exercises the extracted artifact through the
 same clean-profile smoke used by Ubuntu CI. The release artifact itself continues to keep
 FFmpeg/ffprobe external.
+
+## Versioning, updates, and publication
+
+The root manifest and every workspace manifest carry the product release version. The CLI,
+`/api/health`, `/api/v1/health`, and MCP initialization/status use the same `OPENREPURPOSE_VERSION`
+constant. `openrepurpose version` prints it.
+
+`openrepurpose migrations preview` lists pending migrations and whether the normal upgrade run will
+make its automatic pre-upgrade SQLite copy. `openrepurpose update check` is opt-in: set
+`OPENREPURPOSE_RELEASES_URL` (or pass `--url`) to the HTTPS GitHub Releases `releases/latest` API
+endpoint. It only shows the latest version and notes URL; it never downloads or installs an update.
+
+The tag workflow collects clean Windows and Linux builds, writes release-level SHA-256 files, and
+optionally creates detached GPG signatures when the `OPENREPURPOSE_RELEASE_SIGNING_KEY` and
+`OPENREPURPOSE_RELEASE_SIGNING_PASSPHRASE` repository secrets are configured. It publishes only after
+both artifact jobs complete. Before creating a stable tag, a maintainer must verify every v1.0 release
+gate and download the resulting GitHub Release assets for the final clean-host smoke; no tag is a
+substitute for that evidence.

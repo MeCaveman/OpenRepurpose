@@ -1,6 +1,6 @@
 {
   "name": "openrepurpose",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
@@ -29,6 +29,7 @@
     "test:live-platforms": "node scripts/smoke-live-platforms.mjs",
     "smoke:docker": "node scripts/smoke-docker.mjs",
     "smoke:linux-artifact:docker": "node scripts/smoke-linux-artifact-docker.mjs",
+    "release:artifacts": "node scripts/release-artifacts.mjs",
     "test:watch": "vitest",
     "test:e2e": "corepack pnpm --filter @openrepurpose/web build && playwright test",
     "verify": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check && corepack pnpm test && corepack pnpm build && corepack pnpm test:e2e",

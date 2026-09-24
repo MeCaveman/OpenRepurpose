@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { z, type ZodType } from '@openrepurpose/shared';
+import { OPENREPURPOSE_VERSION, z, type ZodType } from '@openrepurpose/shared';
 import type {
   ApiIdempotencyService,
   ApiPermission,
@@ -705,7 +705,7 @@ export function registerApiV1Routes(server: FastifyInstance, options: ApiV1Optio
     apiVersion: 'v1',
     service: 'openrepurpose',
     status: 'ok',
-    version: '0.1.0',
+    version: OPENREPURPOSE_VERSION,
   }));
   server.get('/api/v1/openapi.json', async (_request, reply) =>
     reply.header('Cache-Control', 'no-store').send(openapi),

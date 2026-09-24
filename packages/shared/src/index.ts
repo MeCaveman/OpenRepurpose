@@ -5,6 +5,9 @@ import { z } from 'zod';
 export { z } from 'zod';
 export type { ZodType } from 'zod';
 
+/** The product release identifier exposed by the CLI, HTTP health routes, and MCP. */
+export const OPENREPURPOSE_VERSION = '1.0.0' as const;
+
 export interface Environment {
   readonly [name: string]: string | undefined;
 }

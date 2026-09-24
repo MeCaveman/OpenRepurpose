@@ -1,4 +1,4 @@
-import { z } from '@openrepurpose/shared';
+import { OPENREPURPOSE_VERSION, z } from '@openrepurpose/shared';
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import type {
@@ -201,7 +201,10 @@ export class McpServer {
       return this.result(request.id, {
         capabilities: { tools: {} },
         protocolVersion: '2025-03-26',
-        serverInfo: { name: 'openrepurpose', version: this.options.version ?? '0.1.0' },
+        serverInfo: {
+          name: 'openrepurpose',
+          version: this.options.version ?? OPENREPURPOSE_VERSION,
+        },
       });
     if (request.method === 'tools/list')
       return this.result(request.id, {
@@ -246,7 +249,7 @@ export class McpServer {
         apiVersion: 'v1',
         service: 'openrepurpose',
         status: 'ok',
-        version: this.options.version ?? '0.1.0',
+        version: this.options.version ?? OPENREPURPOSE_VERSION,
       });
     if (name === 'list_accounts') {
       const { limit } = args as z.infer<(typeof toolSchemas)['list_accounts']>;

@@ -122,6 +122,8 @@ execFileSync(
   [resolve(repositoryRoot, 'scripts/stage-web-distribution.mjs'), app, webDistribution],
   { stdio: 'inherit' },
 );
+const archivePath = resolve(outputDirectory, 'OpenRepurpose-linux-x64.tar.xz');
+writeFileSync(`${archivePath}.sha256`, `${sha256(archivePath)}  OpenRepurpose-linux-x64.tar.xz\n`);
 
 cpSync(
   resolve(repositoryRoot, 'THIRD_PARTY_NOTICES.md'),

@@ -5,7 +5,7 @@ import fastifySecureSession from '@fastify/secure-session';
 import fastifyStatic from '@fastify/static';
 import Fastify, { LogController } from 'fastify';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { ApplicationConfig } from '@openrepurpose/shared';
+import { OPENREPURPOSE_VERSION, type ApplicationConfig } from '@openrepurpose/shared';
 import { ModelManagerError, type TranscriptionModelManager } from '@openrepurpose/media';
 import { isPlatformError, REDACTED_LOG_VALUE } from '@openrepurpose/platform-sdk';
 import type { YouTubeOAuthService } from '@openrepurpose/youtube';
@@ -347,7 +347,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         },
       },
     },
-    async () => ({ service: 'openrepurpose', status: 'ok', version: '0.1.0' }),
+    async () => ({ service: 'openrepurpose', status: 'ok', version: OPENREPURPOSE_VERSION }),
   );
 
   if (options.modelManager !== undefined) {

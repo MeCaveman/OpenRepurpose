@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-artifact:
+    name: Build Windows release artifact
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 12.4.2
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - shell: pwsh
+        run: ./scripts/package-windows.ps1
+      - shell: pwsh
+        run: ./scripts/smoke-windows-artifact.ps1 -ArtifactDirectory artifacts/windows-x64
+      - uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b # v4.3.4
+        with:
+          name: release-windows-x64
+          path: |
+            artifacts/windows-x64/OpenRepurpose-windows-x64.zip
+            artifacts/windows-x64/OpenRepurpose-windows-x64.zip.sha256
+          if-no-files-found: error
+
+  linux-artifact:
+    name: Build Linux release artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 12.4.2
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: node scripts/package-linux.mjs
+      - run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - run: sh scripts/smoke-linux-artifact.sh artifacts/linux-x64
+      - uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b # v4.3.4
+        with:
+          name: release-linux-x64
+          path: |
+            artifacts/linux-x64/OpenRepurpose-linux-x64.tar.xz
+            artifacts/linux-x64/OpenRepurpose-linux-x64.tar.xz.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [windows-artifact, linux-artifact]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      OPENREPURPOSE_RELEASE_SIGNING_KEY: ${{ secrets.OPENREPURPOSE_RELEASE_SIGNING_KEY }}
+      OPENREPURPOSE_RELEASE_SIGNING_PASSPHRASE: ${{ secrets.OPENREPURPOSE_RELEASE_SIGNING_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts/release
+          merge-multiple: true
+      - run: node scripts/release-artifacts.mjs artifacts/release
+      - name: Optionally sign checksums and artifacts
+        shell: bash
+        run: |
+          set -eu
+          if [ -z "$OPENREPURPOSE_RELEASE_SIGNING_KEY" ]; then
+            echo 'No release signing key configured; publishing checksums without signatures.'
+            exit 0
+          fi
+          printf '%s' "$OPENREPURPOSE_RELEASE_SIGNING_KEY" | base64 --decode | gpg --batch --import
+          for file in artifacts/release/OpenRepurpose-* artifacts/release/SHA256SUMS.txt; do
+            [ -f "$file" ] || continue
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$OPENREPURPOSE_RELEASE_SIGNING_PASSPHRASE" --armor --detach-sign "$file"
+          done
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release create "$GITHUB_REF_NAME" artifacts/release/* --title "OpenRepurpose $GITHUB_REF_NAME" --notes-file docs/release-notes/v1.0.0.md
+
+  verify-published-windows:
+    name: Verify downloaded Windows release asset
+    needs: publish
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download published Windows asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force artifacts/windows-x64 | Out-Null
+          gh release download $env:GITHUB_REF_NAME --pattern OpenRepurpose-windows-x64.zip --pattern OpenRepurpose-windows-x64.zip.sha256 --dir artifacts/windows-x64
+          $expected = (Get-Content artifacts/windows-x64/OpenRepurpose-windows-x64.zip.sha256).Split(' ')[0]
+          if ((Get-FileHash artifacts/windows-x64/OpenRepurpose-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'Published Windows archive checksum mismatch.' }
+      - shell: pwsh
+        run: ./scripts/smoke-windows-artifact.ps1 -ArtifactDirectory artifacts/windows-x64
+
+  verify-published-linux:
+    name: Verify downloaded Linux release asset
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download and verify published Linux asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts/linux-x64
+          gh release download "$GITHUB_REF_NAME" --pattern OpenRepurpose-linux-x64.tar.xz --pattern OpenRepurpose-linux-x64.tar.xz.sha256 --dir artifacts/linux-x64
+          cd artifacts/linux-x64
+          sha256sum --check OpenRepurpose-linux-x64.tar.xz.sha256
+      - run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - run: sh scripts/smoke-linux-artifact.sh artifacts/linux-x64

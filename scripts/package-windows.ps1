@@ -118,3 +118,5 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
   [IO.Compression.CompressionLevel]::Optimal,
   $true
 )
+"$(Get-Sha256 $zip)  $(Split-Path -Leaf $zip)" |
+  Set-Content -LiteralPath "$zip.sha256" -Encoding ascii -NoNewline

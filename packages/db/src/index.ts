@@ -319,6 +319,51 @@ export interface MigrationRunResult {
   readonly backupPath?: string;
 }
 
+/** A read-only migration ledger view for release/upgrade planning. */
+export interface MigrationPreview {
+  readonly applied: readonly string[];
+  readonly backupWillBeCreated: boolean;
+  readonly pending: readonly string[];
+}
+
+/**
+ * Reports the effect of the next migration run without creating the migration ledger or changing
+ * the database. A newly created database therefore correctly reports every migration as pending
+ * and no pre-upgrade backup requirement.
+ */
+export function previewMigrations(
+  database: OpenRepurposeDatabase,
+  migrationSet: readonly Migration[] = migrations,
+): MigrationPreview {
+  const ledgerExists = database.client
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__openrepurpose_migrations'",
+    )
+    .get();
+  const appliedRows = ledgerExists
+    ? (database.client
+        .prepare('SELECT id, checksum FROM __openrepurpose_migrations ORDER BY applied_at, id')
+        .all() as { id: string; checksum: string }[])
+    : [];
+  const appliedById = new Map(appliedRows.map((row) => [row.id, row.checksum]));
+  const applied: string[] = [];
+  const pending: string[] = [];
+  for (const migration of migrationSet) {
+    const checksum = appliedById.get(migration.id);
+    if (checksum === undefined) pending.push(migration.id);
+    else {
+      if (checksum !== migrationChecksum(migration))
+        throw new Error(`Applied migration ${migration.id} does not match its recorded checksum.`);
+      applied.push(migration.id);
+    }
+  }
+  return {
+    applied,
+    backupWillBeCreated: applied.length > 0 && pending.length > 0 && database.path !== ':memory:',
+    pending,
+  };
+}
+
 function migrationBackupTimestamp(date: Date): string {
   return date.toISOString().replaceAll(':', '-');
 }
