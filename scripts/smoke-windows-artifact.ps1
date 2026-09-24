@@ -11,10 +11,23 @@ $artifact = [IO.Path]::GetFullPath($ArtifactDirectory)
 $zip = Join-Path $artifact 'OpenRepurpose-windows-x64.zip'
 if (!(Test-Path -LiteralPath $zip)) { throw "Artifact ZIP was not found: $zip" }
 $installationRoot = Join-Path $artifact 'clean-install'
-if (Test-Path -LiteralPath $installationRoot) {
-  Remove-Item -LiteralPath $installationRoot -Recurse -Force
+
+# Defender and other filesystem scanners can briefly retain a newly-created ZIP on Windows.
+# Retry extraction from a clean destination so a transient sharing violation cannot make the
+# clean-profile release gate flaky.
+$extractAttempts = 20
+for ($attempt = 1; $attempt -le $extractAttempts; $attempt++) {
+  if (Test-Path -LiteralPath $installationRoot) {
+    Remove-Item -LiteralPath $installationRoot -Recurse -Force
+  }
+  try {
+    Expand-Archive -LiteralPath $zip -DestinationPath $installationRoot -Force
+    break
+  } catch {
+    if ($attempt -eq $extractAttempts) { throw }
+    Start-Sleep -Seconds 1
+  }
 }
-Expand-Archive -LiteralPath $zip -DestinationPath $installationRoot -Force
 $launcher = Join-Path $installationRoot 'OpenRepurpose\openrepurpose.cmd'
 if (!(Test-Path -LiteralPath $launcher)) { throw "Artifact launcher was not found: $launcher" }
 $cleanProfile = Join-Path $artifact 'clean-user-profile'

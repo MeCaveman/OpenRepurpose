@@ -46,6 +46,8 @@ describe('Windows x64 portable release contract', () => {
     expect(packaging).toContain('ZipFile]::CreateFromDirectory');
     expect(smoke).toContain("$env:APPDATA = Join-Path $cleanProfile 'Roaming'");
     expect(smoke).toContain('Remove-Item -LiteralPath $cleanProfile -Recurse -Force');
+    expect(smoke).toContain('$extractAttempts = 20');
+    expect(smoke).toContain('Start-Sleep -Seconds 1');
     expect(smoke).toContain("'http://127.0.0.1:39100/api/health'");
     expect(smoke).toContain('backup create --output');
     expect(smoke).toContain("'smoke-release-media.mjs'");
