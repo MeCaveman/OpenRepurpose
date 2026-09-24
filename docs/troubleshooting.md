@@ -16,6 +16,10 @@ Install both executables with the package manager for the host OS, or configure 
 paths using the variables in `.env.example`. Restart the server after changing configuration.
 Media import cannot persist probe metadata until `ffprobe` is available.
 
+The repository's Docker image intentionally leaves FFmpeg/ffprobe out. To use media transforms in
+Docker, build a derived image with a specific FFmpeg build and carry that build's notices and
+provenance with your image.
+
 ## A watched-folder file is not imported
 
 The folder runner uses periodic scans. A supported file must keep the same size and modification

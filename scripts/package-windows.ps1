@@ -53,6 +53,9 @@ if (!(Test-Path -LiteralPath (Join-Path $webDistribution 'index.html'))) {
   throw 'The web production distribution is missing after build.'
 }
 Copy-DirectoryContents $webDistribution (Join-Path $app 'node_modules\@openrepurpose\web\dist')
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD_PARTY_NOTICES.md') -Destination $staging
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $staging
+Copy-DirectoryContents (Join-Path $repositoryRoot 'docs\licenses') (Join-Path $staging 'docs\licenses')
 
 $runtimeArchive = if ([string]::IsNullOrWhiteSpace($NodeRuntimeArchive)) {
   Join-Path $output $runtime.archiveName

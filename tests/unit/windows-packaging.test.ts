@@ -31,6 +31,9 @@ describe('Windows x64 portable release contract', () => {
     expect(packaging).toContain('node_modules\\@openrepurpose\\web\\dist');
     expect(packaging).toContain('openrepurpose.cmd');
     expect(packaging).toContain('SHA256SUMS.txt');
+    expect(packaging).toContain('THIRD_PARTY_NOTICES.md');
+    expect(packaging).toContain("'LICENSE') -Destination $staging");
+    expect(packaging).toContain("'docs\\licenses') (Join-Path $staging 'docs\\licenses')");
     expect(packaging).toContain('ZipFile]::CreateFromDirectory');
     expect(smoke).toContain("$env:APPDATA = Join-Path $cleanProfile 'Roaming'");
     expect(smoke).toContain("'http://127.0.0.1:39100/api/health'");
@@ -47,5 +50,14 @@ describe('Windows x64 portable release contract', () => {
         '@openrepurpose/twitch',
       ]),
     );
+  });
+
+  it('documents redistributed dependency provenance and keeps unaudited media tools external', () => {
+    const notices = readFileSync(resolve(repositoryRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+    expect(notices).toContain('FFmpeg/ffprobe');
+    expect(notices).toContain('whisper.cpp executable');
+    expect(notices).toContain('SIL Open Font License 1.1');
+    expect(notices).toContain('scripts/release/windows-runtime.json');
+    expect(notices).toContain('AGPL-3.0-only');
   });
 });

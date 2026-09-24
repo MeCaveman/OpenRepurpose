@@ -28,6 +28,9 @@ describe('Linux x64 portable release contract', () => {
     expect(packaging).toContain('node_modules/@openrepurpose/web/dist');
     expect(packaging).toContain("'openrepurpose'");
     expect(packaging).toContain('SHA256SUMS.txt');
+    expect(packaging).toContain('THIRD_PARTY_NOTICES.md');
+    expect(packaging).toContain("resolve(repositoryRoot, 'LICENSE')");
+    expect(packaging).toContain("resolve(staging, 'docs/licenses')");
     expect(packaging).toContain("'--sort=name'");
     expect(packaging).toContain("'--mtime=@0'");
     expect(smoke).toContain('XDG_CONFIG_HOME="$clean_profile/config"');
@@ -39,9 +42,18 @@ describe('Linux x64 portable release contract', () => {
   it('documents portable runtime limitations and durable XDG locations', () => {
     const documentation = readFileSync(resolve(repositoryRoot, 'docs/linux-install.md'), 'utf8');
 
-    expect(documentation).toContain('FFmpeg and ffprobe are intentionally external');
+    expect(documentation).toContain('FFmpeg and ffprobe remain external');
     expect(documentation).toContain('~/.config/OpenRepurpose');
     expect(documentation).toContain('~/.local/share/OpenRepurpose');
     expect(documentation).toContain('Linux arm64 is not released in this packet');
+  });
+
+  it('records redistributed dependency provenance and keeps unaudited media tools external', () => {
+    const notices = readFileSync(resolve(repositoryRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+    expect(notices).toContain('FFmpeg/ffprobe');
+    expect(notices).toContain('whisper.cpp executable');
+    expect(notices).toContain('SIL Open Font License 1.1');
+    expect(notices).toContain('scripts/release/linux-runtime.json');
+    expect(notices).toContain('AGPL-3.0-only');
   });
 });

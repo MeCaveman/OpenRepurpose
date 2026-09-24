@@ -86,9 +86,11 @@ dedicated account. A native Windows service wrapper is intentionally not bundled
 ## Optional Docker Compose deployment
 
 The repository includes an optional [`Dockerfile`](../Dockerfile) and
-[`docker-compose.yml`](../docker-compose.yml). The image is built from `node:24-bookworm-slim`,
-installs FFmpeg and ffprobe from Debian, serves the production web bundle from the server, and runs
-as the unprivileged `node` user. It is not required for normal Windows/Linux installation.
+[`docker-compose.yml`](../docker-compose.yml). The image uses the Node.js 24.21.0 Bookworm version
+tag, serves the production web bundle from the server, and runs as the unprivileged `node` user.
+It does not bundle FFmpeg/ffprobe, whisper.cpp, or models. Media probing and transforms that require
+FFmpeg stay unavailable until you add an FFmpeg build you have selected and audited. It is not
+required for normal Windows/Linux installation.
 
 Compose binds the published port to `127.0.0.1` on the host, but the process inside the container
 must listen on `0.0.0.0`. Therefore Compose enables the existing authenticated LAN mode and requires
@@ -115,9 +117,11 @@ The Compose mounts are intentional:
 | `/var/lib/openrepurpose/tmp`    | Managed temporary files                                               | Named writable volume; safe to recreate after shutdown              |
 | `/media`                        | User-owned source media supplied to workflows                         | Explicit host bind mount, read-only by default                      |
 
-The image includes FFmpeg/ffprobe, but does not include whisper.cpp or any model. Local
-transcription remains unavailable until a compatible whisper.cpp executable is supplied through the
-normal executable-discovery configuration and the requested model is explicitly downloaded into the
-model volume. The image does not grant the application access to arbitrary host paths: add only the
-media directories that the deployment is authorized to read, and use a read-write mount only when a
-specific workflow requires it.
+For Docker media transforms, create a derived local image that installs a specific FFmpeg/ffprobe
+build from a trusted source and keep its license, source, build options, and checksum notices with
+that image. This repository does not publish or claim compliance for such a custom image. The base
+image does not include whisper.cpp or any model. Local transcription remains unavailable until a
+compatible whisper.cpp executable is supplied through the normal executable-discovery configuration
+and the requested model is explicitly downloaded into the model volume. The image does not grant the
+application access to arbitrary host paths: add only the media directories that the deployment is
+authorized to read, and use a read-write mount only when a specific workflow requires it.

@@ -1,18 +1,38 @@
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 
 describe('Docker deployment artifacts', () => {
-  it('keeps the image lean, non-root, and FFmpeg-capable', async () => {
+  it('declares and includes the selected project license', async () => {
+    const rootPackage = JSON.parse(
+      readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8'),
+    ) as { license: string };
+    const license = await readFile(resolve(repositoryRoot, 'LICENSE'), 'utf8');
+
+    expect(rootPackage.license).toBe('AGPL-3.0-only');
+    expect(license).toContain('GNU AFFERO GENERAL PUBLIC LICENSE');
+    expect(license).toContain('Version 3, 19 November 2007');
+  });
+
+  it('keeps the image lean, non-root, and avoids bundling unaudited media binaries', async () => {
     const dockerfile = await readFile(resolve(repositoryRoot, 'Dockerfile'), 'utf8');
 
-    expect(dockerfile).toContain('FROM node:24-bookworm-slim AS build');
-    expect(dockerfile).toContain('pnpm deploy --filter @openrepurpose/server --prod');
     expect(dockerfile).toContain(
-      'apt-get install --yes --no-install-recommends ca-certificates ffmpeg',
+      'FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS build',
     );
+    expect(dockerfile).toContain(
+      'FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS runtime',
+    );
+    expect(dockerfile).toContain('pnpm deploy --filter @openrepurpose/server --prod');
+    expect(dockerfile).toContain('COPY LICENSE THIRD_PARTY_NOTICES.md ./');
+    expect(dockerfile).toContain('COPY docs/licenses ./docs/licenses');
+    expect(dockerfile).not.toMatch(/(?:apt-get|apk|dnf).*ffmpeg/i);
+    expect(dockerfile).not.toMatch(/\bffmpeg\b/i);
+    expect(dockerfile).toContain('/workspace/LICENSE ./LICENSE');
+    expect(dockerfile).toContain('/workspace/THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md');
     expect(dockerfile).toContain('USER node');
     expect(dockerfile).not.toMatch(/(TOKEN|SECRET|CLIENT_SECRET|OAUTH).*=\S+/i);
   });

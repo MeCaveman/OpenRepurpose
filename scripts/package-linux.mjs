@@ -118,6 +118,13 @@ if (!existsSync(resolve(webDistribution, 'index.html')))
   throw new Error('The web production distribution is missing after build.');
 copyDirectoryContents(webDistribution, resolve(app, 'node_modules/@openrepurpose/web/dist'));
 
+cpSync(
+  resolve(repositoryRoot, 'THIRD_PARTY_NOTICES.md'),
+  resolve(staging, 'THIRD_PARTY_NOTICES.md'),
+);
+cpSync(resolve(repositoryRoot, 'LICENSE'), resolve(staging, 'LICENSE'));
+copyDirectoryContents(resolve(repositoryRoot, 'docs/licenses'), resolve(staging, 'docs/licenses'));
+
 const runtimeArchive = suppliedRuntimeArchive ?? resolve(outputDirectory, runtime.archiveName);
 if (suppliedRuntimeArchive === undefined) await download(runtime.archiveUrl, runtimeArchive);
 if (!existsSync(runtimeArchive))

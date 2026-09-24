@@ -21,8 +21,8 @@ musl artifact.
 ## Runtime dependencies
 
 The portable server needs no system Node.js or pnpm. It does require a normal POSIX userland with
-`/bin/sh` and glibc. FFmpeg and ffprobe are intentionally external until Packet 7 verifies their
-licensing and provenance. Install them through the distribution package manager when using media
+`/bin/sh` and glibc. FFmpeg and ffprobe remain external because this release does not redistribute an
+unaudited build. Install them through the distribution package manager when using media
 imports or transforms; `openrepurpose doctor` checks application paths and migrations, while media
 commands explain when either executable is unavailable. Whisper.cpp and transcription models are
 also user-provided/explicitly installed.
