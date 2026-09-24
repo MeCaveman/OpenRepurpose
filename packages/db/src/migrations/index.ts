@@ -55,4 +55,5 @@ export const migrations: readonly Migration[] = [
   apiV1Migration,
   webhooksMigration,
 ];
+export { migrationChecksum } from './types.js';
 export type { Migration } from './types.js';

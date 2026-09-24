@@ -110,6 +110,11 @@ export async function startServer(): Promise<void> {
           'LAN mode is serving plain HTTP. Configure TLS_CERT_PATH/TLS_KEY_PATH or terminate TLS at a trusted reverse proxy.',
       })}\n`,
     );
+  const secretStore = new EncryptedFileSecretStore(
+    config.paths.secretVaultPath,
+    config.paths.secretKeyPath,
+  );
+  await secretStore.initialize();
   const database = openDatabase(config.paths.databasePath);
   runMigrations(database);
   const executables = await discoverMediaExecutables();
@@ -121,10 +126,6 @@ export async function startServer(): Promise<void> {
   const transcriptRepository = new SqliteTranscriptRepository(database);
   const transcriptService = new TranscriptService(transcriptRepository);
   const jobRepository = new SqliteJobRepository(database);
-  const secretStore = new EncryptedFileSecretStore(
-    config.paths.secretVaultPath,
-    config.paths.secretKeyPath,
-  );
   const obsWebSocketPasswordReference = {
     name: 'password',
     ownerId: 'obs-websocket',

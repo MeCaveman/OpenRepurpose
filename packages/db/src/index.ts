@@ -1,6 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { chmodSync, constants, copyFileSync, mkdirSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { desc, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-sqlite';
@@ -94,11 +94,14 @@ import type {
   WebhookRepository,
 } from '@openrepurpose/core';
 import { migrations } from './migrations/index.js';
+import { migrationChecksum } from './migrations/types.js';
 import type { Migration } from './migrations/types.js';
 import { mediaAssets, metaCredentials, metaPublishTargets, settings } from './schema.js';
 
 export { migrations } from './migrations/index.js';
+export { migrationChecksum } from './migrations/index.js';
 export type { Migration } from './migrations/index.js';
+export * from './backup.js';
 export {
   apiIdempotencyRecords,
   apiTokens,
@@ -291,6 +294,7 @@ export interface OpenDatabaseOptions {
 export interface OpenRepurposeDatabase {
   readonly client: DatabaseSync;
   readonly db: ReturnType<typeof drizzle>;
+  readonly path: string;
   close(): void;
 }
 
@@ -302,14 +306,52 @@ export function openDatabase(
   if (options.createParentDirectory ?? true) mkdirSync(dirname(path), { recursive: true });
   const client = new DatabaseSync(path);
   client.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
-  return { client, db: drizzle({ client }), close: () => client.close() };
+  return { client, db: drizzle({ client }), path, close: () => client.close() };
+}
+
+export interface MigrationRunOptions {
+  readonly backupDirectory?: string;
+  readonly now?: () => Date;
+}
+
+export interface MigrationRunResult {
+  readonly applied: readonly string[];
+  readonly backupPath?: string;
+}
+
+function migrationBackupTimestamp(date: Date): string {
+  return date.toISOString().replaceAll(':', '-');
+}
+
+function createPreUpgradeBackup(
+  database: OpenRepurposeDatabase,
+  fromMigrationId: string,
+  toMigrationId: string,
+  options: MigrationRunOptions,
+): string | undefined {
+  if (database.path === ':memory:') return undefined;
+  database.client.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  const directory = options.backupDirectory ?? join(dirname(database.path), 'backups');
+  mkdirSync(directory, { recursive: true });
+  const backupPath = join(
+    directory,
+    `${basename(database.path)}.pre-upgrade-${fromMigrationId}-to-${toMigrationId}-${migrationBackupTimestamp((options.now ?? (() => new Date()))())}-${randomUUID().slice(0, 8)}.bak`,
+  );
+  copyFileSync(database.path, backupPath, constants.COPYFILE_EXCL);
+  try {
+    chmodSync(backupPath, 0o600);
+  } catch (error) {
+    if (process.platform !== 'win32') throw error;
+  }
+  return backupPath;
 }
 
 /** Applies each unapplied migration atomically and rejects altered historical migrations. */
 export function runMigrations(
   database: OpenRepurposeDatabase,
   migrationSet: readonly Migration[] = migrations,
-): void {
+  options: MigrationRunOptions = {},
+): MigrationRunResult {
   database.client.exec(
     `CREATE TABLE IF NOT EXISTS __openrepurpose_migrations (id TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);`,
   );
@@ -319,17 +361,26 @@ export function runMigrations(
   const record = database.client.prepare(
     'INSERT INTO __openrepurpose_migrations (id, checksum, applied_at) VALUES (?, ?, ?)',
   );
+  const pending: Migration[] = [];
+  const appliedBefore: string[] = [];
   for (const migration of migrationSet) {
-    const checksum = createHash('sha256')
-      .update(migration.sql)
-      .update(migration.foreignKeysDisabled === true ? '\nforeign_keys_disabled=true' : '')
-      .digest('hex');
+    const checksum = migrationChecksum(migration);
     const existing = lookup.get(migration.id) as { checksum: string } | undefined;
     if (existing !== undefined) {
       if (existing.checksum !== checksum)
         throw new Error(`Applied migration ${migration.id} does not match its recorded checksum.`);
+      appliedBefore.push(migration.id);
       continue;
     }
+    pending.push(migration);
+  }
+  const backupPath =
+    appliedBefore.length > 0 && pending.length > 0
+      ? createPreUpgradeBackup(database, appliedBefore.at(-1)!, pending.at(-1)!.id, options)
+      : undefined;
+  const applied: string[] = [];
+  for (const migration of pending) {
+    const checksum = migrationChecksum(migration);
     if (migration.foreignKeysDisabled === true) database.client.exec('PRAGMA foreign_keys = OFF;');
     database.client.exec('BEGIN IMMEDIATE;');
     try {
@@ -341,6 +392,7 @@ export function runMigrations(
         throw new Error(`Migration ${migration.id} introduced a foreign key violation.`);
       record.run(migration.id, checksum, Date.now());
       database.client.exec('COMMIT;');
+      applied.push(migration.id);
     } catch (error) {
       database.client.exec('ROLLBACK;');
       throw error;
@@ -348,6 +400,7 @@ export function runMigrations(
       if (migration.foreignKeysDisabled === true) database.client.exec('PRAGMA foreign_keys = ON;');
     }
   }
+  return { applied, ...(backupPath === undefined ? {} : { backupPath }) };
 }
 
 /** Infrastructure repository for durable settings; domain services depend on its narrow contract. */

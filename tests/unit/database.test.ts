@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -55,6 +55,35 @@ describe('SQLite migrations and repositories', () => {
       { id: '0025_api_v1' },
       { id: '0026_webhooks' },
     ]);
+  });
+
+  it('creates a recoverable database backup before applying an upgrade migration', () => {
+    temporaryDatabase = undefined;
+    const directory = mkdtempSync(join(tmpdir(), 'openrepurpose-pre-upgrade-'));
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    const backupDirectory = join(directory, 'backups');
+    const database = openDatabase(databasePath);
+    try {
+      runMigrations(database, migrations.slice(0, 5));
+      new SettingsRepository(database).set('upgrade.guard', 'preserved');
+      const result = runMigrations(database, migrations.slice(0, 6), {
+        backupDirectory,
+        now: () => new Date('2026-09-24T12:00:00.000Z'),
+      });
+      expect(result.applied).toEqual(['0006_workflows']);
+      expect(result.backupPath).toBeDefined();
+      expect(existsSync(result.backupPath!)).toBe(true);
+
+      const backup = openDatabase(result.backupPath!, { createParentDirectory: false });
+      expect(new SettingsRepository(backup).get('upgrade.guard')).toBe('preserved');
+      expect(
+        backup.client.prepare('SELECT COUNT(*) AS count FROM __openrepurpose_migrations').get(),
+      ).toEqual({ count: 5 });
+      backup.close();
+    } finally {
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
   it('rejects a modified migration after it has been applied', () => {
     temporaryDatabase = createTemporaryDatabase();

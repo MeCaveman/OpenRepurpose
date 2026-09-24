@@ -1,5 +1,5 @@
 import { accessSync, constants, mkdirSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { Command } from 'commander';
 import {
   JobService,
@@ -20,6 +20,9 @@ import type {
 import {
   openDatabase,
   runMigrations,
+  createPortableBackup,
+  restorePortableBackup,
+  invalidateSecretDependentState,
   SqliteAccountRepository,
   SqliteApiTokenRepository,
   SqliteJobRepository,
@@ -514,6 +517,123 @@ export function createCli(options: CreateCliOptions = {}): Command {
           : Object.entries(safe)
               .map(([key, value]) => `${key}\t${value}`)
               .join('\n') + '\n',
+      );
+    });
+
+  const secretsCommand = program
+    .command('secrets')
+    .description('Inspect or recover the encrypted local secret vault');
+  secretsCommand
+    .command('status')
+    .option('--json', 'write JSON')
+    .action(async (commandOptions: { json?: boolean }) => {
+      const config = loadApplicationConfig(environment);
+      const status = await new EncryptedFileSecretStore(
+        config.paths.secretVaultPath,
+        config.paths.secretKeyPath,
+      ).inspect();
+      write(
+        commandOptions.json
+          ? `${JSON.stringify(status)}\n`
+          : `${status.kind}${'reason' in status ? `\t${status.reason}` : ''}${'secretCount' in status ? `\t${status.secretCount} secrets` : ''}\n`,
+      );
+      if (status.kind === 'reconnect_required') process.exitCode = 1;
+    });
+  secretsCommand
+    .command('migrate')
+    .description('Validate and migrate the v0.x encrypted vault without exposing secret values')
+    .option('--json', 'write JSON')
+    .action(async (commandOptions: { json?: boolean }) => {
+      const config = loadApplicationConfig(environment);
+      const result = await new EncryptedFileSecretStore(
+        config.paths.secretVaultPath,
+        config.paths.secretKeyPath,
+      ).initialize();
+      write(
+        commandOptions.json
+          ? `${JSON.stringify(result)}\n`
+          : `${result.migrated ? 'migrated' : 'ready'}\t${result.secretCount} secrets${result.backupPath === undefined ? '' : `\tlegacy backup: ${result.backupPath}`}\n`,
+      );
+    });
+  secretsCommand
+    .command('recover')
+    .description('Archive an unreadable key/vault pair and mark connected accounts for reconnect')
+    .option('--confirm-reconnect', 'confirm that secret-backed accounts must be reconnected')
+    .option('--json', 'write JSON')
+    .action(async (commandOptions: { confirmReconnect?: boolean; json?: boolean }) => {
+      if (commandOptions.confirmReconnect !== true)
+        throw new Error(
+          'Recovery requires --confirm-reconnect. Existing files will be archived, not deleted.',
+        );
+      const config = loadApplicationConfig(environment);
+      const database = openDatabase(config.paths.databasePath);
+      try {
+        runMigrations(database);
+        const result = await new EncryptedFileSecretStore(
+          config.paths.secretVaultPath,
+          config.paths.secretKeyPath,
+        ).recoverForReconnect('archive-and-reconnect');
+        invalidateSecretDependentState(database);
+        write(
+          commandOptions.json
+            ? `${JSON.stringify(result)}\n`
+            : `reconnect required\n${result.archivedVaultPath === undefined ? '' : `vault archived\t${result.archivedVaultPath}\n`}${result.archivedKeyPath === undefined ? '' : `key archived\t${result.archivedKeyPath}\n`}`,
+        );
+      } finally {
+        database.close();
+      }
+    });
+
+  const backupCommand = program
+    .command('backup')
+    .description('Create and restore validated, secret-free portable backups');
+  backupCommand
+    .command('create')
+    .option('--output <file>', 'backup output path')
+    .option('--include-metadata', 'include external media and workflow-source path references')
+    .option('--json', 'write JSON')
+    .action(
+      async (commandOptions: { includeMetadata?: boolean; json?: boolean; output?: string }) => {
+        const config = loadApplicationConfig(environment);
+        const timestamp = new Date().toISOString().replaceAll(':', '-');
+        const outputPath = resolve(
+          commandOptions.output ??
+            join(config.paths.dataDirectory, 'backups', `openrepurpose-${timestamp}.orpbackup`),
+        );
+        const database = openDatabase(config.paths.databasePath);
+        try {
+          runMigrations(database);
+          const result = await createPortableBackup({
+            database,
+            includeMetadata: commandOptions.includeMetadata === true,
+            outputPath,
+            temporaryDirectory: config.paths.temporaryDirectory,
+          });
+          write(
+            commandOptions.json
+              ? `${JSON.stringify(result)}\n`
+              : `backup created\t${result.path}\nschema\t${result.manifest.database.schemaVersion}\nsecrets\texcluded\n`,
+          );
+        } finally {
+          database.close();
+        }
+      },
+    );
+  backupCommand
+    .command('restore <file>')
+    .description('Validate a backup completely, preserve the current database, then restore it')
+    .option('--json', 'write JSON')
+    .action(async (file: string, commandOptions: { json?: boolean }) => {
+      const config = loadApplicationConfig(environment);
+      const result = await restorePortableBackup({
+        backupDirectory: join(config.paths.dataDirectory, 'backups'),
+        backupPath: resolve(file),
+        databasePath: config.paths.databasePath,
+      });
+      write(
+        commandOptions.json
+          ? `${JSON.stringify(result)}\n`
+          : `backup restored\t${result.path}\nschema\t${result.manifest.database.schemaVersion}\n${result.preRestoreBackupPath === undefined ? '' : `previous database\t${result.preRestoreBackupPath}\n`}accounts\treconnect required (secrets are excluded)\n`,
       );
     });
 
