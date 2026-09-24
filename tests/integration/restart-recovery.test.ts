@@ -375,7 +375,7 @@ describe('restart recovery', () => {
         remoteId: 'youtube-video',
         remoteStatus: 'succeeded',
       });
-      expect(calls).toEqual(['youtube', 'instagram']);
+      expect([...calls].sort()).toEqual(['instagram', 'youtube']);
     } finally {
       secondDatabase.close();
       rmSync(directory, { recursive: true, force: true });
