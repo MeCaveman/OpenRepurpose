@@ -116,7 +116,7 @@ describe('v0.9 API and MCP end-to-end acceptance', () => {
       database.client
         .prepare('SELECT id FROM __openrepurpose_migrations ORDER BY id DESC LIMIT 2')
         .all(),
-    ).toEqual([{ id: '0026_webhooks' }, { id: '0025_api_v1' }]);
+    ).toEqual([{ id: '0027_v1_compatibility' }, { id: '0026_webhooks' }]);
 
     let runtime = createApiRuntime(database);
     cleanup.push(() => runtime.server.close());

@@ -54,6 +54,7 @@ describe('SQLite migrations and repositories', () => {
       { id: '0024_kick_oauth' },
       { id: '0025_api_v1' },
       { id: '0026_webhooks' },
+      { id: '0027_v1_compatibility' },
     ]);
   });
 
@@ -117,7 +118,7 @@ describe('SQLite migrations and repositories', () => {
       ]);
       expect(
         database.client.prepare('SELECT id FROM __openrepurpose_migrations ORDER BY id DESC').get(),
-      ).toEqual({ id: '0026_webhooks' });
+      ).toEqual({ id: '0027_v1_compatibility' });
     } finally {
       database.close();
       rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
@@ -198,7 +199,7 @@ describe('SQLite migrations and repositories', () => {
 
     expect(
       fixture.database.client.prepare('SELECT id FROM __openrepurpose_migrations').all(),
-    ).toHaveLength(26);
+    ).toHaveLength(27);
     expect(
       fixture.database.client.prepare('SELECT provider FROM accounts ORDER BY provider').all(),
     ).toEqual([{ provider: 'tiktok' }, { provider: 'youtube' }]);

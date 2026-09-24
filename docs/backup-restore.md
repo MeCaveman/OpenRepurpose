@@ -50,6 +50,18 @@ databases do not produce an upgrade copy. These exact local recovery copies can 
 authentication verifiers and other database metadata, so protect the backup directory like the
 database itself.
 
+To roll back a failed upgrade, stop every OpenRepurpose server, worker, and CLI process. Preserve the
+failed database for diagnosis, move its database file plus any matching `-wal` and `-shm` files out
+of the active data path, then copy the matching `pre-upgrade-*.bak` back to the configured database
+path. Start the same OpenRepurpose version that created that backup and run `openrepurpose doctor`
+before retrying the upgrade. Do not merge tables manually, reuse a backup from another installation,
+or delete the only copy of either database.
+
+The committed upgrade matrix exercises this stopped-process procedure on Windows and Linux-compatible
+paths: it validates the recovery copy, restores it after both successful and deliberately failed
+migrations, verifies the historical ledger and required records, and then proves the upgrade can be
+retried.
+
 Neither portable restore nor upgrade requires deleting the database.
 
 ## Secret-vault migration and recovery

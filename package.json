@@ -16,6 +16,7 @@
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "fixtures:upgrade": "corepack pnpm --filter @openrepurpose/db build && node scripts/generate-upgrade-fixtures.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "corepack pnpm --filter @openrepurpose/web build && playwright test",

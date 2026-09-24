@@ -24,6 +24,7 @@ import { twitchOAuthMigration } from './0023_twitch_oauth.js';
 import { kickOAuthMigration } from './0024_kick_oauth.js';
 import { apiV1Migration } from './0025_api_v1.js';
 import { webhooksMigration } from './0026_webhooks.js';
+import { v1CompatibilityMigration } from './0027_v1_compatibility.js';
 import type { Migration } from './types.js';
 
 /** Ordered, immutable migration ledger. Never alter a released migration's SQL. */
@@ -54,6 +55,7 @@ export const migrations: readonly Migration[] = [
   kickOAuthMigration,
   apiV1Migration,
   webhooksMigration,
+  v1CompatibilityMigration,
 ];
 export { migrationChecksum } from './types.js';
 export type { Migration } from './types.js';
