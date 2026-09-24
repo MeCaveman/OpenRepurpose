@@ -103,6 +103,9 @@ execFileSync('corepack', ['pnpm', '--filter', '@openrepurpose/cli', 'deploy', '-
   cwd: repositoryRoot,
   stdio: 'inherit',
 });
+// pnpm deploy retains source files for workspace packages. Include the compiled CLI before
+// materialization so the link-free graph always contains the launcher entry point.
+copyDirectoryContents(resolve(repositoryRoot, 'apps/cli/dist'), resolve(app, 'dist'));
 const materializedApp = `${app}-materialized`;
 execFileSync(
   process.execPath,

@@ -43,6 +43,9 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Production build failed with exit code $LASTEXITCODE." }
   corepack pnpm --filter @openrepurpose/cli deploy --prod $app
   if ($LASTEXITCODE -ne 0) { throw "Production deployment failed with exit code $LASTEXITCODE." }
+  # pnpm deploy retains source files for workspace packages. Stage the compiled CLI before
+  # materializing its production graph so the copy is part of the link-free artifact itself.
+  Copy-DirectoryContents (Join-Path $repositoryRoot 'apps\cli\dist') (Join-Path $app 'dist')
   & node (Join-Path $PSScriptRoot 'materialize-package.mjs') $app "$app-materialized"
   if ($LASTEXITCODE -ne 0) { throw 'Could not materialize deployed package links for ZIP distribution.' }
   Remove-Item -LiteralPath $app -Recurse -Force

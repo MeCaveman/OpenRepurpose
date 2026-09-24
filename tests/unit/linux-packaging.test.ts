@@ -25,7 +25,9 @@ describe('Linux x64 portable release contract', () => {
     expect(packaging).toContain("process.platform !== 'linux' || process.arch !== 'x64'");
     expect(packaging).toContain("'@openrepurpose/cli', 'deploy', '--prod'");
     expect(packaging).toContain('materialize-package.mjs');
-    expect(packaging).toContain("resolve(repositoryRoot, 'apps/cli/dist'), resolve(app, 'dist')");
+    expect(
+      packaging.match(/resolve\(repositoryRoot, 'apps\/cli\/dist'\), resolve\(app, 'dist'\)/gu),
+    ).toHaveLength(2);
     expect(
       readFileSync(resolve(repositoryRoot, 'scripts/materialize-package.mjs'), 'utf8'),
     ).toContain("'.pnpm', 'node_modules'");
