@@ -17,6 +17,6 @@
     "@openrepurpose/platform-sdk": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "24.13.5"
+    "@types/node": "26.6.2"
   }
 }
