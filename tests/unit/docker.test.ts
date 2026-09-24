@@ -48,4 +48,14 @@ describe('Docker deployment artifacts', () => {
     expect(compose).toContain('./media:/media:ro');
     expect(compose).not.toContain('LAN_ACCESS_TOKEN: "');
   });
+
+  it('has an engine-backed smoke that proves health, non-root execution, and persistence', async () => {
+    const smoke = await readFile(resolve(repositoryRoot, 'scripts/smoke-docker.mjs'), 'utf8');
+
+    expect(smoke).toContain("docker(['build', '--tag', image, '.'])");
+    expect(smoke).toContain("'{{.Config.User}}'");
+    expect(smoke).toContain('/api/health');
+    expect(smoke).toContain('rc-marker');
+    expect(smoke).not.toContain('shell: true');
+  });
 });

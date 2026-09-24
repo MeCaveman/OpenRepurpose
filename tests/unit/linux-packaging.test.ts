@@ -25,19 +25,46 @@ describe('Linux x64 portable release contract', () => {
     expect(packaging).toContain("process.platform !== 'linux' || process.arch !== 'x64'");
     expect(packaging).toContain("'@openrepurpose/cli', 'deploy', '--prod'");
     expect(packaging).toContain('materialize-package.mjs');
-    expect(packaging).toContain('node_modules/@openrepurpose/web/dist');
+    expect(
+      readFileSync(resolve(repositoryRoot, 'scripts/materialize-package.mjs'), 'utf8'),
+    ).toContain("'.pnpm', 'node_modules'");
+    expect(packaging).toContain('stage-web-distribution.mjs');
     expect(packaging).toContain("'openrepurpose'");
     expect(packaging).toContain('SHA256SUMS.txt');
+    expect(packaging).toContain('lstatSync(entryPath)');
+    expect(packaging).toContain('stats.isFile()');
     expect(packaging).toContain('THIRD_PARTY_NOTICES.md');
     expect(packaging).toContain("resolve(repositoryRoot, 'LICENSE')");
     expect(packaging).toContain("resolve(staging, 'docs')");
     expect(packaging).toContain("['README.md', 'SECURITY.md', 'CONTRIBUTING.md']");
+    expect(packaging).toContain('OPENREPURPOSE_SOURCE_COMMIT');
     expect(packaging).toContain("'--sort=name'");
     expect(packaging).toContain("'--mtime=@0'");
     expect(smoke).toContain('XDG_CONFIG_HOME="$clean_profile/config"');
     expect(smoke).toContain('XDG_DATA_HOME="$clean_profile/data"');
     expect(smoke).toContain('`${base}/api/health`');
     expect(smoke).toContain('http://127.0.0.1:39100');
+    expect(smoke).toContain('backup create --output');
+    expect(smoke).toContain('smoke-release-media.mjs');
+    expect(smoke).toContain('linux-artifact-server.log" >&2');
+  });
+
+  it('can certify the Linux artifact from a Windows maintainer host through Docker', () => {
+    const dockerfile = readFileSync(
+      resolve(repositoryRoot, 'scripts/release/Dockerfile.linux-artifact-smoke'),
+      'utf8',
+    );
+    const orchestrator = readFileSync(
+      resolve(repositoryRoot, 'scripts/smoke-linux-artifact-docker.mjs'),
+      'utf8',
+    );
+
+    expect(dockerfile).toContain('node scripts/package-linux.mjs');
+    expect(dockerfile).toContain('sh scripts/smoke-linux-artifact.sh');
+    expect(dockerfile).toContain('OPENREPURPOSE_SOURCE_COMMIT');
+    expect(orchestrator).toContain("'rev-parse', 'HEAD'");
+    expect(orchestrator).toContain("'--network'");
+    expect(orchestrator).toContain('Dockerfile.linux-artifact-smoke');
   });
 
   it('documents portable runtime limitations and durable XDG locations', () => {

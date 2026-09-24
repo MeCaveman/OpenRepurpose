@@ -36,10 +36,12 @@ import {
 } from '@openrepurpose/db';
 import {
   discoverMediaExecutables,
+  discoverWhisperCppExecutable,
   FfprobeMediaProbe,
   LocalMediaFileInspector,
   LocalWhisperModelManager,
   readFfmpegVersion,
+  resolveWhisperCppPaths,
   WHISPER_CPP_MODEL_CATALOG,
   type TranscriptionModelManager,
 } from '@openrepurpose/media';
@@ -53,6 +55,8 @@ export interface DoctorCheck {
   readonly detail: string;
   readonly name: string;
   readonly ok: boolean;
+  /** Optional dependencies are reported without making doctor exit unsuccessfully. */
+  readonly optional?: boolean;
 }
 
 function writableDirectoryCheck(name: string, directory: string): DoctorCheck {
@@ -69,7 +73,9 @@ function writableDirectoryCheck(name: string, directory: string): DoctorCheck {
   }
 }
 
-export function runDoctor(environment: Environment = process.env): readonly DoctorCheck[] {
+export async function runDoctor(
+  environment: Environment = process.env,
+): Promise<readonly DoctorCheck[]> {
   try {
     const config = loadApplicationConfig(environment);
     const checks: DoctorCheck[] = [
@@ -95,6 +101,55 @@ export function runDoctor(environment: Environment = process.env): readonly Doct
       });
     }
     checks.push({ name: 'configured bind host', ok: true, detail: config.bindHost });
+    checks.push({ name: 'Node.js runtime', ok: true, detail: process.version });
+
+    const executables = await discoverMediaExecutables({ environment });
+    for (const dependency of [
+      {
+        configured: environment.FFMPEG_PATH,
+        name: 'FFmpeg executable',
+        path: executables.ffmpeg,
+      },
+      {
+        configured: environment.FFPROBE_PATH,
+        name: 'ffprobe executable',
+        path: executables.ffprobe,
+      },
+    ]) {
+      if (dependency.path !== undefined) {
+        checks.push({ name: dependency.name, ok: true, detail: dependency.path });
+      } else {
+        const explicitlyConfigured = dependency.configured !== undefined;
+        checks.push({
+          name: dependency.name,
+          ok: false,
+          optional: !explicitlyConfigured,
+          detail: explicitlyConfigured
+            ? `Configured executable is unavailable or broken: ${dependency.configured}`
+            : 'Not installed; media probing/transforms that require it are unavailable.',
+        });
+      }
+    }
+
+    const whisperPaths = resolveWhisperCppPaths(config.paths.dataDirectory);
+    const whisper = await discoverWhisperCppExecutable({
+      environment,
+      managedInstallationRoot: whisperPaths.installationRoot,
+    });
+    checks.push(
+      whisper === undefined
+        ? {
+            name: 'whisper.cpp executable',
+            ok: false,
+            optional: true,
+            detail: 'Not installed; local transcription is unavailable.',
+          }
+        : {
+            name: 'whisper.cpp executable',
+            ok: true,
+            detail: `${whisper.path}${whisper.version === undefined ? '' : ` (${whisper.version})`}`,
+          },
+    );
     return checks;
   } catch (error) {
     return [
@@ -423,11 +478,13 @@ export function createCli(options: CreateCliOptions = {}): Command {
   const environment = options.environment ?? process.env;
   const write = options.write ?? ((value: string) => process.stdout.write(value));
   const program = new Command().name('openrepurpose').description('Local media automation');
-  program.command('doctor').action(() => {
-    const checks = runDoctor(environment);
+  program.command('doctor').action(async () => {
+    const checks = await runDoctor(environment);
     for (const check of checks)
-      write(`${check.ok ? 'OK' : 'FAIL'} ${check.name}: ${check.detail}\n`);
-    if (checks.some((check) => !check.ok)) process.exitCode = 1;
+      write(
+        `${check.ok ? 'OK' : check.optional === true ? 'WARN' : 'FAIL'} ${check.name}: ${check.detail}\n`,
+      );
+    if (checks.some((check) => !check.ok && check.optional !== true)) process.exitCode = 1;
   });
   program
     .command('start')

@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+
+RUN apt-get update \
+  && apt-get install --yes --no-install-recommends ffmpeg xz-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+COPY . .
+
+ARG OPENREPURPOSE_SOURCE_COMMIT
+ENV OPENREPURPOSE_SOURCE_COMMIT=$OPENREPURPOSE_SOURCE_COMMIT
+
+RUN corepack enable \
+  && node scripts/package-linux.mjs --output-directory /artifacts/linux-x64 \
+  && sh scripts/smoke-linux-artifact.sh /artifacts/linux-x64

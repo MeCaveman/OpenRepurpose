@@ -23,7 +23,8 @@ musl artifact.
 The portable server needs no system Node.js or pnpm. It does require a normal POSIX userland with
 `/bin/sh` and glibc. FFmpeg and ffprobe remain external because this release does not redistribute an
 unaudited build. Install them through the distribution package manager when using media
-imports or transforms; `openrepurpose doctor` checks application paths and migrations, while media
+imports or transforms; `openrepurpose doctor` checks application paths, migrations, the bundled Node
+runtime, and configured/available media executables, while media
 commands explain when either executable is unavailable. Whisper.cpp and transcription models are
 also user-provided/explicitly installed.
 

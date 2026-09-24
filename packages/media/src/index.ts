@@ -421,9 +421,13 @@ function executableNames(name: 'ffmpeg' | 'ffprobe', platform: NodeJS.Platform):
   return platform === 'win32' ? [`${name}.exe`, name] : [name];
 }
 
-async function executableWorks(executable: string): Promise<boolean> {
+async function executableWorks(
+  executable: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<boolean> {
   return new Promise((resolveCheck) => {
     const child = spawn(executable, ['-version'], {
+      env: environment,
       shell: false,
       stdio: 'ignore',
       windowsHide: true,
@@ -454,12 +458,13 @@ export async function discoverMediaExecutables(
     configured: string | undefined,
   ): Promise<string | undefined> => {
     const candidates = configured === undefined ? executableNames(name, platform) : [configured];
-    for (const candidate of candidates) if (await executableWorks(candidate)) return candidate;
+    for (const candidate of candidates)
+      if (await executableWorks(candidate, environment)) return candidate;
     const pathValue = environment.PATH ?? environment.Path ?? '';
     for (const directory of pathValue.split(delimiter).filter(Boolean))
       for (const namePart of executableNames(name, platform)) {
         const candidate = join(directory, namePart);
-        if (await executableWorks(candidate)) return candidate;
+        if (await executableWorks(candidate, environment)) return candidate;
       }
     return undefined;
   };

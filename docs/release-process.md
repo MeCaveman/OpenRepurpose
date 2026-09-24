@@ -14,4 +14,22 @@ is green. Maintainers must not treat a source-workspace pass as artifact evidenc
 7. Download published artifacts and repeat clean Windows/Linux verification before marking stable.
 
 GitHub Actions use least-privilege read permissions and immutable action commit SHAs. Live platform
-smokes are optional, credential-gated, and never required for ordinary contributors.
+smokes are optional, credential-gated, and never required for ordinary contributors. A maintainer
+can dispatch CI with `run_live_platform_smoke` enabled after configuring the protected
+`live-platform-smoke` environment. The job accepts any non-empty subset of the following secrets and
+performs only identity/capability reads (TikTok's creator-info query is a read-only POST):
+
+- `OPENREPURPOSE_LIVE_YOUTUBE_ACCESS_TOKEN`
+- `OPENREPURPOSE_LIVE_TIKTOK_ACCESS_TOKEN`
+- `OPENREPURPOSE_LIVE_META_ACCESS_TOKEN`
+- `OPENREPURPOSE_LIVE_TWITCH_ACCESS_TOKEN` together with `OPENREPURPOSE_LIVE_TWITCH_CLIENT_ID`
+- `OPENREPURPOSE_LIVE_KICK_ACCESS_TOKEN`
+
+The live smoke prints platform names and pass/fail status only. It does not print response bodies or
+credential values, and it fails if dispatched without at least one complete credential set.
+
+Windows maintainers with Docker Desktop can also run `corepack pnpm smoke:linux-artifact:docker`.
+That command builds the Linux x64 portable archive in a pinned Debian/Node environment, installs
+FFmpeg only in the disposable certification image, and exercises the extracted artifact through the
+same clean-profile smoke used by Ubuntu CI. The release artifact itself continues to keep
+FFmpeg/ffprobe external.

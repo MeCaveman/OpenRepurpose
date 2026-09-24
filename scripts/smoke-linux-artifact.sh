@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 artifact_directory=${1:?Usage: scripts/smoke-linux-artifact.sh <artifact-directory>}
 artifact_directory=$(CDPATH= cd -- "$artifact_directory" && pwd)
 archive="$artifact_directory/OpenRepurpose-linux-x64.tar.xz"
@@ -29,6 +30,13 @@ run_clean() {
 run_clean "$launcher" doctor
 [ -d "$clean_profile/config/OpenRepurpose" ]
 [ -d "$clean_profile/data/OpenRepurpose" ]
+run_clean "$launcher" jobs list --json
+backup_path="$clean_profile/release-candidate.orpbackup"
+run_clean "$launcher" backup create --output "$backup_path" --json
+run_clean "$launcher" backup restore "$backup_path" --json
+run_clean "$clean_install/OpenRepurpose/runtime/bin/node" \
+  "$script_directory/smoke-release-media.mjs" \
+  "$clean_install/OpenRepurpose"
 
 run_clean "$launcher" start --headless >"$artifact_directory/linux-artifact-server.log" 2>&1 &
 server_pid=$!
@@ -38,7 +46,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-"$clean_install/OpenRepurpose/runtime/bin/node" -e '
+if ! "$clean_install/OpenRepurpose/runtime/bin/node" -e '
 const base = process.argv[1];
 const deadline = Date.now() + 30_000;
 while (Date.now() < deadline) {
@@ -50,4 +58,7 @@ while (Date.now() < deadline) {
   await new Promise((resolve) => setTimeout(resolve, 250));
 }
 process.exit(1);
-' http://127.0.0.1:39100
+' http://127.0.0.1:39100; then
+  cat "$artifact_directory/linux-artifact-server.log" >&2
+  exit 1
+fi

@@ -38,8 +38,11 @@ $runtimeDirectory = Join-Path $staging 'runtime'
 Push-Location $repositoryRoot
 try {
   corepack pnpm install --frozen-lockfile
+  if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed with exit code $LASTEXITCODE." }
   corepack pnpm build
+  if ($LASTEXITCODE -ne 0) { throw "Production build failed with exit code $LASTEXITCODE." }
   corepack pnpm --filter @openrepurpose/cli deploy --prod $app
+  if ($LASTEXITCODE -ne 0) { throw "Production deployment failed with exit code $LASTEXITCODE." }
   & node (Join-Path $PSScriptRoot 'materialize-package.mjs') $app "$app-materialized"
   if ($LASTEXITCODE -ne 0) { throw 'Could not materialize deployed package links for ZIP distribution.' }
   Remove-Item -LiteralPath $app -Recurse -Force
@@ -49,10 +52,8 @@ try {
 }
 
 $webDistribution = Join-Path $repositoryRoot 'apps\web\dist'
-if (!(Test-Path -LiteralPath (Join-Path $webDistribution 'index.html'))) {
-  throw 'The web production distribution is missing after build.'
-}
-Copy-DirectoryContents $webDistribution (Join-Path $app 'node_modules\@openrepurpose\web\dist')
+& node (Join-Path $PSScriptRoot 'stage-web-distribution.mjs') $app $webDistribution
+if ($LASTEXITCODE -ne 0) { throw 'Could not stage the web distribution beside deployed server packages.' }
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD_PARTY_NOTICES.md') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $staging
 Copy-DirectoryContents (Join-Path $repositoryRoot 'docs') (Join-Path $staging 'docs')

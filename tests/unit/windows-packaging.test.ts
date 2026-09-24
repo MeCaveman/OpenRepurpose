@@ -26,9 +26,16 @@ describe('Windows x64 portable release contract', () => {
     );
 
     expect(packaging).toContain('pnpm --filter @openrepurpose/cli deploy --prod');
+    expect(packaging).toContain('Dependency installation failed with exit code');
+    expect(packaging).toContain('Production build failed with exit code');
+    expect(packaging).toContain('Production deployment failed with exit code');
     expect(packaging).not.toContain('deploy --prod --legacy');
     expect(packaging).toContain('materialize-package.mjs');
-    expect(packaging).toContain('node_modules\\@openrepurpose\\web\\dist');
+    expect(
+      readFileSync(resolve(repositoryRoot, 'scripts/materialize-package.mjs'), 'utf8'),
+    ).toContain("'.pnpm', 'node_modules'");
+    expect(packaging).toContain('stage-web-distribution.mjs');
+    expect(packaging).toContain('Could not stage the web distribution');
     expect(packaging).toContain('openrepurpose.cmd');
     expect(packaging).toContain('SHA256SUMS.txt');
     expect(packaging).toContain('THIRD_PARTY_NOTICES.md');
@@ -37,7 +44,11 @@ describe('Windows x64 portable release contract', () => {
     expect(packaging).toContain("@('README.md', 'SECURITY.md', 'CONTRIBUTING.md')");
     expect(packaging).toContain('ZipFile]::CreateFromDirectory');
     expect(smoke).toContain("$env:APPDATA = Join-Path $cleanProfile 'Roaming'");
+    expect(smoke).toContain('Remove-Item -LiteralPath $cleanProfile -Recurse -Force');
     expect(smoke).toContain("'http://127.0.0.1:39100/api/health'");
+    expect(smoke).toContain('backup create --output');
+    expect(smoke).toContain("'smoke-release-media.mjs'");
+    expect(smoke).toContain('Start-Process -FilePath $bundledNode');
   });
 
   it('makes every runtime workspace package direct for pnpm portable deployment', () => {

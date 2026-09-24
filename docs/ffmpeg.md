@@ -11,7 +11,9 @@ redistribution obligations. Do not copy an unaudited binary into an OpenRepurpos
 
 Install `ffmpeg` and `ffprobe` on `PATH`, or set their absolute executable paths using the matching
 configuration variables documented by the release and `.env.example`. Restart OpenRepurpose after
-changing configuration, then run `openrepurpose doctor`.
+changing configuration, then run `openrepurpose doctor`. Doctor starts both configured executables
+with their version arguments. A missing optional installation is reported as a warning; an explicit
+`FFMPEG_PATH` or `FFPROBE_PATH` that cannot be started is a failing configuration check.
 
 `ffprobe` provides persisted duration, dimensions, codecs, frame rate, and stream metadata during
 import. `ffmpeg` provides deterministic transforms, subtitle burn-in/muxing, and media derivatives.

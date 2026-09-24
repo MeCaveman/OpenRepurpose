@@ -3,6 +3,13 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_live_platform_smoke:
+        description: Run read-only live platform checks with the protected maintainer environment
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -60,7 +67,10 @@ jobs:
         run: choco install ffmpeg --yes --no-progress
 
       - name: Run unit tests
-        run: pnpm test
+        run: pnpm test:unit
+
+      - name: Run integration tests
+        run: pnpm test:integration
 
       - name: Build
         run: pnpm build
@@ -75,6 +85,93 @@ jobs:
 
       - name: Run Playwright user journey
         run: pnpm test:e2e
+
+  release-candidate-source:
+    name: Release candidate source contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 12.4.2
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+
+      - name: Migration and upgrade matrix
+        run: pnpm test:release:migrations
+
+      - name: Verify committed upgrade fixtures
+        run: pnpm fixtures:upgrade && git diff --exit-code -- tests/fixtures/upgrade
+
+      - name: Backup and restore matrix
+        run: pnpm test:release:backup
+
+      - name: CLI matrix
+        run: pnpm test:release:cli
+
+      - name: API and MCP matrix
+        run: pnpm test:release:api-mcp
+
+      - name: Mocked first-party platform contracts
+        run: pnpm test:release:platform-contracts
+
+      - name: FFmpeg and subtitle matrix
+        run: pnpm test:release:media
+
+  windows-portable-artifact:
+    name: Windows portable artifact smoke
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 12.4.2
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install FFmpeg
+        run: choco install ffmpeg --yes --no-progress
+
+      - name: Build portable artifact
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+
+      - name: Smoke clean-profile artifact
+        shell: pwsh
+        run: ./scripts/smoke-windows-artifact.ps1 -ArtifactDirectory artifacts/windows-x64
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@0b2256b8c012f0828dc542b3febcab082c67f72b # v4.3.4
+        with:
+          name: openrepurpose-windows-x64
+          path: artifacts/windows-x64/OpenRepurpose-windows-x64.zip
+          if-no-files-found: error
 
   linux-portable-artifact:
     name: Linux portable artifact smoke
@@ -100,6 +197,9 @@ jobs:
       - name: Build portable artifact
         run: node scripts/package-linux.mjs
 
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+
       - name: Smoke clean-profile artifact
         run: sh scripts/smoke-linux-artifact.sh artifacts/linux-x64
 
@@ -109,3 +209,44 @@ jobs:
           name: openrepurpose-linux-x64
           path: artifacts/linux-x64/OpenRepurpose-linux-x64.tar.xz
           if-no-files-found: error
+
+  docker-artifact:
+    name: Docker image smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Build and smoke Docker image
+        run: node scripts/smoke-docker.mjs
+
+  live-platform-smoke:
+    name: Optional maintainer live platform smoke
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_platform_smoke }}
+    runs-on: ubuntu-latest
+    environment: live-platform-smoke
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Run read-only live platform checks
+        run: node scripts/smoke-live-platforms.mjs
+        env:
+          OPENREPURPOSE_LIVE_YOUTUBE_ACCESS_TOKEN: ${{ secrets.OPENREPURPOSE_LIVE_YOUTUBE_ACCESS_TOKEN }}
+          OPENREPURPOSE_LIVE_TIKTOK_ACCESS_TOKEN: ${{ secrets.OPENREPURPOSE_LIVE_TIKTOK_ACCESS_TOKEN }}
+          OPENREPURPOSE_LIVE_META_ACCESS_TOKEN: ${{ secrets.OPENREPURPOSE_LIVE_META_ACCESS_TOKEN }}
+          OPENREPURPOSE_LIVE_TWITCH_ACCESS_TOKEN: ${{ secrets.OPENREPURPOSE_LIVE_TWITCH_ACCESS_TOKEN }}
+          OPENREPURPOSE_LIVE_TWITCH_CLIENT_ID: ${{ secrets.OPENREPURPOSE_LIVE_TWITCH_CLIENT_ID }}
+          OPENREPURPOSE_LIVE_KICK_ACCESS_TOKEN: ${{ secrets.OPENREPURPOSE_LIVE_KICK_ACCESS_TOKEN }}

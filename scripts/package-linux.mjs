@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  lstatSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -79,8 +80,10 @@ function checksums(directory, relativeDirectory = '') {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = resolve(directory, entry.name);
     const artifactPath = `${relativeDirectory}${entry.name}`;
-    if (entry.isDirectory()) return checksums(entryPath, `${artifactPath}/`);
-    return entry.name === 'SHA256SUMS.txt' ? [] : [`${sha256(entryPath)}  ${artifactPath}`];
+    const stats = lstatSync(entryPath);
+    if (stats.isDirectory()) return checksums(entryPath, `${artifactPath}/`);
+    if (!stats.isFile() || entry.name === 'SHA256SUMS.txt') return [];
+    return [`${sha256(entryPath)}  ${artifactPath}`];
   });
 }
 
@@ -114,9 +117,11 @@ cpSync(materializedApp, app, { recursive: true });
 rmSync(materializedApp, { force: true, recursive: true });
 
 const webDistribution = resolve(repositoryRoot, 'apps/web/dist');
-if (!existsSync(resolve(webDistribution, 'index.html')))
-  throw new Error('The web production distribution is missing after build.');
-copyDirectoryContents(webDistribution, resolve(app, 'node_modules/@openrepurpose/web/dist'));
+execFileSync(
+  process.execPath,
+  [resolve(repositoryRoot, 'scripts/stage-web-distribution.mjs'), app, webDistribution],
+  { stdio: 'inherit' },
+);
 
 cpSync(
   resolve(repositoryRoot, 'THIRD_PARTY_NOTICES.md'),
@@ -151,10 +156,14 @@ if (suppliedRuntimeArchive === undefined) rmSync(runtimeArchive, { force: true }
 const launcher = `#!/bin/sh\nset -eu\nscript_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$script_dir/runtime/bin/node" "$script_dir/app/dist/index.js" "$@"\n`;
 writeFileSync(resolve(staging, 'openrepurpose'), launcher, { encoding: 'utf8', mode: 0o755 });
 chmodSync(resolve(staging, 'openrepurpose'), 0o755);
-const commit = execFileSync('git', ['rev-parse', 'HEAD'], {
-  cwd: repositoryRoot,
-  encoding: 'utf8',
-}).trim();
+const commit =
+  process.env.OPENREPURPOSE_SOURCE_COMMIT?.trim() ??
+  execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  }).trim();
+if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(commit))
+  throw new Error('OPENREPURPOSE_SOURCE_COMMIT must be a complete Git object ID.');
 writeFileSync(
   resolve(staging, 'build-metadata.json'),
   `${JSON.stringify(

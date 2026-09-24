@@ -8,12 +8,13 @@ const doctorDirectory = join(process.cwd(), 'test-results', 'doctor');
 describe('openrepurpose doctor', () => {
   afterEach(() => rmSync(doctorDirectory, { recursive: true, force: true }));
 
-  it('reports Packet 2 configuration and persistence checks', () => {
-    const checks = runDoctor({
+  it('reports release runtime, configuration, persistence, and media dependency checks', async () => {
+    const checks = await runDoctor({
       APP_CONFIG_DIR: join(doctorDirectory, 'config'),
       APP_DATA_DIR: join(doctorDirectory, 'data'),
       APP_TEMP_DIR: join(doctorDirectory, 'temp'),
       DATABASE_URL: join(doctorDirectory, 'data', 'openrepurpose.sqlite'),
+      PATH: process.env.PATH,
     });
     expect(checks.map((check) => check.name)).toEqual(
       expect.arrayContaining([
@@ -21,7 +22,28 @@ describe('openrepurpose doctor', () => {
         'data directory',
         'database migrations',
         'configured bind host',
+        'Node.js runtime',
+        'FFmpeg executable',
+        'ffprobe executable',
+        'whisper.cpp executable',
       ]),
     );
+  });
+
+  it('fails explicitly configured media executables that cannot be started', async () => {
+    const checks = await runDoctor({
+      APP_CONFIG_DIR: join(doctorDirectory, 'config'),
+      APP_DATA_DIR: join(doctorDirectory, 'data'),
+      APP_TEMP_DIR: join(doctorDirectory, 'temp'),
+      DATABASE_URL: join(doctorDirectory, 'data', 'openrepurpose.sqlite'),
+      FFMPEG_PATH: join(doctorDirectory, 'missing-ffmpeg'),
+      FFPROBE_PATH: join(doctorDirectory, 'missing-ffprobe'),
+      PATH: '',
+    });
+
+    expect(checks.filter((check) => check.name.includes('executable')).slice(0, 2)).toEqual([
+      expect.objectContaining({ name: 'FFmpeg executable', ok: false, optional: false }),
+      expect.objectContaining({ name: 'ffprobe executable', ok: false, optional: false }),
+    ]);
   });
 });

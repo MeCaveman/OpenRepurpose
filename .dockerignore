@@ -9,6 +9,7 @@ node_modules
 test-results
 coverage
 playwright-report
+artifacts
 .env
 .env.*
 !.env.example
