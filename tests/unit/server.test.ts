@@ -2,8 +2,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '@openrepurpose/server';
-import { createTranscriptionCacheIdentity, TranscriptService } from '@openrepurpose/core';
-import { SqliteMediaRepository, SqliteTranscriptRepository } from '@openrepurpose/db';
+import {
+  ApiTokenService,
+  createTranscriptionCacheIdentity,
+  TranscriptService,
+} from '@openrepurpose/core';
+import {
+  SqliteApiTokenRepository,
+  SqliteMediaRepository,
+  SqliteTranscriptRepository,
+} from '@openrepurpose/db';
 import { createTemporaryDatabase } from '@openrepurpose/testkit';
 import type { ApplicationConfig } from '@openrepurpose/shared';
 import type {
@@ -48,6 +56,7 @@ describe('Fastify local security boundary', () => {
   function createServer(staticRoot: false | string = false) {
     server = buildServer({ config, sessionKey: Buffer.alloc(32, 7), staticRoot });
     server.post('/api/test-state', async () => ({ updated: true }));
+    server.post('/api/v1/test-state', async () => ({ updated: true }));
     return server;
   }
 
@@ -67,13 +76,21 @@ describe('Fastify local security boundary', () => {
   });
 
   it('requires a separate LAN browser token for every non-health resource', async () => {
+    const temporary = createTemporaryDatabase();
+    const tokenService = new ApiTokenService(new SqliteApiTokenRepository(temporary.database));
+    const apiToken = tokenService.create('LAN API', ['control']).token;
     const lanConfig: ApplicationConfig = {
       ...config,
       appUrl: new URL('http://192.0.2.10:3000'),
       bindHost: '0.0.0.0',
       network: { lanEnabled: true, lanAccessToken: 'a'.repeat(32), trustedProxy: false },
     };
-    server = buildServer({ config: lanConfig, sessionKey: Buffer.alloc(32, 7), staticRoot: false });
+    server = buildServer({
+      apiTokenService: tokenService,
+      config: lanConfig,
+      sessionKey: Buffer.alloc(32, 7),
+      staticRoot: false,
+    });
     const host = { host: '192.0.2.10:3000' };
     expect(
       (await server.inject({ method: 'GET', url: '/api/health', headers: host })).statusCode,
@@ -81,15 +98,46 @@ describe('Fastify local security boundary', () => {
     expect(
       (await server.inject({ method: 'GET', url: '/api/session', headers: host })).statusCode,
     ).toBe(401);
+    const browserBasic = `Basic ${Buffer.from(`openrepurpose:${'a'.repeat(32)}`).toString('base64')}`;
     const authorized = await server.inject({
       method: 'GET',
       url: '/api/session',
       headers: {
         ...host,
-        authorization: `Basic ${Buffer.from(`openrepurpose:${'a'.repeat(32)}`).toString('base64')}`,
+        authorization: browserBasic,
       },
     });
     expect(authorized.statusCode).toBe(200);
+    const browserCookie = authorized.headers['set-cookie'];
+    const { csrfToken } = authorized.json<{ csrfToken: string }>();
+
+    const legacyWithApiToken = await server.inject({
+      method: 'GET',
+      url: '/api/session',
+      headers: { ...host, authorization: `Bearer ${apiToken}` },
+    });
+    expect(legacyWithApiToken.statusCode).toBe(401);
+    const apiWithApiToken = await server.inject({
+      method: 'GET',
+      url: '/api/v1/auth/tokens',
+      headers: { ...host, authorization: `Bearer ${apiToken}` },
+    });
+    expect(apiWithApiToken.statusCode).toBe(200);
+
+    const browserMutation = await server.inject({
+      method: 'POST',
+      url: '/api/v1/auth/tokens',
+      headers: {
+        ...host,
+        authorization: browserBasic,
+        cookie: String(browserCookie),
+        origin: lanConfig.appUrl.origin,
+        'x-csrf-token': csrfToken,
+      },
+      payload: { name: 'Browser-created token', permissions: ['read'] },
+    });
+    expect(browserMutation.statusCode).toBe(201);
+    temporary.dispose();
   });
 
   it('requires an allowed Origin and a session-bound CSRF token for mutations', async () => {
@@ -101,6 +149,16 @@ describe('Fastify local security boundary', () => {
     });
     expect(missingOrigin.statusCode).toBe(403);
     expect(missingOrigin.json()).toMatchObject({ code: 'ORIGIN_NOT_ALLOWED' });
+
+    for (const authorization of ['Basic dXNlcjpwYXNz', 'Bearer']) {
+      const attemptedBypass = await app.inject({
+        method: 'POST',
+        url: '/api/v1/test-state',
+        headers: { ...allowedHost, authorization },
+      });
+      expect(attemptedBypass.statusCode).toBe(403);
+      expect(attemptedBypass.json()).toMatchObject({ code: 'ORIGIN_NOT_ALLOWED' });
+    }
 
     const session = await app.inject({ method: 'GET', url: '/api/session', headers: allowedHost });
     const { csrfToken } = session.json<{ csrfToken: string }>();

@@ -153,7 +153,11 @@ export interface OAuthAuthorizationRequest {
 
 /** Persistent, one-time OAuth state boundary so callbacks do not rely on process memory. */
 export interface OAuthAuthorizationRequestRepository {
-  consumeByStateHash(stateHash: string, bindingHash: string): OAuthAuthorizationRequest | undefined;
+  consumeByStateHash(
+    provider: AccountProvider,
+    stateHash: string,
+    bindingHash: string,
+  ): OAuthAuthorizationRequest | undefined;
   create(request: OAuthAuthorizationRequest): void;
   deleteExpired(now: Date): readonly OAuthAuthorizationRequest[];
 }

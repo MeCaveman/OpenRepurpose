@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { lstat, mkdir, open, readFile, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { isSafeManagedPathSegment } from './path-security.js';
 
 const DEFAULT_DISK_RESERVE_BYTES = 256 * 1024 * 1024;
 
@@ -195,7 +196,7 @@ function isInside(root: string, candidate: string): boolean {
 }
 
 function pathSegment(value: string): string {
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(value))
+  if (!isSafeManagedPathSegment(value, 200))
     throw new ModelManagerError('MODEL_STORAGE_UNSAFE', 'Model metadata contains an unsafe path.');
   return value;
 }

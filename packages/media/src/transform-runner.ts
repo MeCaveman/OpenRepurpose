@@ -27,6 +27,7 @@ import {
   type TransformProgress,
 } from '@openrepurpose/core';
 import { compileTransformCommand, type FfmpegCommand } from './index.js';
+import { isSafeManagedPathSegment } from './path-security.js';
 
 export type TransformProcessErrorCode =
   | 'TRANSFORM_CANCELLED'
@@ -307,7 +308,7 @@ export class FfmpegProcessRunner implements TransformProcessRunner {
 }
 
 function safeDerivativeId(value: string): string {
-  if (value === '.' || value === '..' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value))
+  if (!isSafeManagedPathSegment(value, 128))
     throw new Error('A derivative ID must be a safe identifier.');
   return value;
 }

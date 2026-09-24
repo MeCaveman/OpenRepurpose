@@ -1214,7 +1214,11 @@ export class YouTubeOAuthService {
     const request =
       input.browserBinding === undefined
         ? undefined
-        : this.requests.consumeByStateHash(stateHash(input.state), stateHash(input.browserBinding));
+        : this.requests.consumeByStateHash(
+            'youtube',
+            stateHash(input.state),
+            stateHash(input.browserBinding),
+          );
     if (request === undefined)
       throw platformError(
         'authentication',

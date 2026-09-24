@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { SecretReference, SecretStore } from '@openrepurpose/platform-sdk';
 import { secretReferenceKey } from '@openrepurpose/platform-sdk';
@@ -56,7 +56,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 async function pathExists(path: string): Promise<boolean> {
   try {
-    await stat(path);
+    await lstat(path);
     return true;
   } catch (error) {
     if (isNodeError(error) && error.code === 'ENOENT') return false;
@@ -65,11 +65,39 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 async function restrictPermissions(path: string): Promise<void> {
+  const details = await lstat(path);
+  if (details.isSymbolicLink()) return;
+  if (!details.isFile())
+    throw new Error(`Secret material must be stored in a regular file: ${path}`);
   try {
     await chmod(path, 0o600);
   } catch (error) {
     if (process.platform !== 'win32') throw error;
   }
+}
+
+async function readRegularSecretFile(
+  path: string,
+  encoding: 'utf8',
+  reason: RecoveryReason,
+): Promise<string>;
+async function readRegularSecretFile(
+  path: string,
+  encoding: undefined,
+  reason: RecoveryReason,
+): Promise<Buffer>;
+async function readRegularSecretFile(
+  path: string,
+  encoding: 'utf8' | undefined,
+  reason: RecoveryReason,
+): Promise<string | Buffer> {
+  const details = await lstat(path);
+  if (details.isSymbolicLink() || !details.isFile())
+    throw new SecretVaultRecoveryRequiredError(
+      `Secret material at ${path} must be a regular file, not a link or special file.`,
+      reason,
+    );
+  return encoding === 'utf8' ? readFile(path, 'utf8') : readFile(path);
 }
 
 function parseVault(raw: string): ParsedVault {
@@ -169,7 +197,7 @@ export class EncryptedFileSecretStore implements SecretStore {
   public async inspect(): Promise<SecretVaultInspection> {
     let raw: string;
     try {
-      raw = await readFile(this.vaultPath, 'utf8');
+      raw = await readRegularSecretFile(this.vaultPath, 'utf8', 'vault_unreadable');
     } catch (error) {
       if (isNodeError(error) && error.code === 'ENOENT') return { kind: 'empty' };
       return { kind: 'reconnect_required', reason: 'vault_unreadable' };
@@ -182,7 +210,7 @@ export class EncryptedFileSecretStore implements SecretStore {
     }
     let key: Buffer;
     try {
-      key = await readFile(this.keyPath);
+      key = await readRegularSecretFile(this.keyPath, undefined, 'key_invalid');
     } catch (error) {
       return {
         kind: 'reconnect_required',
@@ -311,7 +339,7 @@ export class EncryptedFileSecretStore implements SecretStore {
   private async initializeOnce(): Promise<SecretVaultMigrationResult> {
     let raw: string;
     try {
-      raw = await readFile(this.vaultPath, 'utf8');
+      raw = await readRegularSecretFile(this.vaultPath, 'utf8', 'vault_unreadable');
     } catch (error) {
       if (isNodeError(error) && error.code === 'ENOENT')
         return { migrated: false, secretCount: 0, version: 2 };
@@ -339,7 +367,7 @@ export class EncryptedFileSecretStore implements SecretStore {
       await restrictPermissions(backupPath);
     } catch (error) {
       if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
-      const existing = await readFile(backupPath, 'utf8');
+      const existing = await readRegularSecretFile(backupPath, 'utf8', 'vault_unreadable');
       if (existing !== raw)
         throw new Error(
           `Legacy vault backup already exists with different contents: ${backupPath}`,
@@ -364,7 +392,7 @@ export class EncryptedFileSecretStore implements SecretStore {
   private async loadExistingKey(): Promise<Buffer> {
     let key: Buffer;
     try {
-      key = await readFile(this.keyPath);
+      key = await readRegularSecretFile(this.keyPath, undefined, 'key_invalid');
     } catch (error) {
       if (isNodeError(error) && error.code === 'ENOENT')
         throw new SecretVaultRecoveryRequiredError(
@@ -386,7 +414,7 @@ export class EncryptedFileSecretStore implements SecretStore {
     if (await pathExists(this.vaultPath)) return this.loadExistingKey();
     let key: Buffer;
     try {
-      key = await readFile(this.keyPath);
+      key = await readRegularSecretFile(this.keyPath, undefined, 'key_invalid');
     } catch (error) {
       if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
       await mkdir(dirname(this.keyPath), { recursive: true });
@@ -396,7 +424,7 @@ export class EncryptedFileSecretStore implements SecretStore {
         key = generated;
       } catch (writeError) {
         if (!isNodeError(writeError) || writeError.code !== 'EEXIST') throw writeError;
-        key = await readFile(this.keyPath);
+        key = await readRegularSecretFile(this.keyPath, undefined, 'key_invalid');
       }
     }
     if (key.length !== 32)
@@ -411,7 +439,9 @@ export class EncryptedFileSecretStore implements SecretStore {
   private async readReadyVault(): Promise<SecretVaultDocument> {
     await this.initialize();
     try {
-      const document = parseVault(await readFile(this.vaultPath, 'utf8'));
+      const document = parseVault(
+        await readRegularSecretFile(this.vaultPath, 'utf8', 'vault_unreadable'),
+      );
       if (document.version !== 2)
         throw new Error('The local secret vault migration did not complete.');
       return document;

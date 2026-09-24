@@ -527,7 +527,7 @@ function validate<T>(
 function bearerValue(request: FastifyRequest): string | undefined {
   const header = request.headers.authorization;
   if (header === undefined) return undefined;
-  const match = /^Bearer ([^\s]+)$/u.exec(header);
+  const match = /^Bearer\s+([^\s]+)$/iu.exec(header);
   return match?.[1];
 }
 
@@ -537,8 +537,8 @@ function authorize(
   reply: FastifyReply,
   permission: ApiPermission,
 ): ApiPrincipal | undefined {
-  if (request.headers.authorization !== undefined) {
-    const token = bearerValue(request);
+  const token = bearerValue(request);
+  if (token !== undefined || /^Bearer\b/iu.test(request.headers.authorization ?? '')) {
     const authenticated =
       token === undefined ? undefined : options.tokenService?.authenticate(token);
     if (authenticated === undefined) {

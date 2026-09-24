@@ -189,7 +189,11 @@ export class TwitchOAuthService implements TwitchAccessTokenProvider {
         'TWITCH_OAUTH_STATE_INVALID',
         'The Twitch authorization response has invalid state.',
       );
-    const request = this.requests.consumeByStateHash(hash(input.state), hash(input.browserBinding));
+    const request = this.requests.consumeByStateHash(
+      'twitch',
+      hash(input.state),
+      hash(input.browserBinding),
+    );
     if (request === undefined || request.expiresAt <= this.now())
       throw twitchFailure(
         'authentication',

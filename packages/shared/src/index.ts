@@ -98,10 +98,18 @@ function pathSchema(runtime: PathResolutionRuntime) {
 }
 
 function httpUrlSchema() {
-  return z.url().refine((value) => {
-    const protocol = new URL(value).protocol;
-    return protocol === 'http:' || protocol === 'https:';
-  }, 'must use http or https');
+  return z.url().superRefine((value, context) => {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:')
+      context.addIssue({ code: 'custom', message: 'must use http or https' });
+    if (url.username.length > 0 || url.password.length > 0)
+      context.addIssue({ code: 'custom', message: 'must not embed credentials' });
+    if (url.pathname !== '/' || url.search.length > 0 || url.hash.length > 0)
+      context.addIssue({
+        code: 'custom',
+        message: 'must be an origin without a path, query, or hash',
+      });
+  });
 }
 
 function obsWebSocketUrlSchema() {

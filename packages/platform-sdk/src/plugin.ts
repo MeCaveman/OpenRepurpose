@@ -3,6 +3,7 @@ import type { PluginJsonValue } from './types.js';
 
 /** The semver-major compatibility boundary implemented by this SDK package. */
 export const OPENREPURPOSE_PLUGIN_API_VERSION = '1.0.0' as const;
+const executableNamePattern = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/u;
 
 export type PluginCapability =
   | {
@@ -92,7 +93,7 @@ export const pluginManifestSchema = z
     name: z.string().trim().min(1).max(128),
     permissions: z
       .object({
-        childProcesses: z.array(z.string().trim().min(1).max(128)),
+        childProcesses: z.array(z.string().trim().regex(executableNamePattern)),
         filesystem: z.array(
           z
             .object({

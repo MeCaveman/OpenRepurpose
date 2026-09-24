@@ -1,6 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, createReadStream, createWriteStream, existsSync } from 'node:fs';
-import { chmod, copyFile, mkdir, mkdtemp, open, rename, rm, stat } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  rename,
+  rm,
+  stat,
+  type FileHandle,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -196,6 +207,13 @@ async function sha256File(path: string, start = 0): Promise<string> {
   return hash.digest('hex');
 }
 
+async function sha256Handle(handle: FileHandle, start: number): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of handle.createReadStream({ autoClose: false, start }))
+    hash.update(chunk as Buffer);
+  return hash.digest('hex');
+}
+
 function readMigrationLedger(database: DatabaseSync): readonly MigrationRow[] {
   const hasLedger = database
     .prepare(
@@ -374,10 +392,16 @@ async function readAndExtractBackup(
   backupPath: string,
   extractedDatabasePath: string,
 ): Promise<BackupManifest> {
+  const sourceStats = await lstat(backupPath);
+  if (sourceStats.isSymbolicLink() || !sourceStats.isFile())
+    throw new Error('The selected backup must be a regular file, not a link or special file.');
   const handle = await open(backupPath, 'r');
   let manifest: BackupManifest;
   let payloadOffset: number;
   try {
+    const openedStats = await handle.stat();
+    if (!openedStats.isFile())
+      throw new Error('The selected backup must be a regular file, not a special file.');
     const prefix = Buffer.alloc(BACKUP_MAGIC.length + 4);
     const prefixRead = await handle.read(prefix, 0, prefix.length, 0);
     if (
@@ -398,18 +422,17 @@ async function readAndExtractBackup(
       throw new Error('The backup manifest is invalid or unsupported.');
     }
     payloadOffset = prefix.length + manifestLength;
+    if (openedStats.size !== payloadOffset + manifest.database.byteLength)
+      throw new Error('The backup database payload length does not match its manifest.');
+    if ((await sha256Handle(handle, payloadOffset)) !== manifest.database.sha256)
+      throw new Error('The backup database checksum does not match its manifest.');
+    await pipeline(
+      handle.createReadStream({ autoClose: false, start: payloadOffset }),
+      createWriteStream(extractedDatabasePath, { flags: 'wx', mode: 0o600 }),
+    );
   } finally {
     await handle.close();
   }
-  const backupStats = await stat(backupPath);
-  if (backupStats.size !== payloadOffset + manifest.database.byteLength)
-    throw new Error('The backup database payload length does not match its manifest.');
-  if ((await sha256File(backupPath, payloadOffset)) !== manifest.database.sha256)
-    throw new Error('The backup database checksum does not match its manifest.');
-  await pipeline(
-    createReadStream(backupPath, { start: payloadOffset }),
-    createWriteStream(extractedDatabasePath, { flags: 'wx', mode: 0o600 }),
-  );
   const database = new DatabaseSync(extractedDatabasePath, { readOnly: true });
   try {
     const integrity = database.prepare('PRAGMA integrity_check').get() as {

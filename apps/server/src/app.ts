@@ -95,11 +95,17 @@ function csrfTokensMatch(expected: string, actual: string): boolean {
   );
 }
 
+function bearerAuthorization(request: FastifyRequest): string | undefined {
+  const authorization = request.headers.authorization;
+  if (typeof authorization !== 'string') return undefined;
+  return /^Bearer\s+([^\s]+)$/iu.exec(authorization)?.[1];
+}
+
 function isApiMutation(request: FastifyRequest): boolean {
   return (
     request.url.startsWith('/api/') &&
     stateChangingMethods.has(request.method) &&
-    !(request.url.startsWith('/api/v1/') && request.headers.authorization !== undefined)
+    !(request.url.startsWith('/api/v1/') && bearerAuthorization(request) !== undefined)
   );
 }
 
@@ -110,8 +116,8 @@ export function assertLocalOnly(config: ApplicationConfig): void {
   if ((nonLoopbackBinding || externalAppUrl) && config.network?.lanEnabled !== true) {
     throw new Error('Non-loopback binding or APP_URL requires LAN_ENABLED=true.');
   }
-  if ((nonLoopbackBinding || externalAppUrl) && config.network?.lanAccessToken === undefined) {
-    throw new Error('Non-loopback binding requires LAN_ACCESS_TOKEN with at least 32 characters.');
+  if (config.network?.lanEnabled === true && config.network.lanAccessToken === undefined) {
+    throw new Error('LAN_ENABLED=true requires LAN_ACCESS_TOKEN with at least 32 characters.');
   }
 }
 
@@ -133,9 +139,11 @@ function networkAccessAllowed(request: FastifyRequest, options: BuildServerOptio
       return false;
     }
   }
-  const bearer = /^Bearer\s+(.+)$/iu.exec(authorization);
+  const bearer = bearerAuthorization(request);
   return (
-    bearer?.[1] !== undefined && options.apiTokenService?.authenticate(bearer[1]) !== undefined
+    request.url.startsWith('/api/v1/') &&
+    bearer !== undefined &&
+    options.apiTokenService?.authenticate(bearer) !== undefined
   );
 }
 
@@ -155,6 +163,12 @@ const sensitiveLogPaths = [
   'refreshToken',
   'clientSecret',
   'authorizationCode',
+  'codeVerifier',
+  'apiKey',
+  'sessionKey',
+  'signature',
+  'signedUrl',
+  'uploadUrl',
   '*.authorization',
   '*.cookie',
   '*.password',
@@ -164,6 +178,12 @@ const sensitiveLogPaths = [
   '*.refreshToken',
   '*.clientSecret',
   '*.authorizationCode',
+  '*.codeVerifier',
+  '*.apiKey',
+  '*.sessionKey',
+  '*.signature',
+  '*.signedUrl',
+  '*.uploadUrl',
   'req.headers.authorization',
   'req.headers.cookie',
   'res.headers["set-cookie"]',

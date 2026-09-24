@@ -41,6 +41,7 @@ function createForbiddenTargets(): BlockList {
     ['64:ff9b::', 96],
     ['64:ff9b:1::', 48],
     ['100::', 64],
+    ['2002::', 16],
     ['2001::', 23],
     ['fec0::', 10],
     ['fe80::', 10],

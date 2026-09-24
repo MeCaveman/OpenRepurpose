@@ -161,7 +161,11 @@ export class KickOAuthService implements KickAccessTokenProvider {
         'KICK_OAUTH_STATE_INVALID',
         'The Kick authorization response has invalid state.',
       );
-    const request = this.requests.consumeByStateHash(hash(input.state), hash(input.browserBinding));
+    const request = this.requests.consumeByStateHash(
+      'kick',
+      hash(input.state),
+      hash(input.browserBinding),
+    );
     if (request === undefined || request.expiresAt <= this.now())
       throw failure(
         'authentication',

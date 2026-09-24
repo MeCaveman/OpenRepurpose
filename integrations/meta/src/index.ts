@@ -218,7 +218,11 @@ export class MetaOAuthService {
         'META_OAUTH_STATE_INVALID',
         'The Meta authorization response has invalid state. Start the connection again.',
       );
-    const request = this.requests.consumeByStateHash(hash(input.state), hash(input.browserBinding));
+    const request = this.requests.consumeByStateHash(
+      'meta',
+      hash(input.state),
+      hash(input.browserBinding),
+    );
     if (request?.provider !== 'meta' || request.expiresAt <= this.now())
       throw failure(
         'authentication',

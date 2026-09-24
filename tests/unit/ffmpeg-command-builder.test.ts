@@ -145,6 +145,7 @@ describe('FFmpeg transform command builder', () => {
     expect(graph).toContain('charenc=UTF-8');
     expect(graph).toContain('Alignment=5');
     expect(command.args).not.toContain(subtitlePath);
+    expect(() => escapeFfmpegFilterPath('captions\nunsafe.srt')).toThrow('control characters');
   });
 
   it('leaves font selection to the platform fallback while accepting Linux paths', () => {

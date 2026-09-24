@@ -139,6 +139,19 @@ describe('plugin manifest and load policy', () => {
         capabilities: [...manifest.capabilities, ...manifest.capabilities],
       }),
     ).toThrow('Duplicate plugin capability');
+    expect(
+      parsePluginManifest({
+        ...manifest,
+        permissions: { ...manifest.permissions, childProcesses: ['ffmpeg.exe'] },
+      }).permissions.childProcesses,
+    ).toEqual(['ffmpeg.exe']);
+    for (const executable of ['ffmpeg --version', '../ffmpeg', 'C:\\tools\\ffmpeg.exe'])
+      expect(() =>
+        parsePluginManifest({
+          ...manifest,
+          permissions: { ...manifest.permissions, childProcesses: [executable] },
+        }),
+      ).toThrow();
   });
 
   it('disables third-party code by default and requires an advanced risk acknowledgement', () => {
@@ -321,11 +334,14 @@ describe('redacting logger', () => {
         error: new Error('request failed with Bearer nested-secret'),
         nested: {
           clientSecret: 'client-secret',
+          codeVerifier: 'oauth-verifier',
+          signature: 'signed-value',
+          uploadUrl: 'https://upload.example.test/?X-Amz-Signature=raw-signature',
           safe: 'literal-client-value must disappear',
         },
         cyclic,
       },
-      'callback?code=oauth-code and literal-client-value',
+      'callback?code=oauth-code&code_verifier=raw-verifier&X-Amz-Signature=raw-signature and literal-client-value',
     );
 
     const serialized = JSON.stringify(entries);
@@ -333,6 +349,10 @@ describe('redacting logger', () => {
     expect(serialized).not.toContain('nested-secret');
     expect(serialized).not.toContain('client-secret');
     expect(serialized).not.toContain('oauth-code');
+    expect(serialized).not.toContain('oauth-verifier');
+    expect(serialized).not.toContain('signed-value');
+    expect(serialized).not.toContain('raw-verifier');
+    expect(serialized).not.toContain('raw-signature');
     expect(serialized).not.toContain('literal-client-value');
     expect(serialized).toContain(REDACTED_LOG_VALUE);
     expect(entries[0]).toMatchObject({

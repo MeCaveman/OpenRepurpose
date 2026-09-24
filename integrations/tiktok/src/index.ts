@@ -417,7 +417,11 @@ export class TikTokOAuthService {
     const request =
       input.browserBinding === undefined
         ? undefined
-        : this.requests.consumeByStateHash(stateHash(input.state), stateHash(input.browserBinding));
+        : this.requests.consumeByStateHash(
+            'tiktok',
+            stateHash(input.state),
+            stateHash(input.browserBinding),
+          );
     if (request === undefined || request.provider !== 'tiktok')
       throw platformError(
         'authentication',

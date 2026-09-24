@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -129,6 +129,22 @@ describe('portable backup and restore', () => {
     const unchanged = openDatabase(databasePath);
     expect(new SettingsRepository(unchanged).get('restore.guard')).toBe('original');
     unchanged.close();
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a symbolic-link backup input', async () => {
+    const directory = await temporaryDirectory();
+    const databasePath = join(directory, 'openrepurpose.sqlite');
+    const backupPath = join(directory, 'backup.orpbackup');
+    const linkedPath = join(directory, 'linked.orpbackup');
+    const database = openDatabase(databasePath);
+    runMigrations(database);
+    await createPortableBackup({ database, outputPath: backupPath });
+    database.close();
+    await symlink(backupPath, linkedPath);
+
+    await expect(restorePortableBackup({ backupPath: linkedPath, databasePath })).rejects.toThrow(
+      'regular file',
+    );
   });
 
   it('exposes create and restore through the documented CLI command family', async () => {

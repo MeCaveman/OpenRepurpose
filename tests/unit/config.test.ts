@@ -96,6 +96,12 @@ describe('application configuration', () => {
       'must use http or https',
     );
     expect(() =>
+      loadApplicationConfig({ APP_URL: 'https://user:secret@example.test' }, linuxRuntime),
+    ).toThrow('must not embed credentials');
+    expect(() =>
+      loadApplicationConfig({ APP_URL: 'https://example.test/app?token=secret' }, linuxRuntime),
+    ).toThrow('must be an origin');
+    expect(() =>
       loadApplicationConfig({ JOB_RETRY_BASE_MS: '1000', JOB_RETRY_MAX_MS: '999' }, linuxRuntime),
     ).toThrow('must be greater than or equal to JOB_RETRY_BASE_MS');
     expect(() =>

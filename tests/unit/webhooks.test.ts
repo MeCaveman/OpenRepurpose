@@ -68,6 +68,7 @@ describe('outbound webhooks', () => {
       'ff02::1',
       '::ffff:169.254.169.254',
       '64:ff9b::a9fe:a9fe',
+      '2002:a9fe:a9fe::',
       'fec0::1',
     ])
       expect(isForbiddenWebhookAddress(address), address).toBe(true);

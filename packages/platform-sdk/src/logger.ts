@@ -29,10 +29,11 @@ export interface StructuredLogger {
   warn(fields: LogFields, message: string): void;
 }
 
-const sensitiveKeyPattern = /(authorization|cookie|credential|password|secret|token)/i;
+const sensitiveKeyPattern =
+  /(api.?key|authorization|code.?verifier|cookie|credential|password|secret|session.?key|signature|signed.?url|token|upload.?url)/i;
 const bearerPattern = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 const sensitiveParameterPattern =
-  /\b(access_token|refresh_token|client_secret|authorization_code|code)=([^&\s]+)/gi;
+  /\b(access_token|refresh_token|client_secret|authorization_code|code_verifier|api_key|x-amz-credential|x-amz-signature|signature|sig|code)=([^&\s]+)/gi;
 
 function redactText(value: string, secrets: readonly string[]): string {
   let redacted = value

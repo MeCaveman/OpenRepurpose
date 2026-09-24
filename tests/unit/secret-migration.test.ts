@@ -1,6 +1,6 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -105,5 +105,25 @@ describe('v1.0 secret-vault migration', () => {
     ).rejects.toBeInstanceOf(SecretVaultRecoveryRequiredError);
     expect(await readFile(vaultPath, 'utf8')).toBe(legacy);
     expect(existsSync(`${vaultPath}.v1.backup`)).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses symbolic-link secret material', async () => {
+    const directory = await temporaryDirectory();
+    const targetPath = join(directory, 'outside-vault.json');
+    const vaultPath = join(directory, 'secrets.vault.json');
+    const keyPath = join(directory, 'secret-vault.key');
+    await writeFile(targetPath, `${JSON.stringify({ version: 1, secrets: {} })}\n`);
+    await symlink(targetPath, vaultPath);
+    await writeFile(keyPath, randomBytes(32));
+    const store = new EncryptedFileSecretStore(vaultPath, keyPath);
+
+    expect(await store.inspect()).toEqual({
+      kind: 'reconnect_required',
+      reason: 'vault_unreadable',
+    });
+    await expect(store.initialize()).rejects.toMatchObject({
+      code: 'SECRET_VAULT_RECONNECT_REQUIRED',
+      reason: 'vault_unreadable',
+    });
   });
 });

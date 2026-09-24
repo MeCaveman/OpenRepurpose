@@ -2966,6 +2966,7 @@ export class SqliteOAuthAuthorizationRequestRepository implements OAuthAuthoriza
   }
 
   public consumeByStateHash(
+    provider: AccountProvider,
     stateHash: string,
     bindingHash: string,
   ): OAuthAuthorizationRequest | undefined {
@@ -2974,9 +2975,9 @@ export class SqliteOAuthAuthorizationRequestRepository implements OAuthAuthoriza
     try {
       const row = client
         .prepare(
-          'SELECT * FROM oauth_authorization_requests WHERE state_hash = ? AND binding_hash = ?',
+          'SELECT * FROM oauth_authorization_requests WHERE provider = ? AND state_hash = ? AND binding_hash = ?',
         )
-        .get(stateHash, bindingHash) as RawOAuthAuthorizationRequestRow | undefined;
+        .get(provider, stateHash, bindingHash) as RawOAuthAuthorizationRequestRow | undefined;
       if (row !== undefined)
         client.prepare('DELETE FROM oauth_authorization_requests WHERE id = ?').run(row.id);
       client.exec('COMMIT;');

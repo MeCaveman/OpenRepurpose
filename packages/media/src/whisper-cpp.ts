@@ -23,17 +23,14 @@ import {
   type TranscriptionRequest,
   type TranscriptionResult,
 } from '@openrepurpose/core';
+import { isSafeManagedPathSegment } from './path-security.js';
 
 const MAX_DIAGNOSTIC_LENGTH = 8_192;
 const MAX_JSON_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 function safePathSegment(value: string, description: string): string {
   const normalized = value.trim();
-  if (
-    normalized === '.' ||
-    normalized === '..' ||
-    !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(normalized)
-  )
+  if (!isSafeManagedPathSegment(normalized, 200))
     throw new Error(`${description} must be a safe identifier.`);
   return normalized;
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { rmSync, writeFileSync } from 'node:fs';
+import { rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { assertLocalOnly, loadOrCreateSessionKey } from '@openrepurpose/server';
 import type { ApplicationConfig } from '@openrepurpose/shared';
@@ -56,6 +56,13 @@ describe('server startup security', () => {
     expect(() => loadOrCreateSessionKey(keyPath)).toThrow('exactly 32 bytes');
   });
 
+  it.skipIf(process.platform === 'win32')('refuses a symbolic-link session key', () => {
+    const targetPath = resolve(testDirectory, 'external.key');
+    writeFileSync(targetPath, Buffer.alloc(32, 1));
+    symlinkSync(targetPath, keyPath);
+    expect(() => loadOrCreateSessionKey(keyPath)).toThrow('regular file');
+  });
+
   it('fails closed for LAN binding until explicit authentication is configured', () => {
     expect(() => assertLocalOnly(config('0.0.0.0'))).toThrow('requires LAN_ENABLED=true');
     const lan = {
@@ -63,6 +70,12 @@ describe('server startup security', () => {
       network: { lanEnabled: true, lanAccessToken: 'a'.repeat(32), trustedProxy: false },
     };
     expect(() => assertLocalOnly(lan)).not.toThrow();
+    expect(() =>
+      assertLocalOnly({
+        ...config('127.0.0.1'),
+        network: { lanEnabled: true, trustedProxy: false },
+      }),
+    ).toThrow('LAN_ENABLED=true requires LAN_ACCESS_TOKEN');
     expect(() => assertLocalOnly(config('127.0.0.1'))).not.toThrow();
   });
 });

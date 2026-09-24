@@ -1,10 +1,14 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, openSync, readFileSync, writeFileSync, closeSync } from 'node:fs';
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const SESSION_KEY_BYTES = 32;
 
 function readSessionKey(path: string): Buffer {
+  const stats = lstatSync(path);
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw new Error(`Session key at ${path} must be a regular file, not a link or special file.`);
+  }
   const key = readFileSync(path);
   if (key.length !== SESSION_KEY_BYTES) {
     throw new Error(`Session key at ${path} must contain exactly ${SESSION_KEY_BYTES} bytes.`);

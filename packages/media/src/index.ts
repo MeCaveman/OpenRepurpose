@@ -14,6 +14,7 @@ import {
   resolve,
 } from 'node:path';
 import { spawn } from 'node:child_process';
+import { isSafeManagedPathSegment } from './path-security.js';
 import type {
   LocalFileInspector,
   ManagedTemporaryPath,
@@ -130,6 +131,11 @@ function appendOutputArguments(
 
 /** Escapes a filename for FFmpeg filter option syntax, not a shell. */
 export function escapeFfmpegFilterPath(path: string): string {
+  for (const character of path) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint <= 31 || codePoint === 127)
+      throw new Error('FFmpeg filter paths must not contain control characters.');
+  }
   return path.replace(/\\/g, '/').replace(/([\\':,[\];])/g, '\\$1');
 }
 
@@ -258,7 +264,7 @@ function isPathInside(root: string, candidate: string): boolean {
 }
 
 function safeScopeId(value: string): string {
-  if (value === '.' || value === '..' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value))
+  if (!isSafeManagedPathSegment(value, 128))
     throw new Error('A managed temporary scope must be a safe identifier.');
   return value;
 }
