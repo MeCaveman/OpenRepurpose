@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, type Stats } from 'node:fs';
 import { access, lstat, mkdir, readFile, realpath, rename, rm } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -660,7 +660,7 @@ export function parseObsFilename(path: string): WatchedMediaMetadata {
   };
 }
 
-function fileSourceKey(details: Awaited<ReturnType<typeof stat>>): string | undefined {
+function fileSourceKey(details: Stats): string | undefined {
   if (Number.isFinite(details.ino) && details.ino > 0) return `file:${details.dev}:${details.ino}`;
   if (Number.isFinite(details.birthtimeMs) && details.birthtimeMs > 0)
     return `created:${details.dev}:${details.birthtimeMs}`;
