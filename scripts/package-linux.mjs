@@ -115,6 +115,7 @@ execFileSync(
 rmSync(app, { force: true, recursive: true });
 cpSync(materializedApp, app, { recursive: true });
 rmSync(materializedApp, { force: true, recursive: true });
+copyDirectoryContents(resolve(repositoryRoot, 'apps/cli/dist'), resolve(app, 'dist'));
 
 const webDistribution = resolve(repositoryRoot, 'apps/web/dist');
 execFileSync(
@@ -123,7 +124,6 @@ execFileSync(
   { stdio: 'inherit' },
 );
 const archivePath = resolve(outputDirectory, 'OpenRepurpose-linux-x64.tar.xz');
-writeFileSync(`${archivePath}.sha256`, `${sha256(archivePath)}  OpenRepurpose-linux-x64.tar.xz\n`);
 
 cpSync(
   resolve(repositoryRoot, 'THIRD_PARTY_NOTICES.md'),
@@ -197,3 +197,4 @@ execFileSync(
   ],
   { stdio: 'inherit' },
 );
+writeFileSync(`${archivePath}.sha256`, `${sha256(archivePath)}  OpenRepurpose-linux-x64.tar.xz\n`);

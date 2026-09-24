@@ -50,6 +50,7 @@ try {
 } finally {
   Pop-Location
 }
+Copy-DirectoryContents (Join-Path $repositoryRoot 'apps\cli\dist') (Join-Path $app 'dist')
 
 $webDistribution = Join-Path $repositoryRoot 'apps\web\dist'
 & node (Join-Path $PSScriptRoot 'stage-web-distribution.mjs') $app $webDistribution

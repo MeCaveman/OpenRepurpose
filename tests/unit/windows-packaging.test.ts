@@ -31,6 +31,7 @@ describe('Windows x64 portable release contract', () => {
     expect(packaging).toContain('Production deployment failed with exit code');
     expect(packaging).not.toContain('deploy --prod --legacy');
     expect(packaging).toContain('materialize-package.mjs');
+    expect(packaging).toContain("'apps\\cli\\dist') (Join-Path $app 'dist')");
     expect(
       readFileSync(resolve(repositoryRoot, 'scripts/materialize-package.mjs'), 'utf8'),
     ).toContain("'.pnpm', 'node_modules'");
