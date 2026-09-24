@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { assertLocalOnly, loadOrCreateSessionKey } from '@openrepurpose/server';
 import type { ApplicationConfig } from '@openrepurpose/shared';
@@ -57,6 +57,7 @@ describe('server startup security', () => {
   });
 
   it.skipIf(process.platform === 'win32')('refuses a symbolic-link session key', () => {
+    mkdirSync(testDirectory, { recursive: true });
     const targetPath = resolve(testDirectory, 'external.key');
     writeFileSync(targetPath, Buffer.alloc(32, 1));
     symlinkSync(targetPath, keyPath);

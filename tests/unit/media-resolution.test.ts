@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -128,7 +128,7 @@ describe('media resolution and managed temporary storage', () => {
 
     expect(result.reusedLocalOriginal).toBe(false);
     expect(result.media.path).toBe(
-      join(temporary.directory, 'storage', 'temp', 'execution-1', 'source.mp4'),
+      realpathSync(join(temporary.directory, 'storage', 'temp', 'execution-1', 'source.mp4')),
     );
     expect(readFileSync(result.media.path, 'utf8')).toBe('video-bytes');
     expect(app.resolutions.find('item-1', 'execution-1')).toMatchObject({
@@ -402,7 +402,7 @@ describe('media resolution and managed temporary storage', () => {
     const result = await restarted.resolution.resolve(resolveInput(sourceItem));
 
     expect(resolve).not.toHaveBeenCalled();
-    expect(result.media.path).toBe(paths.finalPath);
+    expect(result.media.path).toBe(realpathSync(paths.finalPath));
     expect(restarted.resolutions.find('item-1', 'execution-1')?.status).toBe('ready');
   });
 
@@ -425,7 +425,7 @@ describe('media resolution and managed temporary storage', () => {
     });
 
     expect(result.reusedLocalOriginal).toBe(true);
-    expect(result.media.path).toBe(originalPath);
+    expect(result.media.path).toBe(realpathSync(originalPath));
     expect(result.artifact.ownership).toBe('user_owned_original');
     const cleanup = new SourceMediaCleanupService(app.resolutions, app.storage, () => now);
     await expect(cleanup.cleanupArtifact(result.artifact.id)).resolves.toBe('protected');

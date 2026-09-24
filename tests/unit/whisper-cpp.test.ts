@@ -27,8 +27,13 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
 });
 
+const commandFixtureDirectory = join(tmpdir(), 'openrepurpose-whisper-cpp-command-boundary');
+const commandExecutable = join(commandFixtureDirectory, 'Tools', 'whisper-cli');
+const commandModelPath = join(commandFixtureDirectory, 'Models', 'ggml base;safe.bin');
+const commandOutputPrefix = join(commandFixtureDirectory, 'Output Files', 'transcript');
+
 const request = {
-  audioPath: 'C:\\Media Files\\مقطع;not-a-command.wav',
+  audioPath: join(commandFixtureDirectory, 'Media Files', 'مقطع;not-a-command.wav'),
   language: 'ar',
   model: { id: 'ggml-base', version: 'v1' },
   options: {
@@ -45,27 +50,27 @@ const request = {
 describe('whisper.cpp command and output boundaries', () => {
   it('compiles paths and supported options as individual argv entries', () => {
     const command = compileWhisperCppCommand({
-      executable: 'C:\\Tools\\whisper-cli.exe',
-      modelPath: 'C:\\Models\\ggml base;safe.bin',
-      outputPrefix: 'C:\\Output Files\\transcript',
+      executable: commandExecutable,
+      modelPath: commandModelPath,
+      outputPrefix: commandOutputPrefix,
       request,
     });
 
-    expect(command.executable).toBe('C:\\Tools\\whisper-cli.exe');
+    expect(command.executable).toBe(commandExecutable);
     expect(command.args).toContain(request.audioPath);
-    expect(command.args).toContain('C:\\Models\\ggml base;safe.bin');
+    expect(command.args).toContain(commandModelPath);
     expect(command.args).toContain('--output-json');
     expect(command.args).toContain('--print-progress');
     expect(command.args).toContain('--translate');
     expect(
       command.args.slice(command.args.indexOf('--threads'), command.args.indexOf('--threads') + 2),
     ).toEqual(['--threads', '4']);
-    expect(command.outputJsonPath).toBe('C:\\Output Files\\transcript.json');
+    expect(command.outputJsonPath).toBe(`${commandOutputPrefix}.json`);
     expect(() =>
       compileWhisperCppCommand({
         executable: 'whisper-cli',
-        modelPath: 'C:\\Models\\model.bin',
-        outputPrefix: 'C:\\Output\\transcript',
+        modelPath: join(commandFixtureDirectory, 'Models', 'model.bin'),
+        outputPrefix: join(commandFixtureDirectory, 'Output', 'transcript'),
         request: { ...request, options: { rawArguments: '--help' } },
       }),
     ).toThrow('Unsupported whisper.cpp option');

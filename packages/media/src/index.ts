@@ -4,6 +4,7 @@ import { access, lstat, mkdir, readFile, realpath, rename, rm } from 'node:fs/pr
 import { readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import {
+  basename,
   delimiter,
   dirname,
   extname,
@@ -300,10 +301,10 @@ export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
   }
 
   public async isUsableFile(path: string): Promise<boolean> {
-    this.assertManaged(path);
+    const managedPath = await this.assertCanonicalManaged(path);
     try {
-      await this.assertCanonicalDirectory(dirname(path));
-      const details = await lstat(path);
+      await this.assertCanonicalDirectory(dirname(managedPath));
+      const details = await lstat(managedPath);
       return details.isFile() && !details.isSymbolicLink() && details.size > 0;
     } catch (error) {
       if (isMissingFileError(error)) return false;
@@ -332,7 +333,7 @@ export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
   }
 
   public async cleanup(path: string): Promise<'deleted' | 'missing'> {
-    const managedPath = this.assertManaged(path);
+    const managedPath = await this.assertCanonicalManaged(path);
     let details: Awaited<ReturnType<typeof lstat>>;
     try {
       details = await lstat(managedPath);
@@ -386,6 +387,20 @@ export class LocalManagedTemporaryStorage implements ManagedTemporaryStorage {
   private assertManaged(path: string): string {
     const candidate = resolve(path);
     if (!isPathInside(this.root, candidate))
+      throw new Error('Refusing to access a path outside managed temporary storage.');
+    return candidate;
+  }
+
+  /**
+   * Media inspection stores canonical paths. Resolve the parent before applying the managed-root
+   * check so persisted paths remain usable when Windows exposes a directory by short and long names.
+   */
+  private async assertCanonicalManaged(path: string): Promise<string> {
+    const candidate = resolve(path);
+    const canonicalRoot = await realpath(this.root);
+    const canonicalParent = await realpath(dirname(candidate));
+    const canonicalCandidate = join(canonicalParent, basename(candidate));
+    if (!isPathInside(canonicalRoot, canonicalCandidate))
       throw new Error('Refusing to access a path outside managed temporary storage.');
     return candidate;
   }
