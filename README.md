@@ -137,9 +137,9 @@ not control workflows; persistence stays behind repositories; long-running work 
 runs. See [ADR 0001](docs/adr/0001-local-first-modular-monolith.md) and
 [UI architecture](docs/UI_ARCHITECTURE.md).
 
-## Contributing and license
+## Forking and license
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), the [release process](docs/release-process.md), and
-[SECURITY.md](SECURITY.md). OpenRepurpose is licensed under
-[GNU AGPL version 3 only](LICENSE). Third-party notices are in
+OpenRepurpose does not accept upstream contributions; see the [contribution policy](CONTRIBUTING.md).
+You may fork and modify it under the [GNU AGPL version 3 only](LICENSE). Security vulnerabilities should
+be reported through [SECURITY.md](SECURITY.md). Third-party notices are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
