@@ -12,7 +12,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@fastify/secure-session": "8.3.0",
+    "@fastify/secure-session": "8.4.0",
     "@fastify/static": "10.1.4",
     "@openrepurpose/shared": "workspace:*",
     "@openrepurpose/core": "workspace:*",
