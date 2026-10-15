@@ -401,8 +401,8 @@ importers:
         specifier: 10.0.1
         version: 10.0.1
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 26.6.2
@@ -447,8 +447,8 @@ importers:
   packages/platform-sdk:
     dependencies:
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 26.6.2
@@ -457,8 +457,8 @@ importers:
   packages/shared:
     dependencies:
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 26.6.2
@@ -775,6 +775,15 @@ packages:
   '@msgpack/msgpack@2.8.0':
     resolution: {integrity: sha512-h9u4u/jiIRKbq25PM+zymTyW6bhTzELvOoUd+AvYriWOAKpLGnIamaET3pnHYoI5iYphAHBI4ayx0MehR+VVPQ==}
     engines: {node: '>= 10'}
+
+  '@openrepurpose/core@file:packages/core':
+    resolution: {directory: packages/core, type: directory}
+
+  '@openrepurpose/db@file:packages/db':
+    resolution: {directory: packages/db, type: directory}
+
+  '@openrepurpose/platform-sdk@file:packages/platform-sdk':
+    resolution: {directory: packages/platform-sdk, type: directory}
 
   '@oxc-project/types@0.150.0':
     resolution: {integrity: sha512-rDS5/31E9HfPl/CIzGrn0DOlvBbXFseQ5URJ9sYMfstbKLD/c6Gm9vmRzRGDdAXyOIL4zmO37lc9RIwYqVruZw==}
@@ -2237,6 +2246,9 @@ packages:
   zod@4.6.5:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
 snapshots:
 
   '@cacheable/memory@2.2.0':
@@ -2475,6 +2487,70 @@ snapshots:
   '@lukeed/ms@2.0.2': {}
 
   '@msgpack/msgpack@2.8.0': {}
+
+  '@openrepurpose/core@file:packages/core':
+    dependencies:
+      '@openrepurpose/platform-sdk': file:packages/platform-sdk
+      croner: 10.0.1
+      zod: 4.6.7
+
+  '@openrepurpose/db@file:packages/db(zod@4.6.7)':
+    dependencies:
+      '@openrepurpose/core': file:packages/core
+      drizzle-orm: 1.0.0-rc.5-5935859(zod@4.6.7)
+    transitivePeerDependencies:
+      - '@aws-sdk/client-rds-data'
+      - '@cloudflare/workers-types'
+      - '@drizzle-team/minipg'
+      - '@effect/sql-d1'
+      - '@effect/sql-libsql'
+      - '@effect/sql-mysql2'
+      - '@effect/sql-pg'
+      - '@effect/sql-pglite'
+      - '@effect/sql-sqlite-bun'
+      - '@effect/sql-sqlite-do'
+      - '@effect/sql-sqlite-node'
+      - '@effect/sql-sqlite-wasm'
+      - '@electric-sql/pglite'
+      - '@libsql/client'
+      - '@libsql/client-wasm'
+      - '@neondatabase/serverless'
+      - '@op-engineering/op-sqlite'
+      - '@opentelemetry/api'
+      - '@planetscale/database'
+      - '@sinclair/typebox'
+      - '@sqlitecloud/drivers'
+      - '@tidbcloud/serverless'
+      - '@tursodatabase/database'
+      - '@tursodatabase/database-common'
+      - '@tursodatabase/database-wasm'
+      - '@tursodatabase/serverless'
+      - '@tursodatabase/sync'
+      - '@types/better-sqlite3'
+      - '@types/mssql'
+      - '@types/pg'
+      - '@types/sql.js'
+      - '@upstash/redis'
+      - '@vercel/postgres'
+      - '@xata.io/client'
+      - arktype
+      - better-sqlite3
+      - bun-types
+      - effect
+      - expo-sqlite
+      - mssql
+      - mysql2
+      - pg
+      - postgres
+      - sql.js
+      - sqlite3
+      - typebox
+      - valibot
+      - zod
+
+  '@openrepurpose/platform-sdk@file:packages/platform-sdk':
+    dependencies:
+      zod: 4.6.7
 
   '@oxc-project/types@0.150.0': {}
 
@@ -2876,6 +2952,10 @@ snapshots:
   drizzle-orm@1.0.0-rc.5-5935859(zod@4.6.5):
     optionalDependencies:
       zod: 4.6.5
+
+  drizzle-orm@1.0.0-rc.5-5935859(zod@4.6.7):
+    optionalDependencies:
+      zod: 4.6.7
 
   enhanced-resolve@5.25.1:
     dependencies:
@@ -3612,4 +3692,7 @@ snapshots:
 
   yocto-queue@0.1.0: {}
 
-  zod@4.6.5: {}
+  zod@4.6.5:
+    optional: true
+
+  zod@4.6.7: {}
